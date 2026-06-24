@@ -21,7 +21,6 @@ const DEFAULT_PREFS = {
   // Map
   defaultZoom: 3,
   defaultPitch: 0,
-  fitMode: 'all',           // 'all' | 'visible' — what "Fit to data" targets
   // Panels
   blurOnPanel: true,        // preferred default: ON — dims the map behind open panels
   autoCloseOthers: true,    // opening Layers closes Tools

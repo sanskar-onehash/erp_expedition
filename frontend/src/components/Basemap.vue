@@ -877,8 +877,8 @@ function _flatCoords(geom) {
  * Frame the active map's data on first render and on map switch.
  * Always fits all enabled layers + zones — saved viewports are
  * ignored, so a fresh map opens framed around its data. The
- * "fit to data" toolbar button (in `ui.prefs.fitMode === 'all'`
- * mode) covers the same case after first render.
+ * "Fit to all" toolbar button covers the same case after first
+ * render.
  */
 function _flyToHome() {
   if (!map || !mapStore.activeMap) return

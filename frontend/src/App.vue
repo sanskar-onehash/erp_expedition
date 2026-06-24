@@ -120,17 +120,6 @@ const brTiltButtons = computed(() => [
   { id: 'tilt-reset', label: 'Reset tilt (top view)', glyph: GLYPHS.tiltReset },
 ])
 
-function setFitMode(mode) {
-  if (ui.prefs.fitMode === mode) {
-    // Re-fitting on the active mode is also valid (the user may
-    // want to re-anchor the camera without changing modes).
-    fitToData()
-    return
-  }
-  ui.setPref('fitMode', mode)
-  fitToData()
-}
-
 // Reset-tilt: snap pitch and bearing back to a flat top-down view,
 // keeping the current center, zoom, and any active filters intact.
 // Cheap no-op when already flat (MapLibre will not animate if the
@@ -149,8 +138,8 @@ function onToolbarTrigger(id) {
   else if (id === 'tools') ui.toggleRightPanel('tools')
   else if (id === 'search') ui.toggleSearch()
   else if (id === 'settings') ui.toggleSettings()
-  else if (id === 'fit-all') setFitMode('all')
-  else if (id === 'fit-visible') setFitMode('visible')
+  else if (id === 'fit-all') fitToData('all')
+  else if (id === 'fit-visible') fitToData('visible')
   else if (id === 'tilt-reset') resetTilt()
 }
 
@@ -226,18 +215,17 @@ function _collectAllData() {
 }
 
 /**
- * Fit camera to data, scoped per `ui.prefs.fitMode`:
+ * Fit camera to data. The mode is decided by the toolbar button
+ * the user clicked (fit-all vs fit-visible); no preference is
+ * persisted — both modes are always available in the chrome.
+ *   'all'    — every enabled layer's full lat/lng envelope (from
+ *              the server's `get_layer_bounds` cache) plus zones,
+ *              regardless of viewport.
  *   'visible' (default) — only features inside the current viewport
- *                          so the user zooms IN toward whatever is
- *                          on screen, never teleports away. If no
- *                          features are in the viewport, escalates
- *                          to fit-all instead of zooming out to a
- *                          globe view (the user always lands on data).
- *   'all'               — every enabled layer's full lat/lng
- *                          envelope (from the server's
- *                          `get_layer_bounds` cache) plus zones,
- *                          regardless of viewport or what features
- *                          are currently in memory.
+ *              so the user zooms IN toward whatever is on screen,
+ *              never teleports away. If no features are in the
+ *              viewport, escalates to fit-all instead of zooming
+ *              out to a globe view (the user always lands on data).
  *
  * Mode 'all' does NOT pull the full feature set across the wire —
  * it just reads the cached per-layer bounds envelope. The
@@ -245,11 +233,11 @@ function _collectAllData() {
  * bounded by `_fetchAllVisibleBounds`, so the cache is only ever
  * as wide as the current viewport.
  */
-function fitToData() {
+function fitToData(mode = 'visible') {
   const m = window.expeditionMap?.getMap?.()
   if (!m) return
 
-  if (ui.prefs.fitMode === 'all') {
+  if (mode === 'all') {
     _fitAllBounds(m)
     return
   }

@@ -13,6 +13,13 @@ import { useMapStore } from '../state/map.js'
 import { getSkin, DEFAULT_SKIN_ID } from '../api/skins.js'
 import { call } from '../api/client.js'
 
+// Hover-to-preview delay. Fires 250ms after the cursor enters a cell so
+// brushing past a card en route to another one doesn't trigger a
+// map.setStyle() rebuild. 250ms is the standard hover-intent threshold
+// (Nielsen, W3C mouse-event timing) — below ~200ms feels accidental,
+// above ~500ms feels broken.
+const PREVIEW_DELAY_MS = 250
+
 const ui = useUiStore()
 const mapStore = useMapStore()
 const open = ref(false)
@@ -24,25 +31,51 @@ const saving = ref(false)
 // when the user changes ui.prefs.toolbarSize.
 const sizeClass = computed(() => 'bp--' + (ui.prefs.toolbarSize || 'm'))
 
-// Hover-preview: skin swap fires the moment the cursor enters a cell. The
-// preview stays live as the user glides across cells, and only reverts when
-// the cursor leaves the popover entirely (see onMouseLeaveRoot). No delay —
-// the previous 1.2s timer caused a visible flicker on rapid scanning.
+// Hover-preview: skin swap fires PREVIEW_DELAY_MS after the cursor settles
+// on a cell (see onCellEnter). The preview stays live as the user glides
+// across cells — leaving a cell just cancels the pending timer for the
+// next one — and only reverts when the cursor leaves the popover entirely
+// (see onMouseLeaveRoot). The delay prevents brushing past a card en
+// route to another one from triggering a map.setStyle() rebuild.
 const activeSkin = computed(() => getSkin(ui.currentSkinId || DEFAULT_SKIN_ID))
 const previewSkin = computed(() => (ui.previewSkinId ? getSkin(ui.previewSkinId) : null))
 const displayedSkin = computed(() => previewSkin.value || activeSkin.value)
+
+// Timer for the pending preview. Keyed by skinId so entering cell A and
+// then cell B before A's timer fires results in B's preview, not A's.
+let pendingPreviewTimer = null
+let pendingPreviewSkinId = null
+
+function clearPendingPreview() {
+  if (pendingPreviewTimer != null) {
+    clearTimeout(pendingPreviewTimer)
+    pendingPreviewTimer = null
+    pendingPreviewSkinId = null
+  }
+}
 
 function toggle() { open.value = !open.value; if (open.value) ui.cancelPreviewSkin() }
 function close() { open.value = false; ui.cancelPreviewSkin() }
 function onCellEnter(skinId) {
   // already previewing this skin → no-op
-  if (ui.previewSkinId === skinId) return
-  ui.setPreviewSkin(skinId)
+  if (ui.previewSkinId === skinId) { clearPendingPreview(); return }
+  // already waiting to preview this skin → no-op
+  if (pendingPreviewSkinId === skinId) return
+  // swap pending preview to the new skin (cancels any prior timer)
+  clearPendingPreview()
+  pendingPreviewSkinId = skinId
+  pendingPreviewTimer = setTimeout(() => {
+    ui.setPreviewSkin(skinId)
+    pendingPreviewTimer = null
+    pendingPreviewSkinId = null
+  }, PREVIEW_DELAY_MS)
 }
 function onCellLeave() {
-  // intentionally empty — preview stays live until the cursor leaves
-  // the popover entirely (handled by onMouseLeaveRoot). This way gliding
-  // across the grid doesn't snap back to the active skin between cells.
+  // cancel the pending timer when leaving a cell, but don't cancel an
+  // already-active preview — that way gliding across the grid doesn't
+  // snap back to the active skin between cells. The preview reverts
+  // only when the cursor leaves the popover entirely (onMouseLeaveRoot).
+  clearPendingPreview()
 }
 async function onCommit() {
   const skinId = ui.previewSkinId || ui.currentSkinId
@@ -59,6 +92,7 @@ async function onCommit() {
   } finally { saving.value = false }
 }
 function onMouseLeaveRoot() {
+  clearPendingPreview()
   if (ui.previewSkinId) ui.cancelPreviewSkin()
 }
 function onDocClick(e) {
@@ -66,7 +100,10 @@ function onDocClick(e) {
   if (rootEl.value && !rootEl.value.contains(e.target)) close()
 }
 onMounted(() => document.addEventListener('mousedown', onDocClick))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocClick)
+  clearPendingPreview()
+})
 
 defineExpose({ open, close, toggle })
 </script>

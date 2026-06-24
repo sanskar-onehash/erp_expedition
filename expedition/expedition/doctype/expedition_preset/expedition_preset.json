@@ -1,0 +1,129 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-06-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "category",
+  "is_system",
+  "style_section",
+  "color",
+  "icon",
+  "size",
+  "stroke_color",
+  "stroke_width",
+  "fill_opacity",
+  "preview_svg"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "category",
+   "fieldtype": "Data",
+   "label": "Category",
+   "description": "e.g. 'Customer', 'Lead', 'Architect'. Used for grouping in the layer picker."
+  },
+  {
+   "fieldname": "is_system",
+   "fieldtype": "Check",
+   "label": "Is System Preset",
+   "default": "0",
+   "description": "System presets ship with the app and cannot be deleted."
+  },
+  {
+   "fieldname": "style_section",
+   "fieldtype": "Section Break",
+   "label": "Style"
+  },
+  {
+   "fieldname": "color",
+   "fieldtype": "Color",
+   "label": "Color"
+  },
+  {
+   "fieldname": "icon",
+   "fieldtype": "Data",
+   "label": "Icon",
+   "description": "Icon name from expedition/public/icons.svg sprite."
+  },
+  {
+   "fieldname": "size",
+   "fieldtype": "Select",
+   "label": "Size",
+   "options": "xs\ns\nm\nl\nxl",
+   "default": "m"
+  },
+  {
+   "fieldname": "stroke_color",
+   "fieldtype": "Color",
+   "label": "Stroke Color"
+  },
+  {
+   "fieldname": "stroke_width",
+   "fieldtype": "Int",
+   "label": "Stroke Width",
+   "default": "1"
+  },
+  {
+   "fieldname": "fill_opacity",
+   "fieldtype": "Float",
+   "label": "Fill Opacity",
+   "default": "0.6"
+  },
+  {
+   "fieldname": "preview_svg",
+   "fieldtype": "Code",
+   "label": "Preview SVG",
+   "description": "Inline SVG used in the preset picker chip. Optional."
+  }
+ ],
+ "is_submittable": 0,
+ "issingle": 0,
+ "istable": 0,
+ "modified": "2026-06-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Expedition",
+ "name": "Expedition Preset",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Expedition User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 0,
+ "search_fields": "title,category",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "title",
+ "track_changes": 1
+}

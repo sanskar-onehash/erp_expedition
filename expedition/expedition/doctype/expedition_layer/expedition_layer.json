@@ -1,0 +1,284 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-06-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "map",
+  "sequence",
+  "enabled",
+  "source_section",
+  "source_doctype",
+  "latitude_field",
+  "longitude_field",
+  "label_field",
+  "preset",
+  "filter_json",
+  "group_by_field",
+  "group_config_json",
+  "style_section",
+  "color",
+  "icon",
+  "size",
+  "cluster",
+  "heatmap",
+  "stroke_color",
+  "stroke_width",
+  "fill_opacity",
+  "popup_section",
+  "popup_template",
+  "popup_fields_json",
+  "click_action",
+  "permissions_section",
+  "use_source_permissions"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "map",
+   "fieldtype": "Link",
+   "label": "Map",
+   "options": "Expedition Map",
+   "description": "Leave empty for a master mapping. A master can be attached to any map to create an instance that inherits its display properties."
+  },
+  {
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "label": "Sequence",
+   "default": "0"
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1"
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source"
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source DocType",
+   "options": "DocType",
+   "reqd": 1,
+   "description": "The DocType whose rows appear on the map. Must have latitude / longitude Float fields."
+  },
+  {
+   "fieldname": "latitude_field",
+   "fieldtype": "Data",
+   "label": "Latitude Field",
+   "default": "latitude",
+   "reqd": 1
+  },
+  {
+   "fieldname": "longitude_field",
+   "fieldtype": "Data",
+   "label": "Longitude Field",
+   "default": "longitude",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label_field",
+   "fieldtype": "Data",
+   "label": "Label Field",
+   "description": "Optional DocType field used as the pin label."
+  },
+  {
+   "fieldname": "preset",
+   "fieldtype": "Link",
+   "label": "Style Preset",
+   "options": "Expedition Preset",
+   "description": "Optional pre-styled template (color/icon/size)."
+  },
+  {
+   "fieldname": "filter_json",
+   "fieldtype": "Code",
+   "label": "Filter",
+   "description": "JSON filter applied on the source DocType before fetching rows. Server is the permission boundary; this is advisory."
+  },
+  {
+   "fieldname": "group_by_field",
+   "fieldtype": "Data",
+   "label": "Group Pins By",
+   "description": "Source-DocType field to segment pins by (e.g. customer_type, status, division). Empty = single color."
+  },
+  {
+   "fieldname": "group_config_json",
+   "fieldtype": "Code",
+   "label": "Group Config",
+   "description": "JSON: { \"<value>\": { \"color\": \"#xxx\", \"icon\": \"id\", \"label\": \"...\" }, ... }. Per-group overrides."
+  },
+  {
+   "fieldname": "style_section",
+   "fieldtype": "Section Break",
+   "label": "Style"
+  },
+  {
+   "fieldname": "color",
+   "fieldtype": "Color",
+   "label": "Color"
+  },
+  {
+   "fieldname": "icon",
+   "fieldtype": "Data",
+   "label": "Icon",
+   "description": "Icon name from expedition/public/icons.svg sprite."
+  },
+  {
+   "fieldname": "size",
+   "fieldtype": "Select",
+   "label": "Size",
+   "options": "xs\ns\nm\nl\nxl",
+   "default": "m"
+  },
+  {
+   "fieldname": "cluster",
+   "fieldtype": "Check",
+   "label": "Cluster at low zoom",
+   "default": "1"
+  },
+  {
+   "fieldname": "heatmap",
+   "fieldtype": "Check",
+   "label": "Heatmap",
+   "default": "0"
+  },
+  {
+   "fieldname": "stroke_color",
+   "fieldtype": "Color",
+   "label": "Stroke Color"
+  },
+  {
+   "fieldname": "stroke_width",
+   "fieldtype": "Int",
+   "label": "Stroke Width",
+   "default": "1"
+  },
+  {
+   "fieldname": "fill_opacity",
+   "fieldtype": "Float",
+   "label": "Fill Opacity",
+   "default": "0.6"
+  },
+  {
+   "fieldname": "radius_section",
+   "fieldtype": "Section Break",
+   "label": "Radius Halo"
+  },
+  {
+   "fieldname": "radius_enabled",
+   "fieldtype": "Check",
+   "label": "Render Radius Halo",
+   "default": "0",
+   "description": "Draw a translucent circle around each pin representing a service area."
+  },
+  {
+   "fieldname": "radius_field",
+   "fieldtype": "Data",
+   "label": "Radius Field",
+   "description": "Source-DocType field with a per-feature numeric radius (e.g. service_radius_km). Empty = use the layer default meters below."
+  },
+  {
+   "fieldname": "radius_meters",
+   "fieldtype": "Int",
+   "label": "Default Radius (m)",
+   "default": "5000",
+   "description": "Used when radius_field is empty or a feature is missing the value."
+  },
+  {
+   "fieldname": "radius_opacity",
+   "fieldtype": "Float",
+   "label": "Halo Opacity",
+   "default": "0.18"
+  },
+  {
+   "fieldname": "popup_section",
+   "fieldtype": "Section Break",
+   "label": "Popup"
+  },
+  {
+   "fieldname": "popup_template",
+   "fieldtype": "Code",
+   "label": "Popup Template",
+   "description": "Optional Jinja template. Receives the source row in context."
+  },
+  {
+   "fieldname": "popup_fields_json",
+   "fieldtype": "Code",
+   "label": "Popup Fields",
+   "description": "JSON array of fieldnames to show in the default popup. Empty = shows key fields. Example: [\"name\", \"customer_name\", \"status\"]"
+  },
+  {
+   "fieldname": "click_action",
+   "fieldtype": "Select",
+   "label": "Click Action",
+   "options": "popup\nopen_form\nschedule_visit",
+   "default": "popup",
+   "description": "What happens when a user clicks a pin."
+  },
+  {
+   "fieldname": "permissions_section",
+   "fieldtype": "Section Break",
+   "label": "Permissions"
+  },
+  {
+   "fieldname": "use_source_permissions",
+   "fieldtype": "Check",
+   "label": "Enforce source DocType permissions",
+   "default": "1",
+   "description": "If enabled, rows are filtered to those the current user has read permission for. Always true in v1; kept as a flag for v1.1+ overrides."
+  }
+ ],
+ "is_submittable": 0,
+ "issingle": 0,
+ "istable": 0,
+ "modified": "2026-06-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Expedition",
+ "name": "Expedition Layer",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Expedition User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 0,
+ "search_fields": "title",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "title",
+ "track_changes": 1
+}

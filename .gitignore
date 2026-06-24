@@ -1,0 +1,9 @@
+*.pyc
+*.egg-info
+*.swp
+tags
+node_modules
+__pycache__
+.ruff_cache/
+expedition/public/dist/*
+!expedition/public/dist/.gitkeep

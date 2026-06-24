@@ -1,0 +1,153 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-06-19 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "is_template",
+  "template_category",
+  "map_section",
+  "basemap_style",
+  "viewport",
+  "filters_json",
+  "summary_json",
+  "campaign_section",
+  "campaign",
+  "owner_user",
+  "shared_section",
+  "is_public",
+  "last_opened_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "is_template",
+   "fieldtype": "Check",
+   "label": "Is Template",
+   "default": "0"
+  },
+  {
+   "fieldname": "template_category",
+   "fieldtype": "Data",
+   "label": "Template Category",
+   "depends_on": "eval:doc.is_template"
+  },
+  {
+   "fieldname": "map_section",
+   "fieldtype": "Section Break",
+   "label": "Map State"
+  },
+  {
+   "fieldname": "basemap_style",
+   "fieldtype": "Select",
+   "label": "Basemap Style",
+   "options": "light\ndark\nmonochrome\nofm-liberty\nofm-bright\nofm-positron\nofm-dark",
+   "default": "light"
+  },
+  {
+   "fieldname": "viewport",
+   "fieldtype": "JSON",
+   "label": "Viewport",
+   "description": "{ center: [lat, lng], zoom, bearing, pitch }"
+  },
+  {
+   "fieldname": "filters_json",
+   "fieldtype": "Code",
+   "label": "Filters",
+   "description": "JSON of cross-layer filter selections. Server is the permission boundary; this is advisory."
+  },
+  {
+   "fieldname": "summary_json",
+   "fieldtype": "Code",
+   "label": "Cached Summary",
+   "read_only": 1,
+   "description": "Cached aggregate counts (e.g. { customers: 1234, leads: 567 }). Recomputed hourly."
+  },
+  {
+   "fieldname": "campaign_section",
+   "fieldtype": "Section Break",
+   "label": "Activity"
+  },
+  {
+   "fieldname": "campaign",
+   "fieldtype": "Link",
+   "label": "Linked Campaign (optional)",
+   "options": "Campaign"
+  },
+  {
+   "fieldname": "owner_user",
+   "fieldtype": "Link",
+   "label": "Owner User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "shared_section",
+   "fieldtype": "Section Break",
+   "label": "Sharing"
+  },
+  {
+   "fieldname": "is_public",
+   "fieldtype": "Check",
+   "label": "Public",
+   "default": "0",
+   "description": "If true, any logged-in user with the Expedition Map role can view."
+  },
+  {
+   "fieldname": "last_opened_at",
+   "fieldtype": "Datetime",
+   "label": "Last Opened At",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "is_submittable": 0,
+ "issingle": 0,
+ "istable": 0,
+ "modified": "2026-06-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Expedition",
+ "name": "Expedition Map",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Expedition User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 0,
+ "search_fields": "title",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "title",
+ "track_changes": 1
+}

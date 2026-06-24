@@ -40,7 +40,8 @@ const insightList = computed(() => insights.active || [])
 
 const canEdit = computed(() => {
   const owner = mapStore.activeMap?.map?.owner
-  return !owner || owner === window.frappe?.session?.user || (window.frappe?.session?.user === 'Administrator')
+  const me = window.expeditionSession?.user
+  return !owner || owner === me || me === 'Administrator'
 })
 
 const openSections = ref({

@@ -99,27 +99,6 @@ export const useMapStore = defineStore('map', () => {
     insights.loadActiveFor(payload?.map?.name || name)
   }
 
-  /**
-   * Save the current canvas view as a map card (new Expedition Map
-   * doc) under the user's account. Idempotent on (title, owner_user).
-   * Captures the current viewport, basemap skin, and per-layer state
-   * summaries so the user can reload this exact view later.
-   */
-  async function saveMapCard(payload) {
-    const map = activeMap.value?.map
-    const dto = await call('expedition.api.map.save_map_card', payload)
-    // Refresh recent list so the new card shows up.
-    try {
-      recent.value = await call('expedition.api.map.list_for_user', { include_public: 1 })
-    } catch {}
-    // If we just saved the active map, refresh its envelope too.
-    if (map && dto && dto.name && map.name === dto.name) {
-      // Stay on the saved map; load_full will re-read filters_json etc.
-      // No need to switch; we updated in place.
-    }
-    return dto
-  }
-
   /** Clone a template map into the user's account. Switches to the clone. */
   async function cloneTemplate(templateName, title) {
     const dto = await call('expedition.api.map.clone_template', {
@@ -130,5 +109,5 @@ export const useMapStore = defineStore('map', () => {
     return dto
   }
 
-  return { activeMap, templates, recent, bootstrap, switchMap, saveMapCard, cloneTemplate }
+  return { activeMap, templates, recent, bootstrap, switchMap, cloneTemplate }
 })

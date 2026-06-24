@@ -4,10 +4,11 @@
 {% block head %}
 	<link rel="stylesheet" href="/assets/expedition/dist/expedition.css?v={{ expedition_build }}" />
 	<script>
-		// Mount CSRF + build hash before the bundle boots.
+		// Mount CSRF + build hash + session user before the bundle boots.
 		window.expedition = window.expedition || {};
 		window.expedition.csrfToken = {{ csrf_token | tojson }};
 		window.expedition.build = {{ expedition_build | tojson }};
+		window.expeditionSession = { user: {{ expedition_user | tojson }} };
 	</script>
 {% endblock %}
 

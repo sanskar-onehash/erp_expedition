@@ -70,6 +70,41 @@ function iconLayerId(layerName) { return `lyr-${layerName}-icon` }
 function heatmapLayerId(layerName) { return `lyr-${layerName}-heatmap` }
 function haloLayerId(layerName) { return `lyr-${layerName}-halo` }
 function extrusionLayerId(layerName) { return `lyr-${layerName}-extrude` }
+function extrusionSourceId(layerName) { return `src-${layerName}-extrude` }
+
+// MapLibre's fill-extrusion only renders polygons, but Expedition
+// layers are Point sources. To get a 3D column per pin, we synthesize
+// a tiny 10m×10m square footprint polygon at each point's lat/lng and
+// feed those to the extrusion layer. The conversion uses a fixed
+// degree offset, which is good enough at the spatial scales we render
+// (city / region) and keeps the column footprint visually constant.
+const EXTRUSION_FOOTPRINT_DEG = 0.0001   // ≈ 11m at the equator
+function _extrusionPolygonForPoint(lng, lat) {
+  const d = EXTRUSION_FOOTPRINT_DEG
+  return {
+    type: 'Polygon',
+    coordinates: [[
+      [lng - d, lat - d],
+      [lng + d, lat - d],
+      [lng + d, lat + d],
+      [lng - d, lat + d],
+      [lng - d, lat - d],
+    ]],
+  }
+}
+function _extrusionFeatureCollection(pointFc, layerName) {
+  const field = ui.extrusionField[layerName]
+  return {
+    type: 'FeatureCollection',
+    features: (pointFc.features || []).map((f) => {
+      const [lng, lat] = (f.geometry && f.geometry.coordinates) || []
+      if (lng == null || lat == null) return null
+      const props = { ...(f.properties || {}) }
+      if (f._id != null) props._id = f._id
+      return { type: 'Feature', geometry: _extrusionPolygonForPoint(lng, lat), properties: props }
+    }).filter(Boolean),
+  }
+}
 
 const mapEl = ref(null)
 const ui = useUiStore()
@@ -535,15 +570,24 @@ function _addLayerOnMap(layerName) {
 
   // Extrusion / 3D columns (PR-9). Sits BELOW everything else so the
   // pin stack + halos + heatmap all read on top of the columns.
+  // MapLibre's fill-extrusion needs polygon geometry, so we maintain
+  // a parallel polygon source (one 10m square per point).
   const eid = extrusionLayerId(layerName)
+  const esid = extrusionSourceId(layerName)
   const extrudeOn = enabled && ui.pitchEnabled
   if (extrudeOn) {
+    const polyFc = _extrusionFeatureCollection(fc, layerName)
+    const esrc = map.getSource(esid)
+    if (esrc && esrc.type === 'geojson') {
+      esrc.setData(polyFc)
+    } else {
+      map.addSource(esid, { type: 'geojson', data: polyFc, promoteId: '_id' })
+    }
     if (!map.getLayer(eid)) {
       map.addLayer({
         id: eid,
         type: 'fill-extrusion',
-        source: sid,
-        filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
+        source: esid,
         paint: extrusionPaint(color, layerName),
       })
     } else {
@@ -552,6 +596,7 @@ function _addLayerOnMap(layerName) {
     }
   } else if (map.getLayer(eid)) {
     map.removeLayer(eid)
+    if (map.getSource(esid)) map.removeSource(esid)
   }
 
   // Halo / radius rendering (PR-8). Drawn between the pin body and

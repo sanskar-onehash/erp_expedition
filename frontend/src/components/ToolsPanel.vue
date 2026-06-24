@@ -396,35 +396,29 @@ function onInsightClick(ins) {
             <span>3D / Pitch</span>
             <span class="tp__chevron" :data-open="openSections.pitch">▾</span>
           </button>
-          <button
-            class="tp__row-icon"
-            type="button"
-            :class="{ 'tp__row-icon--on': ui.pitchEnabled }"
-            :aria-pressed="ui.pitchEnabled ? 'true' : 'false'"
-            :aria-label="(ui.pitchEnabled ? 'Disable' : 'Enable') + ' 3D pitch'"
-            :title="ui.pitchEnabled ? '3D pitch on' : 'Tilt the map'"
-            @click="ui.togglePitch()"
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-              <!-- 3D box glyph. -->
-              <path d="M12 4l8 4v8l-8 4-8-4V8l8-4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-              <path d="M4 8l8 4 8-4M12 12v8" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
-            </svg>
-          </button>
         </div>
         <div v-if="openSections.pitch" class="tp__pitch-body">
           <div class="tp__row">
             <span class="tp__row-label">Tilt</span>
             <input
-              type="range" min="0" max="75" step="1"
+              type="range" min="0" max="80" step="1"
               :value="ui.pitchDegrees"
               @input="(e) => ui.setPitch(e.target.value)"
               class="tp__slider"
               aria-label="Pitch degrees"
             />
-            <span class="tp__row-val">{{ ui.pitchDegrees }}°</span>
+						<div>
+							<input
+								type="number" min="0" max="80" step="1"
+								:value="ui.pitchDegrees"
+								@change="(e) => ui.setPitch(e.target.value)"
+								class="tp__num"
+								aria-label="Pitch degrees (type)"
+							/>
+							<span class="tp__row-suffix">°</span>
+						</div>
           </div>
-          <p class="tp__hint">Pins extrude as 3D columns. Each layer's height defaults to 200m; pick a numeric field in the layer row for per-feature heights.</p>
+          <p class="tp__hint">Pins extrude as 3D columns while tilt is above 0°. Each layer's height defaults to 200m; pick a numeric field in the layer row for per-feature heights.</p>
         </div>
       </section>
     </div>
@@ -545,25 +539,10 @@ function onInsightClick(ins) {
 .tp__hint { font-size: 10px; color: rgba(230, 232, 236, 0.5); margin: 6px 0 0; line-height: 1.4; }
 
 /* 3D / pitch controls (PR-9). */
-.tp__row-icon {
-  background: transparent; border: 0;
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 5px; cursor: pointer;
-  color: rgba(230, 232, 236, 0.4);
-  font-family: inherit;
-  flex: none;
-  margin-right: 6px;
-  transition: background 100ms ease, color 100ms ease;
-}
-.tp__row-icon:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.tp__row-icon--on { color: #93C5FD; }
-.tp__row-icon--on:hover { color: #fff; }
-
 .tp__pitch-body { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
 .tp__row {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 0;
+  padding: 4px 4px;
 }
 .tp__row-label {
   font-size: 10px; color: rgba(230, 232, 236, 0.5);
@@ -571,10 +550,39 @@ function onInsightClick(ins) {
   flex: none; min-width: 32px;
 }
 .tp__slider { flex: 1; accent-color: #3B82F6; }
-.tp__row-val {
-  font-size: 11px; color: #fff;
+/* Number-input + degree-suffix cluster: sit close together, separated
+   from the slider by the row's gap. */
+.tp__pitch-body .tp__row > div {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.tp__num {
+  width: 44px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 5px;
+  color: #E6E8EC;
+  padding: 3px 5px;
+  font-size: 11px;
+  font-family: inherit;
   font-variant-numeric: tabular-nums;
-  flex: none; min-width: 32px; text-align: right;
+  text-align: right;
+  flex: none;
+  -moz-appearance: textfield;
+}
+.tp__num::-webkit-outer-spin-button,
+.tp__num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.tp__num:focus { outline: none; border-color: rgba(59, 130, 246, 0.6); }
+.tp__row-suffix {
+  font-size: 11px;
+  color: rgba(230, 232, 236, 0.5);
+  font-variant-numeric: tabular-nums;
+  flex: none;
 }
 
 /* Measure (PR-11). */

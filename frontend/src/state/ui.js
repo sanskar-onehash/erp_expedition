@@ -4,7 +4,7 @@
  * live in that component, not here.
  */
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { SKINS, DEFAULT_SKIN_ID } from '../api/skins.js'
 
 const SKIN_LS_KEY = 'expedition.skinId'
@@ -302,12 +302,15 @@ export const useUiStore = defineStore('ui', () => {
   // 3D pitch (Phase 2, PR-9). Camera state — applies globally, not
   // per-layer. extrusionHeight/Field are per-layer because different
   // layers naturally extrude on different fields.
-  const pitchEnabled = ref(false)
-  const pitchDegrees = ref(50)         // 30..75 typical
+  // 3D is implicit: any non-zero degree means on. Setting 0 disables it.
+  const pitchDegrees = ref(0)
+  const pitchEnabled = computed(() => pitchDegrees.value > 0)
   const extrusionHeight = ref({})      // layerName -> number (meters)
   const extrusionField = ref({})       // layerName -> fieldname
-  function togglePitch() { pitchEnabled.value = !pitchEnabled.value }
-  function setPitch(deg) { pitchDegrees.value = Math.max(0, Math.min(80, Number(deg) || 0)) }
+  function setPitch(deg) {
+    const n = Math.max(0, Math.min(80, Number(deg) || 0))
+    pitchDegrees.value = n
+  }
   function setExtrusionHeight(layerName, h) {
     extrusionHeight.value = { ...extrusionHeight.value, [layerName]: Number(h) || 200 }
   }
@@ -476,7 +479,6 @@ export const useUiStore = defineStore('ui', () => {
     pitchDegrees,
     extrusionHeight,
     extrusionField,
-    togglePitch,
     setPitch,
     setExtrusionHeight,
     setExtrusionField,

@@ -58,6 +58,8 @@ const sourceDts = ref([])
 const sourceFields = ref([])          // local working list (filled from cache)
 const sourceFieldsLoading = ref(false)
 const groupValues = ref([]) // distinct values for the group_by_field
+const previewOriginalLayer = ref(null)
+const previewCommitted = ref(false)
 
 const COLOR_PRESETS = [
   '#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6',
@@ -89,7 +91,11 @@ const OP_OPTIONS = [
 watch(
   () => ui.editorOpen,
   async (v) => {
-    if (!v) return
+    if (!v) {
+      cancelLayerPreview()
+      return
+    }
+    cancelLayerPreview()
     error.value = ''
     asMaster.value = !!v.asMaster
     if (v.mode === 'create') {
@@ -126,6 +132,14 @@ watch(
       }
     } else if (v.mode === 'edit' && v.layer) {
       const l = v.layer
+      const liveLayer = layerStore.layers.find((layer) => layer.name === l.name) || l
+      if (liveLayer && liveLayer.map) {
+        previewOriginalLayer.value = {
+          ...liveLayer,
+          style: { ...(liveLayer.style || {}) },
+        }
+        previewCommitted.value = false
+      }
       form.value = {
         name: l.name,
         title: l.title,
@@ -155,6 +169,29 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => form.value.size,
+  (size) => {
+    if (!previewOriginalLayer.value || previewCommitted.value) return
+    if (!form.value.name || isCreate.value || isMaster.value) return
+    layerStore.previewLayerFields(form.value.name, { size: size || 'm' })
+  }
+)
+
+function cancelLayerPreview() {
+  const original = previewOriginalLayer.value
+  if (original && !previewCommitted.value) {
+    layerStore.previewLayerFields(original.name, original)
+  }
+  previewOriginalLayer.value = null
+  previewCommitted.value = false
+}
+
+function commitLayerPreview() {
+  previewCommitted.value = true
+  previewOriginalLayer.value = null
+}
 
 function _parseFilter(json) {
   if (!json) return []
@@ -401,6 +438,7 @@ async function save() {
         await layerStore.updateLayer(form.value.name, editFields)
       }
     }
+    commitLayerPreview()
     ui.closeLayerEditor()
   } catch (e) {
     error.value = e.message || String(e)
@@ -426,6 +464,7 @@ async function remove() {
     } else {
       await layerStore.removeLayer(form.value.name)
     }
+    commitLayerPreview()
     ui.closeLayerEditor()
   } catch (e) {
     error.value = e.message || String(e)

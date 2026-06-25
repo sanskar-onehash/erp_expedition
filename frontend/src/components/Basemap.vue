@@ -40,6 +40,7 @@ import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 // visually with the white ring). xs/s are for dense layers; l/xl
 // for primary layers.
 const SIZE_TO_RADIUS = { xs: 7, s: 9, m: 11, l: 14, xl: 18 }
+const ICON_IMAGE_SIZE = 36
 // Punchy Apple-red fallback so even unconfigured layers read as
 // primary data points.
 const FALLBACK_COLOR = '#FF3B30'
@@ -125,9 +126,18 @@ let unsubscribeZoneTags = null
 // first fetch returns zero features and the canvas stays empty
 // until the user moves the map).
 let _layerFetchedOnce = new Set()
+let _interactivePointLayers = new Set()
 
 function _resetFirstFetch() {
   _layerFetchedOnce = new Set()
+}
+
+function _bindPointLayerHandlers(layerIdValue) {
+  if (!map || !map.getLayer(layerIdValue) || _interactivePointLayers.has(layerIdValue)) return
+  map.on('click', layerIdValue, onPointClick)
+  map.on('mouseenter', layerIdValue, onPointMouseEnter)
+  map.on('mouseleave', layerIdValue, onPointMouseLeave)
+  _interactivePointLayers.add(layerIdValue)
 }
 
 // Zone source/layer ids. All zones live in a single source so we
@@ -257,6 +267,10 @@ function featureDisplayColor(feature, fallback) {
 
 function featureDisplayIcon(feature, layerIcon) {
   return feature?.properties?._icon || layerIcon || ''
+}
+
+function iconSizeForRadius(radius) {
+  return (radius * 2) / ICON_IMAGE_SIZE
 }
 
 /**
@@ -547,7 +561,8 @@ function _addLayerOnMap(layerName) {
   if (iconSpecList.length) {
     const filter = iconPointFilter(wantsCluster)
     // Register the sprite image on the map (no-op if already present).
-    registerColoredIcons(map, iconSpecList, 28).then(() => {
+    const iconSize = iconSizeForRadius(radius)
+    registerColoredIcons(map, iconSpecList, ICON_IMAGE_SIZE).then(() => {
       if (!map.getLayer(iid)) {
         map.addLayer({
           id: iid,
@@ -556,14 +571,9 @@ function _addLayerOnMap(layerName) {
           filter,
           layout: {
             'icon-image': ['get', '_display_icon_image'],
-            // The icon's viewBox is 24x24. Scale with zoom so icon-only
-            // points stay legible without the old circle wrapper.
-            'icon-size': [
-              'interpolate', ['linear'], ['zoom'],
-              2, 0.55,
-              6, 0.75,
-              12, 0.95,
-            ],
+            // Match the same pixel footprint as the circle pin body:
+            // xs/s/m/l/xl map to radius*2 pixels.
+            'icon-size': iconSize,
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
             'icon-anchor': 'center',
@@ -576,6 +586,7 @@ function _addLayerOnMap(layerName) {
         // Layer exists; refresh the icon image and color.
         map.setFilter(iid, filter)
         map.setLayoutProperty(iid, 'icon-image', ['get', '_display_icon_image'])
+        map.setLayoutProperty(iid, 'icon-size', iconSize)
         map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
       }
     }).catch((e) => {
@@ -709,9 +720,8 @@ function _addLayerOnMap(layerName) {
     if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
   }
 
-  map.on('click', lid, onPointClick)
-  map.on('mouseenter', lid, () => { map.getCanvas().style.cursor = 'pointer' })
-  map.on('mouseleave', lid, () => { map.getCanvas().style.cursor = '' })
+  _bindPointLayerHandlers(lid)
+  _bindPointLayerHandlers(iid)
   // Force a redraw. Without this, on first paint the canvas can
   // appear blank even though the source + layers exist — MapLibre
   // has been observed to skip the next render frame when a source
@@ -728,7 +738,7 @@ function onPointClick(e) {
   const rawId = e.targetLayer || (f.layer && f.layer.id) || ''
   const layerName = rawId
     .replace(/^lyr-/, '')
-    .replace(/-(ring|shadow|clusters|cluster-count)$/, '')
+    .replace(/-(ring|shadow|icon|clusters|cluster-count)$/, '')
   const fc = layerStore.features[layerName]
   const layerMeta = fc?.layer || layerStore.layers.find((l) => l.name === layerName)
   // Clear previous selection on the source, then mark the clicked one.
@@ -750,6 +760,14 @@ function onPointClick(e) {
     // Capture the click point so MapPopup can anchor + camera-follow.
     _lngLat: { lng: e.lngLat.lng, lat: e.lngLat.lat },
   }
+}
+
+function onPointMouseEnter() {
+  if (map) map.getCanvas().style.cursor = 'pointer'
+}
+
+function onPointMouseLeave() {
+  if (map) map.getCanvas().style.cursor = ''
 }
 
 async function onClusterClick(e) {
@@ -785,6 +803,7 @@ function _removeLayerFromMap(layerName) {
     shadowLayerId(layerName),
   ]) {
     if (map.getLayer(id)) map.removeLayer(id)
+    _interactivePointLayers.delete(id)
   }
   if (map.getSource(sourceId(layerName))) map.removeSource(sourceId(layerName))
 }

@@ -67,7 +67,7 @@ export const useMapStore = defineStore('map', () => {
     const payload = await call('expedition.api.map.load_full', { name })
     activeMap.value = payload
     if (payload && Array.isArray(payload.layers)) {
-      layerStore.layers = payload.layers
+      layerStore.replaceMapLayers(payload.layers)
     }
     // Zones: load_full ships geometry as a JSON string; parse once
     // so the canvas can pass it to MapLibre without re-decoding.

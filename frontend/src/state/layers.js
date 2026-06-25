@@ -77,6 +77,24 @@ export const useLayersStore = defineStore('layers', () => {
     if (dto.heatmap != null) ui.setHeatmap(dto.name, !!dto.heatmap)
   }
 
+  function replaceMapLayers(dtos) {
+    layers.value = []
+    for (const dto of dtos || []) _replaceLayer(dto)
+    _emitLayersChanged()
+  }
+
+  function previewLayerFields(layerName, fields) {
+    const idx = layers.value.findIndex((l) => l.name === layerName)
+    if (idx < 0) return
+    const current = layers.value[idx]
+    const nextStyle = {
+      ...(current.style || _styleFromDto(current)),
+      ..._styleFromDto({ ...current, ...fields }),
+    }
+    layers.value.splice(idx, 1, { ...current, ...fields, style: nextStyle })
+    _emitLayersChanged()
+  }
+
   function _styleFromDto(d) {
     return {
       color: d.color, icon: d.icon, size: d.size,
@@ -337,6 +355,8 @@ export const useLayersStore = defineStore('layers', () => {
     updateLayer,
     removeLayer,
     reorderLayers,
+    replaceMapLayers,
+    previewLayerFields,
     loadMasters,
     addMaster,
     updateMaster,

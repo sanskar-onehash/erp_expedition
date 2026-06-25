@@ -59,6 +59,7 @@ def load_full(name: str) -> dict:
         fields=[
             "name",
             "title",
+            "map",
             "sequence",
             "source_doctype",
             "color",

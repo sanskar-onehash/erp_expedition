@@ -300,12 +300,21 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   async function attachToMap(masterName, mapName) {
-    const dto = await call('expedition.api.layer.attach_to_map', {
+    let dto = await call('expedition.api.layer.attach_to_map', {
       master_name: masterName,
       map_name: mapName,
     })
     _replaceLayer(dto)
     _emitLayersChanged()
+    if (dto.enabled === 0 || dto.enabled === false) {
+      dto = await updateLayer(dto.name, { enabled: 1 })
+    }
+    if (dto.enabled !== 0 && dto.enabled !== false) {
+      clearFeatures(dto.name)
+      clearBounds(dto.name)
+      fetchBounds(dto.name).catch(() => {})
+      await fetchFeatures(dto.name, null)
+    }
     return dto
   }
 

@@ -946,8 +946,8 @@ def list_masters() -> list[dict]:
 def attach_to_map(master_name: str, map_name: str) -> dict:
     """Create a per-map instance Expedition Layer that inherits its display
     fields from a master. Idempotent: if an instance already exists on
-    this map for the same (title, source_doctype), returns the existing
-    instance instead of creating a duplicate.
+    this map for the same (title, source_doctype), enables and returns the
+    existing instance instead of creating a duplicate.
     """
     if not frappe.has_permission("Expedition Layer", "create"):
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
@@ -974,7 +974,11 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
         "name",
     )
     if existing:
-        return _layer_to_dto(frappe.get_doc("Expedition Layer", existing))
+        doc = frappe.get_doc("Expedition Layer", existing)
+        if not doc.enabled:
+            doc.enabled = 1
+            doc.save(ignore_permissions=True)
+        return _layer_to_dto(doc)
 
     last_seq = frappe.db.sql(
         "select ifnull(max(sequence), 0) + 1 from `tabExpedition Layer` where map = %s",

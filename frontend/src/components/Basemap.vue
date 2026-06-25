@@ -412,7 +412,7 @@ function _addLayerOnMap(layerName) {
   const sizeKey = style.size || layerDoc.size || 'm'
   const radius = SIZE_TO_RADIUS[sizeKey] || SIZE_TO_RADIUS.m
   const wantsCluster = !!(style.cluster || layerDoc.cluster)
-  const enabled = layerDoc.enabled !== false
+  const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
 
   const sid = sourceId(layerName)
   const lid = layerId(layerName)
@@ -1135,6 +1135,10 @@ onMounted(() => {
 // which becomes truthy on the next `styledata` event.
   unsubscribeFeatures = layerStore.onFeaturesUpdated((layerName) => {
     if (!map) return
+    if (!layerName) {
+      _reAddAllLayers()
+      return
+    }
     const tryAdd = () => {
       if (!map) return true
       _addLayerOnMap(layerName)

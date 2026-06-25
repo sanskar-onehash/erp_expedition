@@ -43,7 +43,6 @@ const filteredMasters = computed(() => {
   if (!activeMapName.value) return []
   const attached = new Set(
     activeLayers.value
-      .filter((l) => l.map === activeMapName.value)
       .map((l) => `${l.source_doctype}::${l.title}`)
   )
   const q = pickerQuery.value.trim().toLowerCase()

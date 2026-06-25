@@ -670,17 +670,21 @@ function _addLayerOnMap(layerName) {
   const haloId = haloLayerId(layerName)
   const radiusOn = enabled && ui.isRadiusOn(layerName)
   if (radiusOn) {
+    const halo = haloPaint(color, layerName)
     if (!map.getLayer(haloId)) {
       map.addLayer({
         id: haloId,
         type: 'circle',
         source: sid,
         filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
-        paint: haloPaint(color, layerName),
+        paint: halo,
       })
     } else {
-      map.setPaintProperty(haloId, 'circle-color', color)
-      map.setPaintProperty(haloId, 'circle-radius', haloPaint(color, layerName)['circle-radius'])
+      map.setPaintProperty(haloId, 'circle-color', halo['circle-color'])
+      map.setPaintProperty(haloId, 'circle-radius', halo['circle-radius'])
+      map.setPaintProperty(haloId, 'circle-opacity', halo['circle-opacity'])
+      map.setPaintProperty(haloId, 'circle-stroke-color', halo['circle-stroke-color'])
+      map.setPaintProperty(haloId, 'circle-stroke-opacity', halo['circle-stroke-opacity'])
     }
   } else if (map.getLayer(haloId)) {
     map.removeLayer(haloId)
@@ -1509,6 +1513,7 @@ watch(
     field: { ...ui.radiusField },
     meters: { ...ui.radiusMeters },
     scale: { ...ui.radiusScale },
+    opacity: layerStore.layers.map((l) => [l.name, l.radius_opacity]),
   }),
   () => {
     if (!map || !map.isStyleLoaded()) return

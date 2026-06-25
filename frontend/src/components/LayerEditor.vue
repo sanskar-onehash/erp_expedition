@@ -59,6 +59,7 @@ const sourceFields = ref([])          // local working list (filled from cache)
 const sourceFieldsLoading = ref(false)
 const groupValues = ref([]) // distinct values for the group_by_field
 const previewOriginalLayer = ref(null)
+const previewOriginalUi = ref(null)
 const previewCommitted = ref(false)
 
 const COLOR_PRESETS = [
@@ -131,15 +132,22 @@ watch(
         }
       }
     } else if (v.mode === 'edit' && v.layer) {
-      const l = v.layer
-      const liveLayer = layerStore.layers.find((layer) => layer.name === l.name) || l
+      const requestedLayer = v.layer
+      const liveLayer = layerStore.layers.find((layer) => layer.name === requestedLayer.name) || requestedLayer
       if (liveLayer && liveLayer.map) {
         previewOriginalLayer.value = {
           ...liveLayer,
           style: { ...(liveLayer.style || {}) },
         }
+        previewOriginalUi.value = {
+          heatmap: ui.isHeatmapOn(liveLayer.name),
+          radius_enabled: ui.isRadiusOn(liveLayer.name),
+          radius_field: ui.radiusField[liveLayer.name] || '',
+          radius_meters: ui.radiusMeters[liveLayer.name] || 5000,
+        }
         previewCommitted.value = false
       }
+      const l = liveLayer
       form.value = {
         name: l.name,
         title: l.title,
@@ -171,26 +179,66 @@ watch(
 )
 
 watch(
-  () => form.value.size,
-  (size) => {
+  () => ({
+    color: form.value.color,
+    size: form.value.size,
+    cluster: form.value.cluster,
+    enabled: form.value.enabled,
+    icon: form.value.icon,
+    heatmap: form.value.heatmap,
+    radius_enabled: form.value.radius_enabled,
+    radius_field: form.value.radius_field,
+    radius_meters: form.value.radius_meters,
+    radius_opacity: form.value.radius_opacity,
+    group_by_field: form.value.group_by_field,
+    group_config_json: _serializeGroupConfig(form.value.group_config),
+  }),
+  (preview) => {
     if (!previewOriginalLayer.value || previewCommitted.value) return
     if (!form.value.name || isCreate.value || isMaster.value) return
-    layerStore.previewLayerFields(form.value.name, { size: size || 'm' })
-  }
+    ui.setHeatmap(form.value.name, !!preview.heatmap)
+    ui.setRadius(form.value.name, !!preview.radius_enabled)
+    ui.setRadiusField(form.value.name, preview.radius_field || '')
+    ui.setRadiusMeters(form.value.name, preview.radius_meters)
+    layerStore.previewLayerFields(form.value.name, {
+      color: preview.color || '#3B82F6',
+      size: preview.size || 'm',
+      cluster: preview.cluster,
+      enabled: preview.enabled,
+      icon: preview.icon || '',
+      heatmap: preview.heatmap,
+      radius_enabled: preview.radius_enabled,
+      radius_field: preview.radius_field || '',
+      radius_meters: preview.radius_meters,
+      radius_opacity: preview.radius_opacity,
+      group_by_field: preview.group_by_field || '',
+      group_config_json: preview.group_config_json || '',
+      group_config: form.value.group_config || {},
+    })
+  },
+  { deep: true }
 )
 
 function cancelLayerPreview() {
   const original = previewOriginalLayer.value
   if (original && !previewCommitted.value) {
     layerStore.previewLayerFields(original.name, original)
+    if (previewOriginalUi.value) {
+      ui.setHeatmap(original.name, previewOriginalUi.value.heatmap)
+      ui.setRadius(original.name, previewOriginalUi.value.radius_enabled)
+      ui.setRadiusField(original.name, previewOriginalUi.value.radius_field)
+      ui.setRadiusMeters(original.name, previewOriginalUi.value.radius_meters)
+    }
   }
   previewOriginalLayer.value = null
+  previewOriginalUi.value = null
   previewCommitted.value = false
 }
 
 function commitLayerPreview() {
   previewCommitted.value = true
   previewOriginalLayer.value = null
+  previewOriginalUi.value = null
 }
 
 function _parseFilter(json) {

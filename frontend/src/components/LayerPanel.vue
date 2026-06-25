@@ -561,44 +561,6 @@ defineExpose({})
 }
 
 .lp__body { padding: 6px 0; overflow-x: hidden; overflow-y: auto; flex: 1; min-width: 0; }
-
-/* Custom scrollbars on every scrollable surface in this panel.
-   WebKit + Firefox both covered. The panel body and the picker
-   dropdown use the same thumb/track so they read as one design
-   system. Width 6px matches the picker's interior padding so the
-   thumb visually lines up with the rounded corners. */
-.lp__body,
-.lp__picker-pop {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
-}
-.lp__body:hover,
-.lp__picker-pop:hover {
-  scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
-}
-.lp__body::-webkit-scrollbar,
-.lp__picker-pop::-webkit-scrollbar { width: 6px; height: 6px; }
-.lp__body::-webkit-scrollbar-track,
-.lp__picker-pop::-webkit-scrollbar-track { background: transparent; }
-.lp__body::-webkit-scrollbar-thumb,
-.lp__picker-pop::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  /* No border — WebKit would otherwise inset the thumb by the
-     border-width, making it render thinner than 6px even though
-     the scrollbar reports 6px. */
-}
-.lp__body:hover::-webkit-scrollbar-thumb,
-.lp__picker-pop:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.32);
-}
-/* WebKit hides the scrollbar completely until the surface is
-   being scrolled or hovered. We don't want that — the user
-   should always see something scrollable is scrollable. */
-.lp__body::-webkit-scrollbar-thumb:vertical,
-.lp__picker-pop::-webkit-scrollbar-thumb:vertical {
-  min-height: 24px;
-}
 .lp__section { padding: 6px 8px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
 
 /* Inline add-layer picker. The popover is in-flow (not absolute)

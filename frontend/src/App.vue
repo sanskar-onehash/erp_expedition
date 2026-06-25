@@ -431,6 +431,42 @@ async function _fitAllBounds(m) {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-feature-settings: 'cv11', 'ss01', 'ss03';
 }
+
+/* Scrollbars are global within the Expedition map only. The parent
+   component is scoped, so :deep keeps child panel scroll areas covered
+   without leaking these rules into Desk or other Frappe pages. */
+.expedition,
+.expedition :deep(*) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.expedition:hover,
+.expedition :deep(*:hover) {
+  scrollbar-color: rgba(255, 255, 255, 0.32) transparent;
+}
+.expedition::-webkit-scrollbar,
+.expedition :deep(*)::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.expedition::-webkit-scrollbar-track,
+.expedition :deep(*)::-webkit-scrollbar-track {
+  background: transparent;
+}
+.expedition::-webkit-scrollbar-thumb,
+.expedition :deep(*)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+.expedition:hover::-webkit-scrollbar-thumb,
+.expedition :deep(*:hover)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.32);
+}
+.expedition::-webkit-scrollbar-thumb:vertical,
+.expedition :deep(*)::-webkit-scrollbar-thumb:vertical {
+  min-height: 24px;
+}
+
 .expedition__basemap { position: absolute; inset: 0; }
 
 /* Left-edge panel placement + slide-in transition. */

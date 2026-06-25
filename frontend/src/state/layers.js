@@ -127,10 +127,11 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   function getLayerStyle(layerName) {
+    const layer = layers.value.find((l) => l.name === layerName)
+    if (layer?.style) return layer.style
     const fc = features.value[layerName]
     if (fc && fc.layer && fc.layer.style) return fc.layer.style
-    const layer = layers.value.find((l) => l.name === layerName)
-    return layer?.style || {}
+    return {}
   }
 
   /**

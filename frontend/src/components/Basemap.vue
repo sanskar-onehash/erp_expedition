@@ -34,7 +34,7 @@ import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { useZonesStore } from '../state/zones.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
-import { registerIcons } from '../api/icons.js'
+import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 
 // Pin radii. Apple/Google-tier: default `m` is 11px (22px disk
 // visually with the white ring). xs/s are for dense layers; l/xl
@@ -221,9 +221,42 @@ function pinPaint(color, radius) {
       radius * 1.18,
       radius,
     ],
-    'circle-color': color,
+    'circle-color': pinColorExpression(color),
     'circle-opacity': 1,
   }
+}
+
+function pinColorExpression(fallback) {
+  return [
+    'case',
+    ['has', '_color'],
+    ['to-color', ['get', '_color']],
+    fallback,
+  ]
+}
+
+function pointFilter(wantsCluster) {
+  return wantsCluster ? ['!', ['has', 'point_count']] : ['all']
+}
+
+function circlePointFilter(wantsCluster) {
+  return wantsCluster
+    ? ['all', ['!', ['has', 'point_count']], ['!', ['has', '_display_icon_image']]]
+    : ['!', ['has', '_display_icon_image']]
+}
+
+function iconPointFilter(wantsCluster) {
+  return wantsCluster
+    ? ['all', ['!', ['has', 'point_count']], ['has', '_display_icon_image']]
+    : ['has', '_display_icon_image']
+}
+
+function featureDisplayColor(feature, fallback) {
+  return feature?.properties?._color || fallback
+}
+
+function featureDisplayIcon(feature, layerIcon) {
+  return feature?.properties?._icon || layerIcon || ''
 }
 
 /**
@@ -419,9 +452,25 @@ function _addLayerOnMap(layerName) {
   const shid = shadowLayerId(layerName)
   const rid = ringLayerId(layerName)
 
+  const iconSpecs = new Map()
+  const sourceFeatures = (fc.features || []).map((feature) => {
+    const icon = featureDisplayIcon(feature, style.icon || layerDoc.icon)
+    if (!icon) return feature
+    const iconColor = featureDisplayColor(feature, color)
+    const imageId = coloredIconImageId(icon, iconColor)
+    iconSpecs.set(imageId, { id: icon, color: iconColor, imageId })
+    return {
+      ...feature,
+      properties: {
+        ...(feature.properties || {}),
+        _display_icon_image: imageId,
+      },
+    }
+  })
+
   const sourceSpec = {
     type: 'geojson',
-    data: { type: 'FeatureCollection', features: fc.features || [] },
+    data: { type: 'FeatureCollection', features: sourceFeatures },
     promoteId: '_id',
   }
   if (wantsCluster) {
@@ -445,9 +494,12 @@ function _addLayerOnMap(layerName) {
       id: shid,
       type: 'circle',
       source: sid,
-      filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
+      filter: circlePointFilter(wantsCluster),
       paint: shadowPaint(radius),
     })
+  } else {
+    map.setFilter(shid, circlePointFilter(wantsCluster))
+    map.setPaintProperty(shid, 'circle-radius', shadowPaint(radius)['circle-radius'])
   }
   // 2. White ring
   if (!map.getLayer(rid)) {
@@ -455,9 +507,12 @@ function _addLayerOnMap(layerName) {
       id: rid,
       type: 'circle',
       source: sid,
-      filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
+      filter: circlePointFilter(wantsCluster),
       paint: ringPaint(radius),
     })
+  } else {
+    map.setFilter(rid, circlePointFilter(wantsCluster))
+    map.setPaintProperty(rid, 'circle-radius', ringPaint(radius)['circle-radius'])
   }
   // 3. Pin body
   if (!map.getLayer(lid)) {
@@ -465,11 +520,12 @@ function _addLayerOnMap(layerName) {
       id: lid,
       type: 'circle',
       source: sid,
-      filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
+      filter: circlePointFilter(wantsCluster),
       paint: pinPaint(color, radius),
     })
   } else {
-    map.setPaintProperty(lid, 'circle-color', color)
+    map.setFilter(lid, circlePointFilter(wantsCluster))
+    map.setPaintProperty(lid, 'circle-color', pinColorExpression(color))
     map.setPaintProperty(lid, 'circle-radius', radius)
   }
   // Toggle via opacity (cheap; no add/remove).
@@ -484,23 +540,24 @@ function _addLayerOnMap(layerName) {
   }
 
   // 4. Icon glyph (optional). Sits above the pin body so it reads as
-  // "icon over dot", Apple/Google-tier. Only for non-clustered pins —
-  // clusters already have their own visual language.
+  // "icon over dot". On clustered sources, the filter keeps glyphs on
+  // individual pins only; cluster bubbles keep their own visual language.
   const iid = iconLayerId(layerName)
-  const iconName = style.icon || layerDoc.icon
-  if (iconName && !wantsCluster) {
+  const iconSpecList = [...iconSpecs.values()]
+  if (iconSpecList.length) {
+    const filter = iconPointFilter(wantsCluster)
     // Register the sprite image on the map (no-op if already present).
-    registerIcons(map, [iconName], 28).then(() => {
+    registerColoredIcons(map, iconSpecList, 28).then(() => {
       if (!map.getLayer(iid)) {
         map.addLayer({
           id: iid,
           type: 'symbol',
           source: sid,
-          filter: ['!', ['has', 'point_count']],
+          filter,
           layout: {
-            'icon-image': iconName,
-            // The icon's viewBox is 24x24 with ~14px glyph; we want the
-            // glyph to fit inside radius-1 on a screen-anchored pin.
+            'icon-image': ['get', '_display_icon_image'],
+            // The icon's viewBox is 24x24. Scale with zoom so icon-only
+            // points stay legible without the old circle wrapper.
             'icon-size': [
               'interpolate', ['linear'], ['zoom'],
               2, 0.55,
@@ -510,23 +567,19 @@ function _addLayerOnMap(layerName) {
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
             'icon-anchor': 'center',
-            // White glyph — the colored pin body provides contrast.
-            // For dark icons the user picked, the pin body color
-            // controls whether the icon reads (dark pin + white icon
-            // is always legible).
           },
           paint: {
-            'icon-color': '#FFFFFF',
             'icon-opacity': enabled ? 1 : 0,
           },
         })
       } else {
         // Layer exists; refresh the icon image and color.
-        map.setLayoutProperty(iid, 'icon-image', iconName)
+        map.setFilter(iid, filter)
+        map.setLayoutProperty(iid, 'icon-image', ['get', '_display_icon_image'])
         map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
       }
     }).catch((e) => {
-      console.warn('[expedition] icon register failed', iconName, e)
+      console.warn('[expedition] icon register failed', iconSpecList, e)
     })
   } else if (map.getLayer(iid)) {
     map.removeLayer(iid)
@@ -1392,7 +1445,15 @@ watch(activeSkinId, (id) => {
 
 // Layer list changes (e.g. map switched) → reconcile.
 watch(
-  () => layerStore.layers.map((l) => ({ name: l.name, enabled: !!l.enabled })),
+  () => layerStore.layers.map((l) => ({
+    name: l.name,
+    enabled: l.enabled !== false && l.enabled !== 0,
+    color: l.color || l.style?.color || '',
+    icon: l.icon || l.style?.icon || '',
+    size: l.size || l.style?.size || '',
+    cluster: !!(l.cluster || l.style?.cluster),
+    heatmap: !!(l.heatmap || l.style?.heatmap),
+  })),
   () => {
     if (!map || !map.isStyleLoaded()) return
     for (const layer of layerStore.layers) {

@@ -61,6 +61,7 @@ def load_full(name: str) -> dict:
             "title",
             "map",
             "sequence",
+            "enabled",
             "source_doctype",
             "color",
             "icon",

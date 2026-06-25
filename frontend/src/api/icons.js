@@ -8,7 +8,7 @@
  * and register the result.
  *
  * Caching: the parse happens once per page load. Subsequent calls
- * with the same ids are no-ops.
+ * with the same generated image ids are no-ops.
  */
 import maplibregl from 'maplibre-gl'
 
@@ -38,7 +38,7 @@ async function _loadSvgText() {
  * size. Returns a promise that resolves to the image, or rejects if
  * the id isn't in the sprite.
  */
-function _renderSymbol(symbolEl, size) {
+function _renderSymbol(symbolEl, size, color = 'currentColor') {
   return new Promise((resolve, reject) => {
     // Re-emit the symbol's inner SVG as a standalone <svg> so the
     // browser renders it (browsers don't render <symbol> directly).
@@ -48,6 +48,7 @@ function _renderSymbol(symbolEl, size) {
     svg.setAttribute('viewBox', symbolEl.getAttribute('viewBox') || '0 0 24 24')
     svg.setAttribute('width', String(size))
     svg.setAttribute('height', String(size))
+    svg.style.color = color
     svg.innerHTML = symbolEl.innerHTML
 
     const blob = new Blob([svg.outerHTML], { type: 'image/svg+xml' })
@@ -80,9 +81,29 @@ export async function registerIcons(map, ids, pixelSize = 24) {
     const sym = available.get(id)
     if (!sym) continue
     const img = await _renderSymbol(sym, pixelSize)
-    // White glyph over the colored pin body. No halo — the pin's white
-    // ring already provides contrast against arbitrary basemap styles.
     map.addImage(id, img, { sdf: false })
+  }
+}
+
+export function coloredIconImageId(id, color) {
+  const safeColor = encodeURIComponent(color || '#3B82F6')
+  return `${id}--${safeColor}`
+}
+
+export async function registerColoredIcons(map, specs, pixelSize = 28) {
+  if (!map || !specs || specs.length === 0) return
+  const { symbols } = await _loadSvgText()
+  const available = new Map(symbols.map((s) => [s.id, s]))
+  for (const spec of specs) {
+    const id = spec?.id
+    const color = spec?.color || '#3B82F6'
+    const imageId = spec?.imageId || coloredIconImageId(id, color)
+    if (!id || !imageId) continue
+    if (map.hasImage(imageId)) continue
+    const sym = available.get(id)
+    if (!sym) continue
+    const img = await _renderSymbol(sym, pixelSize, color)
+    map.addImage(imageId, img, { sdf: false })
   }
 }
 

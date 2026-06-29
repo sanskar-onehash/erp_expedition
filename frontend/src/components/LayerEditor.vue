@@ -74,6 +74,9 @@ const COLOR_PRESETS = [
   '#14B8A6', '#A855F7', '#0EA5E9', '#F43F5E', '#22C55E',
 ]
 
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+const RGB_COLOR_RE = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/i
+
 const SIZE_OPTIONS = [
   { v: 'xs', label: 'XS' },
   { v: 's', label: 'S' },
@@ -102,6 +105,7 @@ const iconSections = computed(() => [
 ].filter((section) => section.icons.length || section.key !== 'global' || iconStore.canManageGlobal))
 const allIconOptions = computed(() => iconStore.all)
 const selectedIcon = computed(() => iconStore.byKey.get(form.value.icon))
+const colorInputInvalid = computed(() => !!form.value.color && !isValidCssColor(form.value.color))
 
 watch(
   () => ui.editorOpen,
@@ -216,7 +220,7 @@ watch(
     ui.setRadiusField(form.value.name, preview.radius_field || '')
     ui.setRadiusMeters(form.value.name, preview.radius_meters)
     layerStore.previewLayerFields(form.value.name, {
-      color: preview.color || '#3B82F6',
+      color: safeLayerColor(preview.color, previewOriginalLayer.value?.color || '#3B82F6'),
       size: preview.size || 'm',
       cluster: preview.cluster,
       enabled: preview.enabled,
@@ -260,6 +264,67 @@ function iconLabel(icon) {
 
 function isBuiltinIcon(icon) {
   return icon?.source === 'builtin'
+}
+
+function isValidCssColor(value) {
+  const color = String(value || '').trim()
+  if (!color) return false
+  if (HEX_COLOR_RE.test(color)) return true
+  const rgb = color.match(RGB_COLOR_RE)
+  if (!rgb) return false
+  const [, r, g, b, a] = rgb
+  const channels = [r, g, b].map(Number)
+  if (channels.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false
+  if (a != null) {
+    const alpha = Number(a)
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return false
+  }
+  return true
+}
+
+function normalizeColorText(value) {
+  return String(value || '').trim()
+}
+
+function safeLayerColor(value, fallback = '#3B82F6') {
+  const color = normalizeColorText(value)
+  return isValidCssColor(color) ? color : fallback
+}
+
+function expandHexColor(value) {
+  const color = normalizeColorText(value)
+  if (!HEX_COLOR_RE.test(color)) return ''
+  const hex = color.slice(1)
+  if (hex.length === 3 || hex.length === 4) {
+    return '#' + hex.slice(0, 3).split('').map((c) => c + c).join('')
+  }
+  return '#' + hex.slice(0, 6)
+}
+
+function componentToHex(value) {
+  return Number(value).toString(16).padStart(2, '0')
+}
+
+function colorPickerValue(value) {
+  const hex = expandHexColor(value)
+  if (hex) return hex
+  const rgb = normalizeColorText(value).match(RGB_COLOR_RE)
+  if (rgb) {
+    return `#${componentToHex(rgb[1])}${componentToHex(rgb[2])}${componentToHex(rgb[3])}`
+  }
+  return '#3B82F6'
+}
+
+function setPickedColor(value) {
+  form.value.color = String(value || '#3B82F6').toUpperCase()
+}
+
+function setPresetColor(value) {
+  form.value.color = value
+}
+
+function isActivePreset(value) {
+  return colorPickerValue(form.value.color).toLowerCase() === value.toLowerCase()
 }
 
 function isSvgFile(file) {
@@ -552,6 +617,12 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
+    form.value.color = normalizeColorText(form.value.color)
+    if (!isValidCssColor(form.value.color)) {
+      error.value = 'Enter a valid color: #RGB, #RRGGBB, rgb(...), or rgba(...).'
+      saving.value = false
+      return
+    }
     if (isCreate.value) {
       if (!form.value.title.trim()) {
         error.value = 'Title is required'
@@ -748,12 +819,27 @@ function close() {
         <div class="le__row">
           <div class="le__field le__field--half">
             <span class="le__label">Color</span>
-            <div class="le__color-row">
-              <input v-model="form.color" class="le__color" type="color" />
+            <div class="le__color-row le__color-row--custom">
+              <input
+                :value="colorPickerValue(form.color)"
+                class="le__color"
+                type="color"
+                title="Pick color"
+                @input="setPickedColor($event.target.value)"
+              />
+              <input
+                v-model="form.color"
+                class="le__input le__color-code"
+                :class="{ 'le__input--invalid': colorInputInvalid }"
+                type="text"
+                spellcheck="false"
+                placeholder="#3B82F6 or rgba(59,130,246,0.8)"
+                @blur="form.color = normalizeColorText(form.color)"
+              />
               <div class="le__color-presets">
                 <button v-for="c in COLOR_PRESETS" :key="c" type="button"
-                        class="le__color-chip" :class="{ 'le__color-chip--active': form.color === c }"
-                        :style="{ background: c }" @click="form.color = c" />
+                        class="le__color-chip" :class="{ 'le__color-chip--active': isActivePreset(c) }"
+                        :style="{ background: c }" @click="setPresetColor(c)" />
               </div>
             </div>
           </div>
@@ -1097,7 +1183,15 @@ function close() {
 .le__input:focus { border-color: #3B82F6; }
 .le__input--sm { padding: 6px 8px; font-size: 11px; }
 .le__input--value { flex: 1; min-width: 0; }
+.le__input--invalid {
+  border-color: rgba(239, 68, 68, 0.85);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.22);
+}
 .le__color-row { display: flex; gap: 8px; align-items: center; }
+.le__color-row--custom {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
 .le__color {
   width: 36px; height: 36px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1109,7 +1203,19 @@ function close() {
 }
 .le__color::-webkit-color-swatch-wrapper { padding: 4px; }
 .le__color::-webkit-color-swatch { border: 0; border-radius: 4px; }
-.le__color-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.le__color-code {
+  flex: 1 1 126px;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.le__color-presets {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .le__color-chip {
   width: 18px; height: 18px; border-radius: 5px; border: 1px solid rgba(0,0,0,0.3);
   cursor: pointer; padding: 0; outline: none;

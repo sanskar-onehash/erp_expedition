@@ -370,7 +370,18 @@ function heatmapPaint(color) {
 }
 
 function hexToRgb(hex) {
-  const h = (hex || '').replace('#', '')
+  const raw = String(hex || '').trim()
+  const rgb = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i)
+  if (rgb) {
+    const channels = rgb.slice(1, 4).map((n) => Math.max(0, Math.min(255, Number(n))))
+    return { r: channels[0], g: channels[1], b: channels[2] }
+  }
+  let h = raw.replace('#', '')
+  if (h.length === 3 || h.length === 4) {
+    h = h.slice(0, 3).split('').map((c) => c + c).join('')
+  } else if (h.length === 8) {
+    h = h.slice(0, 6)
+  }
   if (h.length !== 6) return { r: 255, g: 59, b: 48 }
   return {
     r: parseInt(h.slice(0, 2), 16),

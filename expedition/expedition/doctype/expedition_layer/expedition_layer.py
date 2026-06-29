@@ -48,3 +48,6 @@ class ExpeditionLayer(Document):
             frappe.parse_json(self.filter_json)
         except Exception:
             frappe.throw("Filter is not valid JSON")
+        from expedition.api.layer import validate_filter_json
+
+        validate_filter_json(self.source_doctype, self.filter_json)

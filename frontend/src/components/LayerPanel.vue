@@ -16,11 +16,12 @@
  * same glass as the rest of the chrome.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { call } from '../api/client.js'
 import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { ICON_PATHS } from '../api/icons.js'
+import FilterBuilder from './FilterBuilder.vue'
+import { filterCount, parseFilterRows, serializeFilterRows, summarizeFilterRows } from '../lib/filters.js'
 
 const mapStore = useMapStore()
 const layerStore = useLayersStore()
@@ -116,31 +117,45 @@ function toggleRadiusPicker(layerName) {
 
 // Quick filter edit state: layerName -> open boolean, plus temporary edits
 const quickFilterFor = ref(null) // layerName currently editing, or null
-const quickFilterDraft = ref({ field: '', op: '=', value: '' })
-const quickFilterFields = ref({}) // layerName -> [{fieldname, label, fieldtype}]
-async function openQuickFilter(layer) {
-  // Parse the first filter row as the draft (if any)
-  const rows = _parseFilter(layer.filter_json)
-  quickFilterDraft.value = (rows && rows[0]) ? { ...rows[0] } : { field: '', op: '=', value: '' }
+const quickFilterDraft = ref([])
+const quickFilterSchemas = ref({}) // layerName -> filter schema
+const quickFilterPopupRoot = ref(null)
+const quickFilterPlacement = ref({
+  top: 12,
+  left: 120,
+  width: 320,
+  maxHeight: 320,
+})
+const quickFilterPopoverStyle = computed(() => ({
+  top: `${quickFilterPlacement.value.top}px`,
+  left: `${quickFilterPlacement.value.left}px`,
+  width: `${quickFilterPlacement.value.width}px`,
+  maxHeight: `${quickFilterPlacement.value.maxHeight}px`,
+}))
+function placeQuickFilterPopover(event) {
+  const rect = event?.currentTarget?.getBoundingClientRect?.()
+  if (!rect) return
+  const margin = 12
+  const width = Math.min(320, window.innerWidth - margin * 2)
+  const left = Math.min(Math.max(margin, 120), window.innerWidth - width - margin)
+  const below = window.innerHeight - rect.bottom - margin
+  const above = rect.top - margin
+  const preferredHeight = 280
+  const openAbove = below < 220 && above > below
+  const maxHeight = Math.max(180, Math.min(preferredHeight, openAbove ? above : below))
+  const top = openAbove
+    ? Math.max(margin, rect.top - maxHeight - 8)
+    : Math.min(rect.bottom + 8, window.innerHeight - maxHeight - margin)
+  quickFilterPlacement.value = { top, left, width, maxHeight }
+}
+function openQuickFilter(layer, event) {
+  quickFilterDraft.value = parseFilterRows(layer.filter_json)
   quickFilterFor.value = layer.name
-  // Lazily load the source DocType's filterable fields.
-  if (!quickFilterFields.value[layer.name] && layer.source_doctype) {
-    try {
-      const fields = await call('expedition.api.layer.list_source_fields', { source_doctype: layer.source_doctype })
-      quickFilterFields.value[layer.name] = fields
-    } catch (e) {
-      console.error('[expedition] list_source_fields failed', e)
-      quickFilterFields.value[layer.name] = []
-    }
-  }
+  placeQuickFilterPopover(event)
 }
 async function saveQuickFilter(layer) {
   if (!layer || !quickFilterFor.value) return
-  // Serialize the single draft row back to JSON. Note: this overwrites any
-  // existing multi-row filters; for v1 we keep it simple.
-  const json = quickFilterDraft.value.field && quickFilterDraft.value.op
-    ? JSON.stringify([[quickFilterDraft.value.field, quickFilterDraft.value.op, quickFilterDraft.value.value]])
-    : ''
+  const json = serializeFilterRows(quickFilterDraft.value)
   try {
     await layerStore.updateLayer(layer.name, { filter_json: json })
     quickFilterFor.value = null
@@ -158,14 +173,15 @@ async function saveQuickFilter(layer) {
 function cancelQuickFilter() {
   quickFilterFor.value = null
 }
-
-function _parseFilter(json) {
-  if (!json) return []
-  try {
-    const parsed = typeof json === 'string' ? JSON.parse(json) : json
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(([field, op, value]) => ({ field, op: op || '=', value: value ?? '' }))
-  } catch { return [] }
+function setQuickFilterSchema(layerName, schema) {
+  quickFilterSchemas.value = { ...quickFilterSchemas.value, [layerName]: schema }
+}
+function filterBadge(layer) {
+  return filterCount(layer.filter_json)
+}
+function filterSummaries(layer) {
+  const fields = quickFilterSchemas.value[layer.name]?.fields || []
+  return summarizeFilterRows(parseFilterRows(layer.filter_json), fields).slice(0, 3)
 }
 
 async function attachMaster(master) {
@@ -186,19 +202,31 @@ function closePicker() {
   pickerOpen.value = false
   pickerQuery.value = ''
 }
-function onDocumentMouseDown(event) {
-  const root = pickerRoot.value
-  if (!root) return
-  if (root.contains(event.target)) return
-  closePicker()
+function containsTarget(refValue, target) {
+  const nodes = Array.isArray(refValue) ? refValue : [refValue]
+  return nodes.some((node) => {
+    const el = node?.$el || node
+    return el?.contains?.(target)
+  })
 }
-watch(pickerOpen, (open) => {
-  if (open) {
-    document.addEventListener('mousedown', onDocumentMouseDown, true)
-  } else {
-    document.removeEventListener('mousedown', onDocumentMouseDown, true)
+function onDocumentMouseDown(event) {
+  if (event.target?.closest?.('.fb__floating-menu')) return
+  const root = pickerRoot.value
+  if (root && !root.contains(event.target)) closePicker()
+  if (quickFilterFor.value && !containsTarget(quickFilterPopupRoot.value, event.target)) {
+    quickFilterFor.value = null
   }
-})
+}
+watch(
+  () => pickerOpen.value || !!quickFilterFor.value,
+  (open) => {
+    if (open) {
+      document.addEventListener('mousedown', onDocumentMouseDown, true)
+    } else {
+      document.removeEventListener('mousedown', onDocumentMouseDown, true)
+    }
+  }
+)
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
 })
@@ -409,47 +437,43 @@ defineExpose({})
                     :class="{ 'lp__row-icon--on': !!layer.filter_json }"
                     :aria-pressed="!!layer.filter_json ? 'true' : 'false'"
                     :aria-label="'Quick filter ' + (layer.title || layer.name)"
-                    :title="layer.filter_json ? 'Filter active — click to edit' : 'Add a quick filter'"
-                    @click.stop="openQuickFilter(layer)"
+                    :title="layer.filter_json ? 'Filter active - click to edit' : 'Add a quick filter'"
+                    @click.stop="openQuickFilter(layer, $event)"
                   >
                     <!-- Filter glyph: funnel. -->
                     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                       <path d="M3 5h18l-7 9v6l-4-2v-4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
                     </svg>
+                    <span v-if="filterBadge(layer)" class="lp__filter-badge">{{ filterBadge(layer) }}</span>
                   </button>
-                  <div v-if="quickFilterFor === layer.name" class="lp__qf-pop" @click.stop>
-                    <div class="lp__qf-head">Quick filter</div>
-                    <div class="lp__qf-row">
-                      <select v-model="quickFilterDraft.field" class="lp__qf-input lp__qf-input--field">
-                        <option value="" disabled>field</option>
-                        <option v-for="f in (quickFilterFields[layer.name] || [])" :key="f.fieldname" :value="f.fieldname">
-                          {{ f.label }} ({{ f.fieldname }})
-                        </option>
-                      </select>
-                    </div>
-                    <div class="lp__qf-row">
-                      <select v-model="quickFilterDraft.op" class="lp__qf-input lp__qf-input--op">
-                        <option value="=">=</option>
-                        <option value="!=">≠</option>
-                        <option value="like">contains</option>
-                        <option value="not like">not contains</option>
-                        <option value="in">in</option>
-                        <option value="not in">not in</option>
-                        <option value="&gt;">&gt;</option>
-                        <option value="&lt;">&lt;</option>
-                      </select>
-                      <input v-model="quickFilterDraft.value" class="lp__qf-input lp__qf-input--val" type="text" placeholder="value" />
-                    </div>
-                    <div class="lp__qf-actions">
-                      <button type="button" class="lp__qf-btn lp__qf-btn--ghost" @click="cancelQuickFilter">Cancel</button>
-                      <button type="button" class="lp__qf-btn lp__qf-btn--primary" @click="saveQuickFilter(layer)">Save</button>
-                    </div>
-                    <p v-if="!layer.source_doctype" class="lp__qf-note">No source DocType configured for this layer.</p>
-                    <p v-else-if="!quickFilterFields[layer.name]" class="lp__qf-note">Loading fields…</p>
-                  </div>
                 </div>
                 <button class="lp__row-edit" type="button" @click="editLayer(layer)" aria-label="'Edit ' + (layer.title || layer.name)">edit</button>
               </div>
+              <Teleport to="body">
+                <div
+                  v-if="quickFilterFor === layer.name"
+                  ref="quickFilterPopupRoot"
+                  class="lp__qf-pop"
+                  :style="quickFilterPopoverStyle"
+                  @click.stop
+                >
+                  <FilterBuilder
+                    v-model="quickFilterDraft"
+                    :source-doctype="layer.source_doctype"
+                    compact
+                    title="Layer filters"
+                    @schema-loaded="(schema) => setQuickFilterSchema(layer.name, schema)"
+                  />
+                  <div v-if="filterSummaries(layer).length" class="lp__qf-chips">
+                    <span v-for="summary in filterSummaries(layer)" :key="summary" class="lp__qf-chip">{{ summary }}</span>
+                  </div>
+                  <div class="lp__qf-actions">
+                    <button type="button" class="lp__qf-btn lp__qf-btn--ghost" @click="cancelQuickFilter">Cancel</button>
+                    <button type="button" class="lp__qf-btn lp__qf-btn--primary" @click="saveQuickFilter(layer)">Save</button>
+                  </div>
+                  <p v-if="!layer.source_doctype" class="lp__qf-note">No source DocType configured for this layer.</p>
+                </div>
+              </Teleport>
             </li>
           </ul>
           <p v-else class="lp__empty">No layers yet.</p>
@@ -513,19 +537,36 @@ defineExpose({})
 /* Quick filter popover (inline filter editor on each layer row). */
 .lp__qf-wrap { position: relative; }
 .lp__qf-pop {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 30;
-  margin-top: 4px;
-  width: 240px;
+  position: fixed;
+  z-index: 80;
+  box-sizing: border-box;
+  overflow: hidden;
+  --fb-compact-rows-max-height: 154px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
   background: rgba(11, 14, 20, 0.95);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
   border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 8px;
   display: flex; flex-direction: column; gap: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.50);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
+.lp__qf-pop:hover { scrollbar-color: rgba(255, 255, 255, 0.32) transparent; }
+.lp__qf-pop::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.lp__qf-pop::-webkit-scrollbar-track { background: transparent; }
+.lp__qf-pop::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+.lp__qf-pop:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.32); }
+.lp__qf-pop::-webkit-scrollbar-thumb:vertical { min-height: 24px; }
 .lp__qf-head {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
   color: rgba(230, 232, 236, 0.6); font-weight: 500;
@@ -558,6 +599,24 @@ defineExpose({})
   font-size: 10px;
   color: rgba(230, 232, 236, 0.5);
   margin: 0;
+}
+.lp__qf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 2px;
+}
+.lp__qf-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 3px 6px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  color: rgba(219, 234, 254, 0.92);
+  font-size: 10px;
 }
 
 .lp__body { padding: 6px 0; overflow-x: hidden; overflow-y: auto; flex: 1; min-width: 0; }
@@ -680,6 +739,7 @@ defineExpose({})
 .lp__row-icon {
   background: transparent; border: 0;
   width: 22px; height: 22px;
+  position: relative;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 5px; cursor: pointer;
   color: rgba(230, 232, 236, 0.4);
@@ -690,6 +750,22 @@ defineExpose({})
 .lp__row-icon:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .lp__row-icon--on { color: var(--exp-layer-color, #F59E0B); }
 .lp__row-icon--on:hover { color: #fff; }
+.lp__filter-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: #3B82F6;
+  color: #fff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
 /* Radius popover (PR-8). Anchored under the radius button. Wraps the
    toggle so its menu is part of the same hit area. */

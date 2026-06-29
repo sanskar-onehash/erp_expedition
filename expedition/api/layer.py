@@ -31,6 +31,155 @@ from expedition.api.icon import assert_icon_readable
 from expedition.api.permission import assert_source_read
 
 
+LAYOUT_FIELD_TYPES = {
+    "Section Break",
+    "Column Break",
+    "Tab Break",
+    "HTML",
+    "Table",
+    "Table MultiSelect",
+    "Button",
+    "Image",
+    "Fold",
+}
+
+FILTERABLE_FIELD_TYPES = {
+    "Attach",
+    "Attach Image",
+    "Barcode",
+    "Check",
+    "Code",
+    "Color",
+    "Currency",
+    "Data",
+    "Date",
+    "Datetime",
+    "Duration",
+    "Dynamic Link",
+    "Email",
+    "Float",
+    "Geolocation",
+    "Int",
+    "JSON",
+    "Link",
+    "Long Text",
+    "Markdown Editor",
+    "Password",
+    "Percent",
+    "Phone",
+    "Rating",
+    "Read Only",
+    "Select",
+    "Small Text",
+    "Text",
+    "Text Editor",
+    "Time",
+    "URL",
+}
+
+STANDARD_FILTER_FIELDS = [
+    {
+        "fieldname": "name",
+        "fieldtype": "Data",
+        "label": "ID",
+        "options": "",
+        "standard": 1,
+    },
+    {
+        "fieldname": "owner",
+        "fieldtype": "Link",
+        "label": "Owner",
+        "options": "User",
+        "standard": 1,
+    },
+    {
+        "fieldname": "creation",
+        "fieldtype": "Datetime",
+        "label": "Created On",
+        "options": "",
+        "standard": 1,
+    },
+    {
+        "fieldname": "modified",
+        "fieldtype": "Datetime",
+        "label": "Last Modified On",
+        "options": "",
+        "standard": 1,
+    },
+    {
+        "fieldname": "modified_by",
+        "fieldtype": "Link",
+        "label": "Last Modified By",
+        "options": "User",
+        "standard": 1,
+    },
+    {
+        "fieldname": "docstatus",
+        "fieldtype": "Select",
+        "label": "Document Status",
+        "options": "0\n1\n2",
+        "standard": 1,
+    },
+]
+
+DOCSTATUS_FILTER_OPTIONS = [
+    {"label": "Draft", "value": 0},
+    {"label": "Submitted", "value": 1},
+    {"label": "Cancelled", "value": 2},
+]
+
+TEXT_FIELD_TYPES = {
+    "Attach",
+    "Attach Image",
+    "Barcode",
+    "Code",
+    "Color",
+    "Data",
+    "Email",
+    "Geolocation",
+    "JSON",
+    "Long Text",
+    "Markdown Editor",
+    "Password",
+    "Phone",
+    "Read Only",
+    "Small Text",
+    "Text",
+    "Text Editor",
+    "URL",
+}
+NUMERIC_FIELD_TYPES = {"Currency", "Duration", "Float", "Int", "Percent", "Rating"}
+DATE_FIELD_TYPES = {"Date", "Datetime", "Time"}
+LINK_FIELD_TYPES = {"Link", "Dynamic Link"}
+
+COMMON_OPERATORS = [
+    {"value": "=", "label": "equals", "requires_value": True},
+    {"value": "!=", "label": "not equals", "requires_value": True},
+    {"value": "in", "label": "in", "requires_value": True, "multi": True},
+    {"value": "not in", "label": "not in", "requires_value": True, "multi": True},
+    {"value": "is", "label": "is set", "requires_value": False, "fixed_value": "set"},
+    {
+        "value": "is",
+        "label": "is not set",
+        "requires_value": False,
+        "fixed_value": "not set",
+    },
+]
+
+TEXT_OPERATORS = [
+    {"value": "like", "label": "contains", "requires_value": True},
+    {"value": "not like", "label": "not contains", "requires_value": True},
+]
+
+ORDER_OPERATORS = [
+    {"value": ">", "label": "greater than", "requires_value": True},
+    {"value": ">=", "label": "greater or equal", "requires_value": True},
+    {"value": "<", "label": "less than", "requires_value": True},
+    {"value": "<=", "label": "less or equal", "requires_value": True},
+    {"value": "between", "label": "between", "requires_value": True, "range": True},
+]
+
+
 def _coerce_filter(filter_json: str | dict | None) -> list | None:
     """Parse a Frappe filter spec from JSON. Returns a list of filters or None."""
     if not filter_json:
@@ -43,10 +192,150 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
             "Filter must be a Frappe filter list (array of [field, op, value] tuples)"
         )
     # Light validation: each entry must be a 2- or 3-tuple.
+    normalized = []
     for f in parsed:
         if not isinstance(f, (list, tuple)) or len(f) not in (2, 3):
             frappe.throw("Malformed filter entry")
-    return parsed
+        if len(f) == 2:
+            field, value = f
+            op = "="
+        else:
+            field, op, value = f
+        op_key = _operator_key(op)
+        if op_key in {"in", "not in", "between"}:
+            value = _parse_multi_value(value)
+        elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
+            value = f"%{value}%"
+        normalized.append([field, op, value])
+    return normalized
+
+
+def _operator_key(op: str | None) -> str:
+    return str(op or "=").strip().lower()
+
+
+def _operators_for_field(fieldtype: str | None) -> list[dict]:
+    ft = fieldtype or "Data"
+    ops = [COMMON_OPERATORS[0], COMMON_OPERATORS[1]]
+    if ft in TEXT_FIELD_TYPES or ft in LINK_FIELD_TYPES or ft in {"Select"}:
+        ops += TEXT_OPERATORS
+    if ft in NUMERIC_FIELD_TYPES or ft in DATE_FIELD_TYPES:
+        ops += ORDER_OPERATORS
+    ops += [COMMON_OPERATORS[2], COMMON_OPERATORS[3], COMMON_OPERATORS[4], COMMON_OPERATORS[5]]
+    return ops
+
+
+def _field_meta_dict(f) -> dict:
+    return {
+        "fieldname": f.fieldname,
+        "fieldtype": f.fieldtype,
+        "label": f.label or f.fieldname,
+        "options": f.options or "",
+        "reqd": int(getattr(f, "reqd", 0) or 0),
+        "hidden": int(getattr(f, "hidden", 0) or 0),
+        "read_only": int(getattr(f, "read_only", 0) or 0),
+        "standard": 0,
+        "operators": _operators_for_field(f.fieldtype),
+    }
+
+
+def _filter_field_map(source_doctype: str) -> dict[str, dict]:
+    meta = frappe.get_meta(source_doctype)
+    fields: dict[str, dict] = {}
+    for f in STANDARD_FILTER_FIELDS:
+        fields[f["fieldname"]] = {**f, "operators": _operators_for_field(f["fieldtype"])}
+    for f in meta.fields:
+        if not f.fieldname:
+            continue
+        if f.fieldtype in LAYOUT_FIELD_TYPES:
+            continue
+        if f.fieldtype not in FILTERABLE_FIELD_TYPES:
+            continue
+        fields[f.fieldname] = _field_meta_dict(f)
+    return fields
+
+
+def _select_options(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [line.strip() for line in str(raw).splitlines() if line.strip()]
+
+
+def _select_filter_options(field_meta: dict) -> list:
+    if field_meta.get("fieldname") == "docstatus":
+        return DOCSTATUS_FILTER_OPTIONS
+    return _select_options(field_meta.get("options"))
+
+
+def _parse_multi_value(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except Exception:
+        pass
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _validate_filter_rows(source_doctype: str, filters: list | None) -> None:
+    if not filters:
+        return
+    field_map = _filter_field_map(source_doctype)
+    for raw in filters:
+        if len(raw) == 3:
+            field, op, value = raw
+        elif len(raw) == 2:
+            field, value = raw
+            op = "="
+        else:
+            frappe.throw("Malformed filter entry", frappe.ValidationError)
+        if field not in field_map:
+            frappe.throw(
+                f"Field '{field}' is not filterable on {source_doctype}",
+                frappe.ValidationError,
+            )
+        meta = field_map[field]
+        allowed = {_operator_key(o["value"]) for o in meta.get("operators", [])}
+        op_key = _operator_key(op)
+        if op_key == "==":
+            op_key = "="
+        if op_key not in allowed:
+            frappe.throw(
+                f"Operator '{op}' is not valid for field '{field}'",
+                frappe.ValidationError,
+            )
+        if op_key in {"in", "not in"} and not _parse_multi_value(value):
+            frappe.throw(
+                f"Filter '{field} {op}' needs at least one value",
+                frappe.ValidationError,
+            )
+        if op_key == "between":
+            values = _parse_multi_value(value)
+            if len(values) != 2:
+                frappe.throw(
+                    f"Filter '{field} between' needs exactly two values",
+                    frappe.ValidationError,
+                )
+        if op_key == "is" and str(value or "").strip().lower() not in {"set", "not set"}:
+            frappe.throw(
+                f"Filter '{field} is' must use set or not set",
+                frappe.ValidationError,
+            )
+
+
+def validate_filter_json(source_doctype: str, filter_json: str | dict | None) -> None:
+    """Validate an Expedition layer filter against a source DocType schema."""
+    if not filter_json:
+        return
+    assert_source_read(source_doctype)
+    _validate_filter_rows(source_doctype, _coerce_filter(filter_json))
 
 
 def _coerce_group_config(raw: str | dict | None) -> dict:
@@ -418,23 +707,37 @@ def get_layer_bounds(layer: str) -> dict:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", field or ""):
                 # Skip illegal field names — don't fail the whole call.
                 continue
+            op_key = _operator_key(op)
             if op in ("=", "=="):
                 where_clauses.append(f"`{field}` = %s")
                 where_params.append(val)
-            elif op == "!=":
+            elif op_key == "!=":
                 where_clauses.append(f"`{field}` != %s")
                 where_params.append(val)
-            elif op in (">", ">=", "<", "<="):
+            elif op_key in (">", ">=", "<", "<="):
                 where_clauses.append(f"`{field}` {op} %s")
                 where_params.append(val)
-            elif op in ("like", "not like"):
-                where_clauses.append(f"`{field}` {op} %s")
+            elif op_key in ("like", "not like"):
+                where_clauses.append(f"`{field}` {op_key} %s")
                 where_params.append(val)
-            # Operators like 'in', 'between', 'is set' are skipped
-            # — the bounds query only needs enough of the filter
-            # to give a *correct* envelope for the common case
-            # (equality, comparison, like). The client falls back
-            # to its feature cache for everything else.
+            elif op_key in ("in", "not in"):
+                values = _parse_multi_value(val)
+                if values:
+                    placeholders = ", ".join(["%s"] * len(values))
+                    where_clauses.append(f"`{field}` {op_key} ({placeholders})")
+                    where_params.extend(values)
+            elif op_key == "between":
+                values = _parse_multi_value(val)
+                if len(values) == 2:
+                    where_clauses.append(f"`{field}` between %s and %s")
+                    where_params.extend(values)
+            elif op_key == "is":
+                is_value = str(val or "").strip().lower()
+                if is_value == "set":
+                    where_clauses.append(f"`{field}` is not null")
+                    where_clauses.append(f"`{field}` != ''")
+                elif is_value == "not set":
+                    where_clauses.append(f"(`{field}` is null or `{field}` = '')")
 
     where_sql = " and ".join(where_clauses)
     row = frappe.db.sql(
@@ -679,27 +982,129 @@ def reorder(map_name: str, layer_names: list[str]) -> dict:
 
 
 @frappe.whitelist()
-def list_source_fields(source_doctype: str) -> list[dict]:
-    """Return the Float / Select / Data fields on the source DocType that
-    are usable as filter targets (or label_field). Used by the filter editor.
+def get_filter_schema(source_doctype: str) -> dict:
+    """Return filterable field metadata for a source DocType.
+
+    This intentionally mirrors the information Frappe's list/report filters
+    need: field labels, fieldtypes, options, and the operator set that makes
+    sense for each field. The client still serializes to the existing
+    Frappe-style `filter_json` list.
     """
     assert_source_read(source_doctype)
-    meta = frappe.get_meta(source_doctype)
-    out = []
-    for f in meta.fields:
-        if f.fieldtype in (
-            "Float",
-            "Int",
-            "Currency",
-            "Data",
-            "Select",
-            "Link",
-            "Check",
-        ):
-            out.append(
-                {"fieldname": f.fieldname, "fieldtype": f.fieldtype, "label": f.label}
+    fields = list(_filter_field_map(source_doctype).values())
+    fields.sort(key=lambda f: (0 if f.get("standard") else 1, f.get("label") or f["fieldname"]))
+    for f in fields:
+        if f.get("fieldtype") == "Select":
+            f["select_options"] = _select_filter_options(f)
+        elif f.get("fieldtype") == "Check":
+            f["select_options"] = [
+                {"label": "Yes", "value": 1},
+                {"label": "No", "value": 0},
+            ]
+    return {"doctype": source_doctype, "fields": fields}
+
+
+@frappe.whitelist()
+def list_source_fields(source_doctype: str) -> list[dict]:
+    """Backward-compatible field list for existing callers."""
+    return get_filter_schema(source_doctype).get("fields", [])
+
+
+@frappe.whitelist()
+def get_filter_value_options(
+    source_doctype: str,
+    field: str,
+    txt: str | None = "",
+    limit: int = 20,
+) -> dict:
+    """Return autocomplete options for a filter value field."""
+    assert_source_read(source_doctype)
+    field_map = _filter_field_map(source_doctype)
+    if field not in field_map:
+        frappe.throw(
+            f"Field '{field}' is not filterable on {source_doctype}",
+            frappe.ValidationError,
+        )
+    field_meta = field_map[field]
+    fieldtype = field_meta.get("fieldtype")
+    limit = min(max(int(limit or 20), 1), 50)
+    txt = str(txt or "")
+
+    if fieldtype == "Check":
+        return {
+            "options": [
+                {"label": "Yes", "value": 1},
+                {"label": "No", "value": 0},
+            ],
+            "truncated": False,
+        }
+
+    if fieldtype == "Select":
+        values = _select_filter_options(field_meta)
+        if txt:
+            needle = txt.lower()
+            values = [
+                v for v in values
+                if needle in str(v.get("label") if isinstance(v, dict) else v).lower()
+            ]
+        return {
+            "options": [
+                v if isinstance(v, dict) else {"label": v, "value": v}
+                for v in values[:limit]
+            ],
+            "truncated": len(values) > limit,
+        }
+
+    if fieldtype == "Link" and field_meta.get("options"):
+        link_doctype = field_meta.get("options")
+        try:
+            from frappe.desk.search import search_link
+
+            rows = search_link(
+                doctype=link_doctype,
+                txt=txt,
+                page_length=limit,
+                ignore_user_permissions=False,
             )
-    return out
+            options = []
+            for row in rows or []:
+                value = row.get("value") if isinstance(row, dict) else row[0]
+                label = row.get("description") if isinstance(row, dict) else ""
+                options.append({"label": label or value, "value": value})
+            return {"options": options, "truncated": len(options) >= limit}
+        except Exception:
+            if not frappe.has_permission(link_doctype, "read"):
+                return {"options": [], "truncated": False}
+            rows = frappe.get_list(
+                link_doctype,
+                filters=[["name", "like", f"%{txt}%"]] if txt else None,
+                fields=["name"],
+                limit_page_length=limit,
+                order_by="name asc",
+            )
+            return {
+                "options": [{"label": r.name, "value": r.name} for r in rows],
+                "truncated": len(rows) >= limit,
+            }
+
+    # For Data/Text-like fields, return distinct existing values as hints.
+    try:
+        filters = [[field, "like", f"%{txt}%"]] if txt else None
+        rows = frappe.get_list(
+            source_doctype,
+            fields=[field],
+            filters=filters,
+            distinct=True,
+            order_by=f"{field} asc",
+            limit_page_length=limit,
+        )
+    except Exception:
+        rows = []
+    values = [r.get(field) for r in rows if r.get(field) not in (None, "")]
+    return {
+        "options": [{"label": str(v), "value": v} for v in values],
+        "truncated": len(values) >= limit,
+    }
 
 
 @frappe.whitelist()

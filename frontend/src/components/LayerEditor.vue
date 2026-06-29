@@ -17,6 +17,8 @@ import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
 import { useIconsStore } from '../state/icons.js'
 import { ICON_PATHS } from '../api/icons.js'
+import FilterBuilder from './FilterBuilder.vue'
+import { parseFilterRows, serializeFilterRows } from '../lib/filters.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -83,19 +85,6 @@ const SIZE_OPTIONS = [
   { v: 'm', label: 'M' },
   { v: 'l', label: 'L' },
   { v: 'xl', label: 'XL' },
-]
-
-const OP_OPTIONS = [
-  { v: '=', label: '=' },
-  { v: '!=', label: '!=' },
-  { v: 'like', label: 'contains' },
-  { v: 'not like', label: 'not contains' },
-  { v: '>', label: '>' },
-  { v: '<', label: '<' },
-  { v: '>=', label: '>=' },
-  { v: '<=', label: '<=' },
-  { v: 'in', label: 'in' },
-  { v: 'is', label: 'is' },
 ]
 
 const iconSections = computed(() => [
@@ -179,7 +168,7 @@ watch(
         cluster: l.cluster ? 1 : 0,
         enabled: l.enabled ? 1 : 0,
         icon: l.icon || '',
-        filter_rows: _parseFilter(l.filter_json),
+        filter_rows: parseFilterRows(l.filter_json),
         popup_template: l.popup_template || '',
         popup_fields: l.popup_fields || [],
         group_by_field: l.group_by_field || '',
@@ -455,24 +444,6 @@ function commitLayerPreview() {
   previewOriginalUi.value = null
 }
 
-function _parseFilter(json) {
-  if (!json) return []
-  try {
-    const parsed = typeof json === 'string' ? JSON.parse(json) : json
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(([field, op, value]) => ({ field, op: op || '=', value: value ?? '' }))
-  } catch {
-    return []
-  }
-}
-
-function _serializeFilter(rows) {
-  const out = rows
-    .filter((r) => r.field && r.op)
-    .map((r) => [r.field, r.op, r.value])
-  return out.length ? JSON.stringify(out) : ''
-}
-
 function _parsePopupFields(json) {
   if (!json) return []
   try {
@@ -596,13 +567,6 @@ const GROUP_PALETTE = [
   '#14B8A6', '#A855F7',
 ]
 
-function addFilterRow() {
-  form.value.filter_rows.push({ field: '', op: '=', value: '' })
-}
-function removeFilterRow(i) {
-  form.value.filter_rows.splice(i, 1)
-}
-
 function addPopupField(fieldname) {
   if (!fieldname) return
   if (!form.value.popup_fields.includes(fieldname)) {
@@ -656,7 +620,7 @@ async function save() {
         radius_meters: form.value.radius_meters,
         radius_opacity: form.value.radius_opacity,
       }
-      const filterJson = _serializeFilter(form.value.filter_rows)
+      const filterJson = serializeFilterRows(form.value.filter_rows)
       if (asMaster.value) {
         // Save as a master mapping (map=NULL). Master is reusable across
         // maps; per-map instances are created from it later.
@@ -688,7 +652,7 @@ async function save() {
         enabled: form.value.enabled,
         icon: form.value.icon,
         label_field: form.value.label_field,
-        filter_json: _serializeFilter(form.value.filter_rows),
+        filter_json: serializeFilterRows(form.value.filter_rows),
         popup_template: form.value.popup_template || '',
         popup_fields_json: _serializePopupFields(form.value.popup_fields),
         group_by_field: form.value.group_by_field,
@@ -923,24 +887,11 @@ function close() {
 
         <!-- Filter editor -->
         <div class="le__filter">
-          <div class="le__filter-header">
-            <span class="le__label">Filter rows <span class="le__hint">(all must match)</span></span>
-            <button type="button" class="le__btn le__btn--ghost" @click="addFilterRow">+ Add</button>
-          </div>
-          <div v-for="(row, i) in form.filter_rows" :key="i" class="le__filter-row">
-            <select v-model="row.field" class="le__input le__input--sm">
-              <option value="" disabled>field</option>
-              <option v-for="f in sourceFields" :key="f.fieldname" :value="f.fieldname">
-                {{ f.label }}
-              </option>
-            </select>
-            <select v-model="row.op" class="le__input le__input--sm">
-              <option v-for="o in OP_OPTIONS" :key="o.v" :value="o.v">{{ o.label }}</option>
-            </select>
-            <input v-model="row.value" class="le__input le__input--sm le__input--value" type="text" placeholder="value" />
-            <button type="button" class="le__btn le__btn--icon" @click="removeFilterRow(i)" aria-label="Remove">×</button>
-          </div>
-          <p v-if="!form.filter_rows.length" class="le__filter-empty">No filters — all rows of the source are shown.</p>
+          <FilterBuilder
+            v-model="form.filter_rows"
+            :source-doctype="form.source_doctype"
+            title="Filter rows"
+          />
         </div>
 
         <!-- Group By / Segmentation -->

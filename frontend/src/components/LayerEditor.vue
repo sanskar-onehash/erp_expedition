@@ -15,11 +15,13 @@ import { call } from '../api/client.js'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
-import { ICON_NAMES, ICON_PATHS } from '../api/icons.js'
+import { useIconsStore } from '../state/icons.js'
+import { ICON_PATHS } from '../api/icons.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
 const layerStore = useLayersStore()
+const iconStore = useIconsStore()
 
 const mode = computed(() => ui.editorOpen?.mode || 'edit')
 const isCreate = computed(() => mode.value === 'create')
@@ -61,6 +63,10 @@ const groupValues = ref([]) // distinct values for the group_by_field
 const previewOriginalLayer = ref(null)
 const previewOriginalUi = ref(null)
 const previewCommitted = ref(false)
+const uploadTitle = ref('')
+const uploadScope = ref('Personal')
+const iconEditTitle = ref('')
+const iconBusy = ref(false)
 
 const COLOR_PRESETS = [
   '#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6',
@@ -89,6 +95,14 @@ const OP_OPTIONS = [
   { v: 'is', label: 'is' },
 ]
 
+const iconSections = computed(() => [
+  { key: 'builtin', label: 'Built-in', icons: iconStore.builtin },
+  { key: 'personal', label: 'Personal', icons: iconStore.personal },
+  { key: 'global', label: 'Global', icons: iconStore.global },
+].filter((section) => section.icons.length || section.key !== 'global' || iconStore.canManageGlobal))
+const allIconOptions = computed(() => iconStore.all)
+const selectedIcon = computed(() => iconStore.byKey.get(form.value.icon))
+
 watch(
   () => ui.editorOpen,
   async (v) => {
@@ -99,6 +113,7 @@ watch(
     cancelLayerPreview()
     error.value = ''
     asMaster.value = !!v.asMaster
+    iconStore.loadIcons().catch((e) => { error.value = 'Could not load icons: ' + e.message })
     if (v.mode === 'create') {
       form.value = {
         name: null,
@@ -233,6 +248,140 @@ function cancelLayerPreview() {
   previewOriginalLayer.value = null
   previewOriginalUi.value = null
   previewCommitted.value = false
+}
+
+watch(selectedIcon, (icon) => {
+  iconEditTitle.value = icon?.source === 'custom' ? icon.title : ''
+}, { immediate: true })
+
+function iconLabel(icon) {
+  return icon?.title || icon?.key || ''
+}
+
+function isBuiltinIcon(icon) {
+  return icon?.source === 'builtin'
+}
+
+function isSvgFile(file) {
+  return file?.type === 'image/svg+xml' || file?.name?.toLowerCase().endsWith('.svg')
+}
+
+function mimeForFile(file) {
+  if (file?.type?.startsWith('image/')) return file.type
+  const name = file?.name?.toLowerCase() || ''
+  if (name.endsWith('.png')) return 'image/png'
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg'
+  if (name.endsWith('.webp')) return 'image/webp'
+  if (name.endsWith('.gif')) return 'image/gif'
+  if (name.endsWith('.bmp')) return 'image/bmp'
+  if (name.endsWith('.avif')) return 'image/avif'
+  if (name.endsWith('.ico')) return 'image/x-icon'
+  if (name.endsWith('.tif') || name.endsWith('.tiff')) return 'image/tiff'
+  return ''
+}
+
+function isImageFile(file) {
+  return !!mimeForFile(file) || /\.(svg|png|jpe?g|webp|gif|bmp|avif|ico|tiff?)$/i.test(file?.name || '')
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('Could not read image file.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function readIconFile(file) {
+  if (!file || !isImageFile(file)) {
+    throw new Error('Please choose an image file.')
+  }
+  if (isSvgFile(file)) {
+    return { svgText: await file.text(), imageDataUrl: null }
+  }
+  const dataUrl = await readFileAsDataUrl(file)
+  const mime = mimeForFile(file)
+  const normalizedDataUrl = mime && !dataUrl.startsWith('data:image/')
+    ? dataUrl.replace(/^data:[^;]*;base64,/i, `data:${mime};base64,`)
+    : dataUrl
+  return { svgText: null, imageDataUrl: normalizedDataUrl }
+}
+
+async function uploadIconFromEvent(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || !iconStore.canCreate) return
+  iconBusy.value = true
+  error.value = ''
+  try {
+    const { svgText, imageDataUrl } = await readIconFile(file)
+    const icon = await iconStore.uploadIcon({
+      title: uploadTitle.value.trim() || file.name.replace(/\.[^.]+$/i, ''),
+      scope: iconStore.canManageGlobal ? uploadScope.value : 'Personal',
+      svgText,
+      imageDataUrl,
+    })
+    form.value.icon = icon.key
+    uploadTitle.value = ''
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function replaceSelectedIcon(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  const icon = selectedIcon.value
+  if (!file || !icon?.can_edit) return
+  iconBusy.value = true
+  error.value = ''
+  try {
+    const { svgText, imageDataUrl } = await readIconFile(file)
+    await iconStore.updateIcon(icon.name, { title: iconEditTitle.value || icon.title, svgText, imageDataUrl })
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function renameSelectedIcon() {
+  const icon = selectedIcon.value
+  if (!icon?.can_edit || !iconEditTitle.value.trim()) return
+  iconBusy.value = true
+  error.value = ''
+  try {
+    await iconStore.updateIcon(icon.name, { title: iconEditTitle.value.trim() })
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function deleteSelectedIcon() {
+  const icon = selectedIcon.value
+  if (!icon?.can_delete) return
+  const ok = await ui.ask({
+    title: 'Delete this icon?',
+    body: 'If it is already used by layers, it will be disabled instead of permanently deleted.',
+    confirmLabel: 'Delete',
+    destructive: true,
+  })
+  if (!ok) return
+  iconBusy.value = true
+  error.value = ''
+  try {
+    await iconStore.deleteIcon(icon.name)
+    if (form.value.icon === icon.key) form.value.icon = ''
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    iconBusy.value = false
+  }
 }
 
 function commitLayerPreview() {
@@ -618,8 +767,8 @@ function close() {
           </div>
         </div>
 
-        <!-- Icon glyph (optional). Renders as a white symbol on top of
-             the colored pin body. None = plain dot. -->
+        <!-- Icon glyph (optional). None = plain dot. Custom SVG icons
+             are scoped personal/global by the server. -->
         <div class="le__row le__row--col">
           <div class="le__field">
             <span class="le__label">Icon</span>
@@ -632,20 +781,44 @@ function close() {
                       aria-label="No icon">
                 <span class="le__icon-preview le__icon-preview--none">∅</span>
               </button>
-              <button v-for="id in ICON_NAMES" :key="id" type="button"
-                      class="le__icon-cell"
-                      :class="{ 'le__icon-cell--active': form.icon === id }"
-                      :data-active="form.icon === id"
-                      @click="form.icon = id"
-                      :title="id">
-                <!-- Inline SVG path. The cross-document <use href>
-                     reference is unreliable when the sprite is served
-                     with the wrong MIME type, so we ship the same paths
-                     inline from ICON_PATHS. -->
-                <svg class="le__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
-                  <path :d="ICON_PATHS[id] || ''" fill="currentColor" />
-                </svg>
-              </button>
+            </div>
+            <div v-for="section in iconSections" :key="section.key" class="le__icon-section">
+              <div class="le__icon-section-title">{{ section.label }}</div>
+              <div v-if="section.icons.length" class="le__icon-grid">
+                <button v-for="icon in section.icons" :key="icon.key" type="button"
+                        class="le__icon-cell"
+                        :class="{ 'le__icon-cell--active': form.icon === icon.key }"
+                        :data-active="form.icon === icon.key"
+                        @click="form.icon = icon.key"
+                        :title="iconLabel(icon)">
+                  <svg v-if="isBuiltinIcon(icon)" class="le__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
+                    <path :d="ICON_PATHS[icon.key] || ''" fill="currentColor" />
+                  </svg>
+                  <span v-else-if="icon.icon_format !== 'Image'" class="le__icon-preview le__icon-preview--custom" v-html="icon.svg_content" />
+                  <img v-else class="le__icon-preview le__icon-preview--image" :src="icon.image_data_url" alt="" />
+                </button>
+              </div>
+              <p v-else class="le__filter-empty">No {{ section.label.toLowerCase() }} icons.</p>
+            </div>
+            <div v-if="iconStore.canCreate" class="le__icon-manager">
+              <input v-model="uploadTitle" class="le__input le__input--sm" type="text" placeholder="Icon name" />
+              <select v-if="iconStore.canManageGlobal" v-model="uploadScope" class="le__input le__input--xs">
+                <option value="Personal">Personal</option>
+                <option value="Global">Global</option>
+              </select>
+              <label class="le__btn le__btn--ghost" :class="{ 'le__btn--disabled': iconBusy }">
+                Upload Image
+                <input type="file" accept="image/*" class="le__file-input" :disabled="iconBusy" @change="uploadIconFromEvent" />
+              </label>
+            </div>
+            <div v-if="selectedIcon?.can_edit" class="le__icon-manager">
+              <input v-model="iconEditTitle" class="le__input le__input--sm" type="text" />
+              <button type="button" class="le__btn le__btn--ghost" :disabled="iconBusy" @click="renameSelectedIcon">Rename</button>
+              <label class="le__btn le__btn--ghost" :class="{ 'le__btn--disabled': iconBusy }">
+                Replace Image
+                <input type="file" accept="image/*" class="le__file-input" :disabled="iconBusy" @change="replaceSelectedIcon" />
+              </label>
+              <button v-if="selectedIcon?.can_delete" type="button" class="le__btn le__btn--danger" :disabled="iconBusy" @click="deleteSelectedIcon">Delete</button>
             </div>
           </div>
         </div>
@@ -725,7 +898,7 @@ function close() {
                   class="le__input le__input--xs"
                 >
                   <option value="">No icon</option>
-                  <option v-for="id in ICON_NAMES" :key="id" :value="id">{{ id }}</option>
+                  <option v-for="icon in allIconOptions" :key="icon.key" :value="icon.key">{{ iconLabel(icon) }}</option>
                 </select>
                 <details class="le__group-label-edit">
                   <summary class="le__group-label-edit-toggle">Label…</summary>
@@ -981,6 +1154,18 @@ function close() {
   background: rgba(59, 130, 246, 0.18);
   border-color: #3B82F6;
 }
+.le__icon-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.le__icon-section-title {
+  font-size: 10px;
+  color: rgba(230, 232, 236, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .le__check--master {
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.3);
@@ -999,9 +1184,28 @@ function close() {
 .le__icon-preview {
   width: 18px; height: 18px; fill: currentColor;
 }
+.le__icon-preview--custom :deep(svg) {
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: currentColor;
+}
+.le__icon-preview--image {
+  object-fit: contain;
+}
 .le__icon-preview--none {
   font-size: 14px; color: rgba(230, 232, 236, 0.5);
   display: flex; align-items: center; justify-content: center;
+}
+.le__icon-manager {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.le__file-input {
+  display: none;
 }
 .le__check { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
 .le__check input { accent-color: #3B82F6; }
@@ -1060,6 +1264,11 @@ function close() {
 }
 .le__btn:hover { background: rgba(255, 255, 255, 0.10); }
 .le__btn--ghost { background: transparent; border-color: rgba(255, 255, 255, 0.1); }
+.le__btn--disabled,
+.le__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .le__btn--primary {
   background: #3B82F6; border-color: #3B82F6; color: #fff;
 }

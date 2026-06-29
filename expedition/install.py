@@ -1,4 +1,4 @@
-"""App install/uninstall hooks. Seeds the Expedition User role and Module Def."""
+"""App install/uninstall hooks. Seeds the Expedition User role."""
 
 import frappe
 

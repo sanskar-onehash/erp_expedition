@@ -40,6 +40,10 @@ async function _loadSvgText() {
  */
 function _renderSymbol(symbolEl, size, color = 'currentColor') {
   return new Promise((resolve, reject) => {
+    if (!symbolEl) {
+      resolve(null)
+      return
+    }
     // Re-emit the symbol's inner SVG as a standalone <svg> so the
     // browser renders it (browsers don't render <symbol> directly).
     const ns = 'http://www.w3.org/2000/svg'
@@ -64,6 +68,66 @@ function _renderSymbol(symbolEl, size, color = 'currentColor') {
       reject(e)
     }
     img.src = url
+  })
+}
+
+function _renderSvgText(svgText, size, color = 'currentColor') {
+  return new Promise((resolve, reject) => {
+    const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+    const svg = doc.documentElement
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg') {
+      reject(new Error('Invalid custom SVG'))
+      return
+    }
+    svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    svg.setAttribute('width', String(size))
+    svg.setAttribute('height', String(size))
+    svg.style.color = color
+
+    const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' })
+    const url = URL.createObjectURL(blob)
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url)
+      reject(e)
+    }
+    img.src = url
+  })
+}
+
+function _renderImageDataUrl(dataUrl, size) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('Could not prepare image canvas'))
+        return
+      }
+      if (!img.naturalWidth || !img.naturalHeight) {
+        reject(new Error('Invalid image dimensions'))
+        return
+      }
+      const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight)
+      const width = img.naturalWidth * scale
+      const height = img.naturalHeight * scale
+      const x = (size - width) / 2
+      const y = (size - height) / 2
+      ctx.clearRect(0, 0, size, size)
+      ctx.drawImage(img, x, y, width, height)
+      resolve(ctx.getImageData(0, 0, size, size))
+    }
+    img.onerror = (e) => reject(e)
+    img.src = dataUrl
   })
 }
 
@@ -92,17 +156,22 @@ export function coloredIconImageId(id, color) {
 
 export async function registerColoredIcons(map, specs, pixelSize = 28) {
   if (!map || !specs || specs.length === 0) return
-  const { symbols } = await _loadSvgText()
-  const available = new Map(symbols.map((s) => [s.id, s]))
+  const needsBuiltins = specs.some((spec) => !spec?.svg && !spec?.imageDataUrl)
+  const available = needsBuiltins
+    ? new Map((await _loadSvgText()).symbols.map((s) => [s.id, s]))
+    : new Map()
   for (const spec of specs) {
     const id = spec?.id
     const color = spec?.color || '#3B82F6'
     const imageId = spec?.imageId || coloredIconImageId(id, color)
     if (!id || !imageId) continue
     if (map.hasImage(imageId)) continue
-    const sym = available.get(id)
-    if (!sym) continue
-    const img = await _renderSymbol(sym, pixelSize, color)
+    const img = spec.svg
+      ? await _renderSvgText(spec.svg, pixelSize, color)
+      : spec.imageDataUrl
+        ? await _renderImageDataUrl(spec.imageDataUrl, pixelSize)
+      : await _renderSymbol(available.get(id), pixelSize, color)
+    if (!img) continue
     map.addImage(imageId, img, { sdf: false })
   }
 }

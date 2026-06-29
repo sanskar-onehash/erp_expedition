@@ -33,6 +33,7 @@ import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { useZonesStore } from '../state/zones.js'
+import { useIconsStore } from '../state/icons.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 
@@ -112,6 +113,7 @@ const ui = useUiStore()
 const mapStore = useMapStore()
 const layerStore = useLayersStore()
 const zoneStore = useZonesStore()
+const iconStore = useIconsStore()
 let map = null
 let unsubscribeFeatures = null
 let lastLoadedFeatures = {}  // layer.name -> last FeatureCollection, for re-add on styledata
@@ -267,6 +269,22 @@ function featureDisplayColor(feature, fallback) {
 
 function featureDisplayIcon(feature, layerIcon) {
   return feature?.properties?._icon || layerIcon || ''
+}
+
+function iconRenderSpec(iconKey, color) {
+  const icon = iconStore.byKey.get(iconKey)
+  if (!icon) return null
+  const imageKey = icon?.source === 'custom' && icon.modified
+    ? `${iconKey}:${icon.modified}`
+    : iconKey
+  const isRasterCustom = icon?.source === 'custom' && icon.icon_format === 'Image'
+  return {
+    id: iconKey,
+    color,
+    imageId: isRasterCustom ? imageKey : coloredIconImageId(imageKey, color),
+    svg: icon?.source === 'custom' && !isRasterCustom ? icon.svg_content : null,
+    imageDataUrl: isRasterCustom ? icon.image_data_url : null,
+  }
 }
 
 function iconSizeForRadius(radius) {
@@ -471,13 +489,14 @@ function _addLayerOnMap(layerName) {
     const icon = featureDisplayIcon(feature, style.icon || layerDoc.icon)
     if (!icon) return feature
     const iconColor = featureDisplayColor(feature, color)
-    const imageId = coloredIconImageId(icon, iconColor)
-    iconSpecs.set(imageId, { id: icon, color: iconColor, imageId })
+    const spec = iconRenderSpec(icon, iconColor)
+    if (!spec) return feature
+    iconSpecs.set(spec.imageId, spec)
     return {
       ...feature,
       properties: {
         ...(feature.properties || {}),
-        _display_icon_image: imageId,
+        _display_icon_image: spec.imageId,
       },
     }
   })
@@ -1476,6 +1495,7 @@ watch(
     size: l.size || l.style?.size || '',
     cluster: !!(l.cluster || l.style?.cluster),
     heatmap: !!(l.heatmap || l.style?.heatmap),
+    iconVersion: iconStore.version,
   })),
   () => {
     if (!map || !map.isStyleLoaded()) return

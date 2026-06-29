@@ -27,6 +27,7 @@ from typing import Any
 
 import frappe
 
+from expedition.api.icon import assert_icon_readable
 from expedition.api.permission import assert_source_read
 
 
@@ -72,6 +73,13 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
         if entry:
             out[str(value)] = entry
     return out
+
+
+def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
+    assert_icon_readable(icon)
+    cfg = _coerce_group_config(group_config_json)
+    for item in cfg.values():
+        assert_icon_readable(item.get("icon"))
 
 
 def _coerce_popup_fields(raw: str | list | None) -> list[str]:
@@ -548,6 +556,7 @@ def create(
     if not frappe.has_permission("Expedition Map", "read", doc=map_name):
         frappe.throw("Not permitted to read this map", frappe.PermissionError)
     assert_source_read(source_doctype)
+    _assert_icons_readable(icon, group_config_json)
 
     # Next sequence for this map
     last_seq = frappe.db.sql(
@@ -600,6 +609,7 @@ def update(layer_name: str, **fields) -> dict:
         frappe.throw("Not permitted to update this layer", frappe.PermissionError)
 
     doc = frappe.get_doc("Expedition Layer", layer_name)
+    _assert_icons_readable(fields.get("icon"), fields.get("group_config_json"))
 
     allowed = {
         "title",
@@ -858,6 +868,7 @@ def create_master(
     if not frappe.has_permission("Expedition Layer", "create"):
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
     assert_source_read(source_doctype)
+    _assert_icons_readable(icon, group_config_json)
 
     doc = frappe.new_doc("Expedition Layer")
     doc.update(

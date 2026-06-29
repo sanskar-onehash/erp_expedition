@@ -15,6 +15,7 @@ import { useMapStore } from './state/map.js'
 import { useUiStore } from './state/ui.js'
 import { useLayersStore } from './state/layers.js'
 import { useZonesStore } from './state/zones.js'
+import { useIconsStore } from './state/icons.js'
 import Basemap from './components/Basemap.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import MapPopup from './components/MapPopup.vue'
@@ -36,8 +37,12 @@ const mapStore = useMapStore()
 const ui = useUiStore()
 const layers = useLayersStore()
 const zoneStore = useZonesStore()
+const iconStore = useIconsStore()
 
 onMounted(async () => {
+  await iconStore.loadIcons().catch((e) => {
+    console.warn('[expedition] custom icons unavailable', e)
+  })
   await mapStore.bootstrap()
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {

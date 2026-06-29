@@ -124,9 +124,12 @@ const groups = computed(() => [
       },
       { kind: 'select', key: 'cursor', label: 'Cursor',
         options: [
-          { value: 'grab', label: 'Hand (grab)' },
           { value: 'crosshair', label: 'Crosshair' },
+          { value: 'cross', label: 'Cross' },
+          { value: 'circle', label: 'Circle' },
+          { value: 'dot', label: 'Dot' },
           { value: 'pointer', label: 'Pointer' },
+          { value: 'default', label: 'Default arrow' },
         ],
       },
     ],
@@ -295,7 +298,7 @@ function resetAll() {
       showMinimap: false,
       coordUnits: 'decimal',
       distanceUnits: 'km',
-      cursor: 'grab',
+      cursor: 'crosshair',
       toolbarSize: 'm',
       openRecentOnLaunch: true,
       showTemplatesOnEmpty: true,
@@ -470,6 +473,12 @@ function registerRef(key, kind, el) {
                     @click="toggleSelect(item.key)"
                   >
                     <span class="us__select-value">
+                      <span
+                        v-if="item.key === 'cursor'"
+                        class="us__cursor-mark"
+                        :data-kind="draft[item.key]"
+                        aria-hidden="true"
+                      />
                       {{ (item.options.find((o) => o.value === draft[item.key]) || {}).label || '—' }}
                     </span>
                     <svg class="us__select-caret" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
@@ -494,7 +503,15 @@ function registerRef(key, kind, el) {
                         :class="{ 'us__select-opt--active': draft[item.key] === o.value }"
                         @click="pickOption(item.key, o.value)"
                       >
-                        <span>{{ o.label }}</span>
+                        <span class="us__select-opt-label">
+                          <span
+                            v-if="item.key === 'cursor'"
+                            class="us__cursor-mark"
+                            :data-kind="o.value"
+                            aria-hidden="true"
+                          />
+                          <span>{{ o.label }}</span>
+                        </span>
                         <svg
                           v-if="draft[item.key] === o.value"
                           class="us__select-check"
@@ -810,6 +827,9 @@ function registerRef(key, kind, el) {
 .us__select:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.18); }
 .us__select-wrap--open .us__select { border-color: #3B82F6; background: rgba(59, 130, 246, 0.10); }
 .us__select-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   overflow: hidden; text-overflow: ellipsis;
   min-width: 0;
 }
@@ -894,6 +914,69 @@ function registerRef(key, kind, el) {
   cursor: pointer;
   transition: background 100ms ease, color 100ms ease;
   white-space: nowrap;
+}
+.us__select-opt-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.us__cursor-mark {
+  position: relative;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: rgba(230, 232, 236, 0.9) !important;
+}
+.us__cursor-mark::before,
+.us__cursor-mark::after {
+  content: '';
+  position: absolute;
+  display: block;
+}
+.us__cursor-mark[data-kind="crosshair"]::before {
+  left: 8px; top: 3px;
+  width: 2px; height: 12px;
+  background: currentColor;
+}
+.us__cursor-mark[data-kind="crosshair"]::after {
+  left: 3px; top: 8px;
+  width: 12px; height: 2px;
+  background: currentColor;
+}
+.us__cursor-mark[data-kind="cross"]::before,
+.us__cursor-mark[data-kind="cross"]::after {
+  left: 3px; top: 8px;
+  width: 12px; height: 2px;
+  background: currentColor;
+  border-radius: 2px;
+}
+.us__cursor-mark[data-kind="cross"]::before { transform: rotate(45deg); }
+.us__cursor-mark[data-kind="cross"]::after { transform: rotate(-45deg); }
+.us__cursor-mark[data-kind="circle"]::before {
+  left: 4px; top: 4px;
+  width: 8px; height: 8px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+.us__cursor-mark[data-kind="dot"]::before {
+  left: 6px; top: 6px;
+  width: 6px; height: 6px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.us__cursor-mark[data-kind="default"]::before {
+  left: 4px; top: 2px;
+  width: 13px; height: 15px;
+  background: currentColor;
+  clip-path: polygon(0 0, 0 15px, 4px 11px, 7px 17px, 9px 16px, 6px 10px, 12px 10px);
+}
+.us__cursor-mark[data-kind="pointer"]::before {
+  left: 1px; top: 0;
+  width: 17px; height: 18px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-rule='evenodd' d='M10.5 2C9.12 2 8 3.12 8 4.5v6.39l-.74-.74a2.38 2.38 0 0 0-3.36 3.36l4.03 4.03A7.03 7.03 0 0 0 12.9 19.6h1.35A5.75 5.75 0 0 0 20 13.85v-4.1c0-1.1-.9-2-2-2-.42 0-.82.13-1.14.36A2 2 0 0 0 15 6.9c-.39 0-.75.11-1.05.3A2 2 0 0 0 12 5.6V4.5C12 3.12 10.88 2 10.5 2Zm-.9 2.5a.9.9 0 1 1 1.8 0v7.1a.75.75 0 0 0 1.5 0v-4a.65.65 0 0 1 1.3 0v4a.75.75 0 0 0 1.5 0V8.9a.65.65 0 0 1 1.3 0v2.7a.75.75 0 0 0 1.5 0V9.75a.5.5 0 0 1 1 0v4.1a4.25 4.25 0 0 1-4.25 4.25H12.9a5.53 5.53 0 0 1-3.9-1.62l-4.03-4.03a.88.88 0 0 1 1.24-1.24l2.01 2.01a.82.82 0 0 0 1.38-.59V4.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-rule='evenodd' d='M10.5 2C9.12 2 8 3.12 8 4.5v6.39l-.74-.74a2.38 2.38 0 0 0-3.36 3.36l4.03 4.03A7.03 7.03 0 0 0 12.9 19.6h1.35A5.75 5.75 0 0 0 20 13.85v-4.1c0-1.1-.9-2-2-2-.42 0-.82.13-1.14.36A2 2 0 0 0 15 6.9c-.39 0-.75.11-1.05.3A2 2 0 0 0 12 5.6V4.5C12 3.12 10.88 2 10.5 2Zm-.9 2.5a.9.9 0 1 1 1.8 0v7.1a.75.75 0 0 0 1.5 0v-4a.65.65 0 0 1 1.3 0v4a.75.75 0 0 0 1.5 0V8.9a.65.65 0 0 1 1.3 0v2.7a.75.75 0 0 0 1.5 0V9.75a.5.5 0 0 1 1 0v4.1a4.25 4.25 0 0 1-4.25 4.25H12.9a5.53 5.53 0 0 1-3.9-1.62l-4.03-4.03a.88.88 0 0 1 1.24-1.24l2.01 2.01a.82.82 0 0 0 1.38-.59V4.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .us__select-opt:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
 .us__select-opt--active {

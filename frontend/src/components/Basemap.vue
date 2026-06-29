@@ -36,6 +36,7 @@ import { useZonesStore } from '../state/zones.js'
 import { useIconsStore } from '../state/icons.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
+import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
 
 // Pin radii. Apple/Google-tier: default `m` is 11px (22px disk
 // visually with the white ring). xs/s are for dense layers; l/xl
@@ -129,6 +130,10 @@ let unsubscribeZoneTags = null
 // until the user moves the map).
 let _layerFetchedOnce = new Set()
 let _interactivePointLayers = new Set()
+
+function _setMapCursor(kind = activeMapCursor(ui)) {
+  if (map) applyMapCursor(map.getCanvas(), kind)
+}
 
 function _resetFirstFetch() {
   _layerFetchedOnce = new Set()
@@ -797,11 +802,11 @@ function onPointClick(e) {
 }
 
 function onPointMouseEnter() {
-  if (map) map.getCanvas().style.cursor = 'pointer'
+  _setMapCursor('pointer')
 }
 
 function onPointMouseLeave() {
-  if (map) map.getCanvas().style.cursor = ''
+  _setMapCursor()
 }
 
 async function onClusterClick(e) {
@@ -1179,21 +1184,27 @@ onMounted(() => {
   // right-click anywhere on the map (not just on a feature) is
   // captured by the contextmenu handler above.
   canvas.addEventListener('contextmenu', (e) => e.preventDefault())
+  const keepPreferredCursor = () => {
+    window.requestAnimationFrame(() => _setMapCursor())
+  }
+  map.on('dragstart', keepPreferredCursor)
+  map.on('drag', keepPreferredCursor)
+  map.on('dragend', keepPreferredCursor)
   let gesture = null
   canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return
     if (e.altKey) {
       gesture = { kind: 'rotate', x: e.clientX, y: e.clientY, startBearing: map.getBearing() }
       e.preventDefault()
-      canvas.style.cursor = 'grabbing'
+      _setMapCursor()
     } else if (e.ctrlKey) {
-      // Shift up by 30° on grab so the gesture is bidirectional
+      // Shift up by 30° on start so the gesture is bidirectional
       // from any starting pitch (including 0°).
       const startPitch = Math.min(75, map.getPitch() + 30)
       map.setPitch(startPitch)
       gesture = { kind: 'pitch', x: e.clientX, y: e.clientY, startPitch }
       e.preventDefault()
-      canvas.style.cursor = 'ns-resize'
+      _setMapCursor('ns-resize')
     }
   })
   window.addEventListener('mousemove', (e) => {
@@ -1214,7 +1225,7 @@ onMounted(() => {
   const endGesture = () => {
     if (!gesture) return
     gesture = null
-    canvas.style.cursor = ''
+    _setMapCursor()
   }
   window.addEventListener('mouseup', endGesture)
   // Cancel if the page loses focus mid-gesture.
@@ -1374,7 +1385,7 @@ onMounted(() => {
       _clearDraft()
     }
   })
-  map.getCanvas().style.cursor = 'crosshair'
+  _setMapCursor()
 
   // Esc cancels an in-progress polygon draw.
   const onKey = (e) => {
@@ -1390,16 +1401,20 @@ watch(
   () => ui.drawMode,
   (mode) => {
     if (!map) return
-    const c = map.getCanvas()
     if (mode === 'polygon') {
-      c.style.cursor = 'crosshair'
+      _setMapCursor()
     } else {
-      c.style.cursor = ''
+      _setMapCursor()
       map.doubleClickZoom.enable()
       _dblClickDisabled = false
       _clearDraft()
     }
   }
+)
+
+watch(
+  () => [ui.measureMode, ui.prefs.cursor],
+  () => _setMapCursor()
 )
 
 // Re-render the draft polygon whenever the vertex list changes.

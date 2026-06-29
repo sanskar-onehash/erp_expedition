@@ -17,6 +17,7 @@
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useUiStore } from '../state/ui.js'
+import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
 
 const ui = useUiStore()
 const vertices = ref([])
@@ -106,7 +107,7 @@ watch(() => ui.measureMode, (m, prev) => {
     const mp = window.expeditionMap?.getMap?.()
     if (mp) {
       mp.doubleClickZoom.disable()
-      mp.getCanvas().style.cursor = 'crosshair'
+      applyMapCursor(mp.getCanvas(), activeMapCursor(ui))
     }
   } else if (!m && prev) {
     unbindMap()
@@ -114,7 +115,7 @@ watch(() => ui.measureMode, (m, prev) => {
     const mp = window.expeditionMap?.getMap?.()
     if (mp) {
       mp.doubleClickZoom.enable()
-      mp.getCanvas().style.cursor = ''
+      applyMapCursor(mp.getCanvas(), activeMapCursor(ui))
     }
   }
 })

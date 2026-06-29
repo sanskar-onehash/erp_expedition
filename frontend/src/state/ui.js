@@ -12,6 +12,7 @@ const RECENT_LS_KEY = 'expedition.recent'
 const BLUR_LS_KEY = 'expedition.blurOnPanel'
 const PREFS_LS_KEY = 'expedition.prefs'
 const RECENT_MAX = 5
+const VALID_CURSOR_VALUES = new Set(['default', 'pointer', 'dot', 'circle', 'cross', 'crosshair'])
 
 // User-level preferences. Every key is a real personalization
 // setting — not a per-map state. Persisted to localStorage. `blurOnPanel`
@@ -36,7 +37,7 @@ const DEFAULT_PREFS = {
   // Units & cursor
   coordUnits: 'decimal',    // 'decimal' | 'dms'
   distanceUnits: 'km',      // 'km' | 'mi' | 'nm'
-  cursor: 'grab',           // 'grab' | 'crosshair' | 'pointer'
+  cursor: 'crosshair',      // 'default' | 'pointer' | 'dot' | 'circle' | 'cross' | 'crosshair'
   // UI scale: 'xs' | 's' | 'm' (default) | 'lg' | 'xlg'.
   // Drives the size of floating toolbar buttons and similar chrome.
   toolbarSize: 'm',
@@ -231,9 +232,13 @@ export const useUiStore = defineStore('ui', () => {
   // User-level preferences (settings panel). Mirror blurOnPanel on
   // read so the two stay in sync. Persisted to localStorage.
   const prefs = ref({ ...DEFAULT_PREFS, ...readLs(PREFS_LS_KEY, {}) })
+  if (prefs.value.cursor === 'grab' || !VALID_CURSOR_VALUES.has(prefs.value.cursor)) {
+    prefs.value = { ...prefs.value, cursor: 'crosshair' }
+  }
   watch(prefs, (v) => writeLs(PREFS_LS_KEY, v), { deep: true })
   function setPref(key, value) {
     if (!(key in DEFAULT_PREFS)) return
+    if (key === 'cursor' && !VALID_CURSOR_VALUES.has(value)) value = DEFAULT_PREFS.cursor
     prefs.value = { ...prefs.value, [key]: value }
   }
   function resetSettings() {

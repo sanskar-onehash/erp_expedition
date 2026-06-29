@@ -100,7 +100,7 @@ async function loadSchema() {
     const resp = await call('expedition.api.layer.get_filter_schema', {
       source_doctype: props.sourceDoctype,
     })
-    schema.value = resp || { doctype: props.sourceDoctype, fields: [] }
+    schema.value = normalizeSchema(resp, props.sourceDoctype)
     emit('schema-loaded', schema.value)
   } catch (e) {
     error.value = e.message || String(e)
@@ -109,6 +109,27 @@ async function loadSchema() {
   } finally {
     loading.value = false
   }
+}
+
+function normalizeSchema(resp, fallbackDoctype) {
+  const next = resp || { doctype: fallbackDoctype, fields: [] }
+  return {
+    ...next,
+    doctype: next.doctype || fallbackDoctype,
+    fields: sortFields(next.fields),
+  }
+}
+
+function sortFields(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+    const aLabel = String(a?.label || a?.fieldname || '')
+    const bLabel = String(b?.label || b?.fieldname || '')
+    const byLabel = aLabel.localeCompare(bLabel, undefined, { sensitivity: 'base' })
+    if (byLabel) return byLabel
+    return String(a?.fieldname || '').localeCompare(String(b?.fieldname || ''), undefined, {
+      sensitivity: 'base',
+    })
+  })
 }
 
 function addRow() {

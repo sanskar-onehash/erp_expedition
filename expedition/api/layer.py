@@ -992,7 +992,12 @@ def get_filter_schema(source_doctype: str) -> dict:
     """
     assert_source_read(source_doctype)
     fields = list(_filter_field_map(source_doctype).values())
-    fields.sort(key=lambda f: (0 if f.get("standard") else 1, f.get("label") or f["fieldname"]))
+    fields.sort(
+        key=lambda f: (
+            str(f.get("label") or f["fieldname"]).casefold(),
+            str(f["fieldname"]).casefold(),
+        )
+    )
     for f in fields:
         if f.get("fieldtype") == "Select":
             f["select_options"] = _select_filter_options(f)

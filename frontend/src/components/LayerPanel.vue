@@ -26,11 +26,13 @@ import { filterCount, parseFilterRows, serializeFilterRows, summarizeFilterRows 
 const mapStore = useMapStore()
 const layerStore = useLayersStore()
 const ui = useUiStore()
+const emit = defineEmits(['close'])
 
 const activeMapName = computed(() => mapStore.activeMap?.map?.name)
 const templates = computed(() => mapStore.templates || [])
 const activeLayers = computed(() => layerStore.layers || [])
 const masters = computed(() => layerStore.masters || [])
+const panelRoot = ref(null)
 
 const layersOpen = ref(true)
 const templatesOpen = ref(true)
@@ -210,23 +212,23 @@ function containsTarget(refValue, target) {
   })
 }
 function onDocumentMouseDown(event) {
+  const target = event.target
   if (event.target?.closest?.('.fb__floating-menu')) return
+  if (target?.closest?.('.expedition__tl')) return
+  if (containsTarget(panelRoot.value, target)) return
+  if (quickFilterFor.value && containsTarget(quickFilterPopupRoot.value, target)) return
+
+  emit('close')
+
   const root = pickerRoot.value
-  if (root && !root.contains(event.target)) closePicker()
-  if (quickFilterFor.value && !containsTarget(quickFilterPopupRoot.value, event.target)) {
+  if (root && !root.contains(target)) closePicker()
+  if (quickFilterFor.value && !containsTarget(quickFilterPopupRoot.value, target)) {
     quickFilterFor.value = null
   }
 }
-watch(
-  () => pickerOpen.value || !!quickFilterFor.value,
-  (open) => {
-    if (open) {
-      document.addEventListener('mousedown', onDocumentMouseDown, true)
-    } else {
-      document.removeEventListener('mousedown', onDocumentMouseDown, true)
-    }
-  }
-)
+onMounted(() => {
+  document.addEventListener('mousedown', onDocumentMouseDown, true)
+})
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
 })
@@ -259,7 +261,7 @@ defineExpose({})
 </script>
 
 <template>
-  <aside class="lp" role="region" aria-label="Layers">
+  <aside ref="panelRoot" class="lp" role="region" aria-label="Layers">
     <header class="lp__header">
       <div class="lp__title-wrap">
         <div class="lp__title">{{ mapStore.activeMap?.map?.title || 'Expedition' }}</div>

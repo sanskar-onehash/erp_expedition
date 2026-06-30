@@ -58,6 +58,7 @@ GROUP_PALETTE = [
     "#14B8A6",
     "#A855F7",
 ]
+GROUP_PATH_SEPARATOR = "\x1f"
 
 
 def _auto_group_color(value: Any) -> str:
@@ -359,14 +360,19 @@ def validate_filter_json(source_doctype: str, filter_json: str | dict | None) ->
     _validate_filter_rows(source_doctype, _coerce_filter(filter_json))
 
 
-def _coerce_group_config(raw: str | dict | None) -> dict:
-    """Parse group_config_json. Shape: { "<value>": { color, icon, label } }."""
+def _parse_group_config_raw(raw: str | dict | None) -> dict:
     if not raw:
         return {}
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
         return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_group_config(raw: str | dict | None) -> dict:
+    """Parse legacy group_config_json. Shape: { "<value>": { color, icon, label } }."""
+    parsed = _parse_group_config_raw(raw)
     if not isinstance(parsed, dict):
         return {}
     out = {}
@@ -387,15 +393,22 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
     return out
 
 
-def _coerce_grouping_rules(raw: str | dict | None) -> dict:
-    if not raw:
+def _coerce_group_config_for_client(raw: str | dict | None) -> dict:
+    parsed = _parse_group_config_raw(raw)
+    if not parsed:
         return {}
+    grouping = parsed.get("__grouping")
     try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
+        version = int(grouping.get("version") or 1) if isinstance(grouping, dict) else 1
+    except (TypeError, ValueError):
+        version = 1
+    if isinstance(grouping, dict) and version >= 2:
+        return parsed
+    return _coerce_group_config(parsed)
+
+
+def _coerce_grouping_rules(raw: str | dict | None) -> dict:
+    parsed = _parse_group_config_raw(raw)
     rules = parsed.get("__grouping")
     if not isinstance(rules, dict) or rules.get("mode") != "bands":
         return {}
@@ -424,6 +437,129 @@ def _coerce_grouping_rules(raw: str | dict | None) -> dict:
             item["icon"] = band["icon"]
         bands.append(item)
     return {"mode": "bands", "kind": kind, "bands": bands} if bands else {}
+
+
+def _coerce_multi_grouping(raw: str | dict | None) -> dict:
+    parsed = _parse_group_config_raw(raw)
+    rules = parsed.get("__grouping")
+    try:
+        version = int(rules.get("version") or 1) if isinstance(rules, dict) else 1
+    except (TypeError, ValueError):
+        version = 1
+    if not isinstance(rules, dict) or version < 2:
+        return {}
+    levels = []
+    seen = set()
+    for level in rules.get("levels") or []:
+        if not isinstance(level, dict):
+            continue
+        field = str(level.get("field") or "").strip()
+        if not field or field in seen:
+            continue
+        mode = str(level.get("mode") or "value").strip().lower()
+        if mode not in {"value", "bands"}:
+            continue
+        seen.add(field)
+        item = {"field": field, "mode": mode}
+        if mode == "bands":
+            kind = str(level.get("kind") or "number").lower()
+            if kind not in {"number", "date", "datetime", "time"}:
+                kind = "number"
+            bands = []
+            for idx, band in enumerate(level.get("bands") or []):
+                if not isinstance(band, dict):
+                    continue
+                key = str(band.get("key") or f"band_{idx + 1}")
+                if not key:
+                    continue
+                item_band = {"key": key}
+                for edge in ("min", "max"):
+                    value = band.get(edge)
+                    item_band[edge] = None if value in (None, "") else value
+                if item_band.get("min") is None and item_band.get("max") is None:
+                    continue
+                if isinstance(band.get("label"), str):
+                    item_band["label"] = band["label"]
+                bands.append(item_band)
+            if not bands:
+                continue
+            item["kind"] = kind
+            item["bands"] = bands
+        levels.append(item)
+    if not levels:
+        return {}
+    groups = parsed.get("groups") if isinstance(parsed.get("groups"), dict) else {}
+    return {"version": 2, "levels": levels, "groups": groups}
+
+
+def _resolve_group_level_value(row: dict[str, Any], level: dict) -> str:
+    value = row.get(level["field"])
+    if level.get("mode") == "bands":
+        group_value, band_override = _resolve_group_band(value, {
+            "mode": "bands",
+            "kind": level.get("kind") or "number",
+            "bands": level.get("bands") or [],
+        })
+        if band_override and band_override.get("label"):
+            return str(band_override["label"])
+        return _group_display_value(group_value)
+    return _group_display_value(value)
+
+
+def _group_display_value(value: Any) -> str:
+    if value in (None, ""):
+        return "(blank)"
+    return str(value)
+
+
+def _group_path_key(values: list[Any]) -> str:
+    return GROUP_PATH_SEPARATOR.join(_group_display_value(v) for v in values)
+
+
+def _resolve_multi_group_style(
+    row: dict[str, Any],
+    rules: dict,
+    layer_color: str | None,
+    layer_icon: str | None,
+) -> dict:
+    if not rules:
+        return {}
+    levels = rules.get("levels") or []
+    groups = rules.get("groups") or {}
+    path_values = [_resolve_group_level_value(row, level) for level in levels]
+    if not path_values:
+        return {}
+
+    effective = {
+        "color": layer_color or "",
+        "icon": layer_icon or "",
+        "label": path_values[-1],
+    }
+    group_values = {
+        level["field"]: path_values[idx]
+        for idx, level in enumerate(levels)
+    }
+    for idx in range(len(path_values)):
+        key = _group_path_key(path_values[: idx + 1])
+        override = groups.get(key)
+        if not isinstance(override, dict):
+            continue
+        if isinstance(override.get("color"), str) and override.get("color"):
+            effective["color"] = override["color"]
+        if isinstance(override.get("icon"), str):
+            effective["icon"] = override["icon"]
+        if isinstance(override.get("label"), str) and override.get("label"):
+            effective["label"] = override["label"]
+
+    leaf_key = _group_path_key(path_values)
+    return {
+        "key": leaf_key,
+        "path": path_values,
+        "label": " / ".join(path_values),
+        "values": group_values,
+        "color": effective.get("color") or "",
+        "icon": effective.get("icon") or "",
+    }
 
 
 def _band_sort_value(value: Any, kind: str) -> float | str | None:
@@ -477,6 +613,11 @@ def _resolve_group_band(value: Any, rules: dict) -> tuple[str | None, dict | Non
 
 def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
     assert_icon_readable(icon)
+    raw = _parse_group_config_raw(group_config_json)
+    groups = raw.get("groups") if isinstance(raw.get("groups"), dict) else {}
+    for item in groups.values():
+        if isinstance(item, dict) and item.get("icon") != "__none":
+            assert_icon_readable(item.get("icon"))
     cfg = _coerce_group_config(group_config_json)
     for item in cfg.values():
         if item.get("icon") != "__none":
@@ -624,14 +765,24 @@ def get_features(
     features = []
     group_config = _coerce_group_config(layer_doc.group_config_json)
     group_rules = _coerce_grouping_rules(layer_doc.group_config_json)
+    multi_grouping = _coerce_multi_grouping(layer_doc.group_config_json)
     group_by_field = (layer_doc.group_by_field or "").strip() or None
     popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
-    # Add group_by_field to fetched fields if not already present
+    grouping_fields = []
+    if multi_grouping:
+        grouping_fields = [level["field"] for level in multi_grouping.get("levels") or []]
+    elif group_by_field:
+        grouping_fields = [group_by_field]
+
+    # Add grouping fields to fetched fields if not already present.
     if group_by_field and group_by_field not in fields:
         fields.append(group_by_field)
+    for field in grouping_fields:
+        if field and field not in fields:
+            fields.append(field)
 
-    # Re-fetch if we added group_by_field
-    if group_by_field and group_by_field not in rows[0] if rows else False:
+    # Re-fetch if we added grouping fields after the first query.
+    if rows and any(field not in rows[0] for field in grouping_fields):
         rows = frappe.get_all(
             layer_doc.source_doctype,
             fields=fields,
@@ -660,7 +811,25 @@ def get_features(
 
         # Resolve per-feature group style (segmentation).
         group_value = None
-        if group_by_field:
+        if multi_grouping:
+            resolved_group = _resolve_multi_group_style(
+                r,
+                multi_grouping,
+                layer_doc.color,
+                layer_doc.icon,
+            )
+            if resolved_group:
+                props["_group_value"] = resolved_group["key"]
+                props["_group_path"] = resolved_group["path"]
+                props["_group_label"] = resolved_group["label"]
+                props["_group_values"] = resolved_group["values"]
+                if resolved_group.get("color"):
+                    props["_color"] = resolved_group["color"]
+                if resolved_group.get("icon") == "__none":
+                    props["_icon_disabled"] = 1
+                elif resolved_group.get("icon"):
+                    props["_icon"] = resolved_group["icon"]
+        elif group_by_field:
             source_group_value = r.get(group_by_field)
             band_override = None
             if group_rules.get("mode") == "bands":
@@ -738,7 +907,7 @@ def get_features(
             "source_doctype": layer_doc.source_doctype,
             "click_action": layer_doc.click_action or "popup",
             "group_by_field": group_by_field,
-            "group_config": group_config,
+            "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
             "popup_fields": popup_fields,
             "style": {
                 "color": layer_doc.color,
@@ -946,7 +1115,7 @@ def list_for_map(map_name: str) -> list[dict]:
     out = []
     for r in rows:
         # Parse the group_config_json into a dict for the client
-        r["group_config"] = _coerce_group_config(r.get("group_config_json"))
+        r["group_config"] = _coerce_group_config_for_client(r.get("group_config_json"))
         r["popup_fields"] = _coerce_popup_fields(r.get("popup_fields_json"))
         out.append({**r, "style": _layer_style_dict(r)})
     return out
@@ -1270,6 +1439,94 @@ def list_group_values(source_doctype: str, field: str, limit: int = 50) -> dict:
 
 
 @frappe.whitelist()
+def list_group_tree(source_doctype: str, fields: list | str, limit: int = 1000) -> dict:
+    """Return distinct grouping paths for ordered `fields`.
+
+    The response is intentionally path-based instead of a fully nested
+    object so the client can preserve expansion state and lazily render
+    tree rows. Permissions are enforced against the source DocType and
+    fields are validated against the same filterable schema used by the
+    layer editor.
+    """
+    assert_source_read(source_doctype)
+    if isinstance(fields, str):
+        try:
+            fields = json.loads(fields)
+        except (TypeError, ValueError):
+            fields = [f.strip() for f in fields.split(",") if f.strip()]
+    if not isinstance(fields, list):
+        fields = []
+
+    field_map = _filter_field_map(source_doctype)
+    levels = []
+    clean_fields = []
+    seen = set()
+    for field in fields:
+        raw_level = field if isinstance(field, dict) else {"field": field, "mode": "value"}
+        fieldname = str(raw_level.get("field") or "").strip()
+        if not fieldname or fieldname in seen:
+            continue
+        if fieldname not in field_map:
+            frappe.throw(
+                f"Field '{fieldname}' is not groupable on {source_doctype}",
+                frappe.ValidationError,
+            )
+        seen.add(fieldname)
+        clean_fields.append(fieldname)
+        mode = str(raw_level.get("mode") or "value").lower()
+        level = {"field": fieldname, "mode": "bands" if mode == "bands" else "value"}
+        if level["mode"] == "bands":
+            kind = str(raw_level.get("kind") or "number").lower()
+            level["kind"] = kind if kind in {"number", "date", "datetime", "time"} else "number"
+            bands = []
+            for idx, band in enumerate(raw_level.get("bands") or []):
+                if not isinstance(band, dict):
+                    continue
+                key = str(band.get("key") or f"band_{idx + 1}")
+                item = {"key": key}
+                for edge in ("min", "max"):
+                    value = band.get(edge)
+                    item[edge] = None if value in (None, "") else value
+                if item.get("min") is None and item.get("max") is None:
+                    continue
+                if isinstance(band.get("label"), str):
+                    item["label"] = band["label"]
+                bands.append(item)
+            level["bands"] = bands
+        levels.append(level)
+
+    if not clean_fields:
+        return {"paths": [], "truncated": False}
+
+    limit = min(max(int(limit or 1000), 1), 5000)
+    try:
+        rows = frappe.get_all(
+            source_doctype,
+            fields=clean_fields,
+            distinct=True,
+            order_by=", ".join(f"{field} asc" for field in clean_fields),
+            limit_page_length=limit,
+        )
+    except Exception:
+        return {"paths": [], "truncated": False}
+
+    seen_paths = set()
+    paths = []
+    for row in rows:
+        values = [_resolve_group_level_value(row, level) for level in levels]
+        key = _group_path_key(values)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+        paths.append({
+            "key": key,
+            "values": values,
+            "labels": values,
+        })
+    return {"paths": paths, "truncated": len(rows) >= limit}
+
+
+@frappe.whitelist()
 def list_source_doctypes() -> list[dict]:
     """Return DocTypes the current user can read AND that have at least one
     Float field. Used by the 'add layer' picker. Strict: server enforces
@@ -1329,7 +1586,7 @@ def _layer_to_dto(doc) -> dict:
         "label_field": doc.label_field,
         "filter_json": doc.filter_json,
         "group_by_field": doc.group_by_field or "",
-        "group_config": _coerce_group_config(doc.group_config_json),
+        "group_config": _coerce_group_config_for_client(doc.group_config_json),
         "group_config_json": doc.group_config_json or "",
         "popup_template": doc.popup_template or "",
         "popup_fields": _coerce_popup_fields(doc.popup_fields_json),
@@ -1484,7 +1741,7 @@ def list_masters() -> list[dict]:
     )
     out = []
     for r in raw:
-        r["group_config"] = _coerce_group_config(r.get("group_config_json"))
+        r["group_config"] = _coerce_group_config_for_client(r.get("group_config_json"))
         r["popup_fields"] = _coerce_popup_fields(r.get("popup_fields_json"))
         out.append({**r, "style": _layer_style_dict(r)})
     return out

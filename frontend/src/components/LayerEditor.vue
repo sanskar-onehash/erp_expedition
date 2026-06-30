@@ -18,6 +18,7 @@ import { useLayersStore } from '../state/layers.js'
 import { useIconsStore } from '../state/icons.js'
 import { ICON_PATHS } from '../api/icons.js'
 import FilterBuilder from './FilterBuilder.vue'
+import AdvancedGroupingModal from './AdvancedGroupingModal.vue'
 import { parseFilterRows, serializeFilterRows } from '../lib/filters.js'
 
 const ui = useUiStore()
@@ -62,6 +63,7 @@ const sourceDts = ref([])
 const sourceFields = ref([])          // local working list (filled from cache)
 const sourceFieldsLoading = ref(false)
 const groupValues = ref([]) // distinct values for the group_by_field
+const advancedGroupingOpen = ref(false)
 const previewOriginalLayer = ref(null)
 const previewOriginalUi = ref(null)
 const previewCommitted = ref(false)
@@ -181,7 +183,7 @@ watch(
         radius_opacity: l.radius_opacity ?? 0.18,
       }
       await _loadSourceFields(l.source_doctype)
-      if (form.value.group_by_field) {
+      if (form.value.group_by_field && !isAdvancedGrouping.value) {
         if (groupMode.value === 'bands') {
           _syncBandStyles()
         } else {
@@ -547,6 +549,35 @@ function _parseGroupConfig(json) {
 
 function _serializeGroupConfig(obj) {
   if (!obj || typeof obj !== 'object') return ''
+  if (obj.__grouping?.version >= 2) {
+    const levels = Array.isArray(obj.__grouping.levels)
+      ? obj.__grouping.levels
+          .filter((level) => level?.field)
+          .map((level) => {
+            const item = { field: level.field, mode: level.mode === 'bands' ? 'bands' : 'value' }
+            if (item.mode === 'bands') {
+              item.kind = level.kind || 'number'
+              item.bands = Array.isArray(level.bands) ? level.bands : []
+            }
+            return item
+          })
+      : []
+    if (!levels.length) return ''
+    const groups = {}
+    const rawGroups = obj.groups && typeof obj.groups === 'object' ? obj.groups : {}
+    for (const [key, value] of Object.entries(rawGroups)) {
+      if (!value || typeof value !== 'object') continue
+      const item = {}
+      if (value.color) item.color = value.color
+      if (Object.prototype.hasOwnProperty.call(value, 'icon')) item.icon = value.icon || ''
+      if (value.label) item.label = value.label
+      if (Object.keys(item).length) groups[key] = item
+    }
+    return JSON.stringify({
+      __grouping: { version: 2, levels },
+      groups,
+    })
+  }
   const cleaned = {}
   for (const [k, v] of Object.entries(obj)) {
     if (!v || typeof v !== 'object') continue
@@ -611,6 +642,25 @@ const groupBySupportsBands = computed(() =>
 const groupMode = computed(() =>
   form.value.group_config?.__grouping?.mode === 'bands' ? 'bands' : 'value'
 )
+const isAdvancedGrouping = computed(() => form.value.group_config?.__grouping?.version >= 2)
+const advancedGroupingLevels = computed(() =>
+  isAdvancedGrouping.value && Array.isArray(form.value.group_config.__grouping.levels)
+    ? form.value.group_config.__grouping.levels
+    : []
+)
+const advancedGroupingSummary = computed(() => {
+  if (!advancedGroupingLevels.value.length) return ''
+  return advancedGroupingLevels.value
+    .map((level) => {
+      const field = sourceFields.value.find((f) => f.fieldname === level.field)
+      return field?.label || level.field
+    })
+    .join(' > ')
+})
+const advancedGroupCount = computed(() => {
+  const groups = form.value.group_config?.groups
+  return groups && typeof groups === 'object' ? Object.keys(groups).length : 0
+})
 const groupBands = computed(() =>
   Array.isArray(form.value.group_config?.__grouping?.bands)
     ? form.value.group_config.__grouping.bands
@@ -674,6 +724,18 @@ async function onGroupByChange() {
   await loadExactGroupValues()
 }
 
+function openAdvancedGrouping() {
+  advancedGroupingOpen.value = true
+}
+
+function applyAdvancedGroupConfig(config) {
+  form.value.group_config = config || {}
+  if (form.value.group_config?.__grouping?.version >= 2) {
+    form.value.group_by_field = form.value.group_config.__grouping.levels?.[0]?.field || ''
+    groupValues.value = []
+  }
+}
+
 async function chooseGroupField(fieldname) {
   form.value.group_by_field = fieldname || ''
   document.querySelectorAll('.le__group-field-menu[open]').forEach((menu) => {
@@ -683,6 +745,7 @@ async function chooseGroupField(fieldname) {
 }
 
 async function loadExactGroupValues() {
+  if (isAdvancedGrouping.value) return
   if (!form.value.source_doctype || !form.value.group_by_field) return
   try {
     const resp = await call('expedition.api.layer.list_group_values', {
@@ -1266,8 +1329,18 @@ function close() {
         <div class="le__filter">
           <div class="le__filter-header">
             <span class="le__label">Group By <span class="le__hint">(color/icon by value)</span></span>
+            <button type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">
+              Advanced
+            </button>
           </div>
-          <details class="le__group-field-menu">
+          <div v-if="isAdvancedGrouping" class="le__advanced-group-summary">
+            <div>
+              <strong>{{ advancedGroupingSummary }}</strong>
+              <span>{{ advancedGroupCount }} custom override{{ advancedGroupCount === 1 ? '' : 's' }}</span>
+            </div>
+            <button type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">Edit groups</button>
+          </div>
+          <details v-if="!isAdvancedGrouping" class="le__group-field-menu">
             <summary class="le__field-picker-trigger">
               <span>{{ selectedGroupFieldLabel }}</span>
               <span class="le__chevron">⌄</span>
@@ -1296,7 +1369,7 @@ function close() {
             </div>
           </details>
 
-          <div v-if="form.group_by_field && groupBySupportsBands" class="le__group-mode">
+          <div v-if="!isAdvancedGrouping && form.group_by_field && groupBySupportsBands" class="le__group-mode">
             <button
               type="button"
               class="le__seg"
@@ -1311,7 +1384,7 @@ function close() {
             >Exact values</button>
           </div>
 
-          <div v-if="form.group_by_field && groupMode === 'bands'" class="le__group-list">
+          <div v-if="!isAdvancedGrouping && form.group_by_field && groupMode === 'bands'" class="le__group-list">
             <p class="le__group-note">Each band matches From inclusive and To exclusive. Leave either side blank for open-ended ranges.</p>
             <div v-for="(band, i) in groupBands" :key="band.key" class="le__group-row le__band-row">
               <details class="le__group-color-menu">
@@ -1480,7 +1553,7 @@ function close() {
           </div>
 
           <!-- Group-specific overrides -->
-          <div v-if="form.group_by_field && groupMode === 'value' && groupValues.length" class="le__group-list">
+          <div v-if="!isAdvancedGrouping && form.group_by_field && groupMode === 'value' && groupValues.length" class="le__group-list">
             <p class="le__group-note">Colors auto-assigned. Icons use the layer icon unless overridden.</p>
             <div v-for="val in groupValues" :key="String(val)" class="le__group-row">
               <div class="le__group-val">
@@ -1599,7 +1672,7 @@ function close() {
               </div>
             </div>
           </div>
-          <p v-if="!form.group_by_field" class="le__filter-empty">No grouping — all pins use the same style.</p>
+          <p v-if="!form.group_by_field && !isAdvancedGrouping" class="le__filter-empty">No grouping — all pins use the same style.</p>
         </div>
 
         <!-- Popup Fields (default popup body) -->
@@ -1704,6 +1777,19 @@ function close() {
         </div>
       </footer>
     </aside>
+    <AdvancedGroupingModal
+      :open="advancedGroupingOpen"
+      :model-value="form.group_config"
+      :group-by-field="form.group_by_field"
+      :source-doctype="form.source_doctype"
+      :source-fields="sourceFields"
+      :layer-color="safeLayerColor(form.color)"
+      :layer-icon="form.icon"
+      :color-palette="GROUP_PALETTE"
+      @close="advancedGroupingOpen = false"
+      @update:model-value="applyAdvancedGroupConfig"
+      @update:group-by-field="form.group_by_field = $event"
+    />
   </div>
 </template>
 
@@ -1979,6 +2065,34 @@ function close() {
 .le__btn--danger { color: #EF4444; }
 .le__btn--danger:hover { background: rgba(239, 68, 68, 0.10); }
 .le__btn--icon { padding: 4px 8px; font-size: 14px; }
+.le__btn--sm { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+.le__advanced-group-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+}
+.le__advanced-group-summary > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.le__advanced-group-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #DBEAFE;
+  font-size: 12px;
+}
+.le__advanced-group-summary span {
+  color: rgba(226, 232, 240, 0.62);
+  font-size: 11px;
+}
 .le__error {
   margin: 0; padding: 8px 10px; font-size: 11px; color: #FCA5A5;
   background: rgba(239, 68, 68, 0.10);

@@ -98,14 +98,63 @@ export const useLayersStore = defineStore('layers', () => {
   function previewGroupStyles(layerName, groupConfig) {
     const fc = features.value[layerName]
     if (!fc || !Array.isArray(fc.features)) return
+    const advanced = groupConfig?.__grouping?.version >= 2
+    const groups = advanced && groupConfig.groups && typeof groupConfig.groups === 'object'
+      ? groupConfig.groups
+      : {}
+    const layerStyle = getLayerStyle(layerName)
+    const separator = '\x1f'
+    const pathKey = (values) => values.map((v) => String(v || '(blank)')).join(separator)
+    const displayValue = (value) => (value == null || value === '') ? '(blank)' : String(value)
+    const resolveBandValue = (value, level) => {
+      const comparable = Number(value)
+      for (const band of level.bands || []) {
+        const min = band.min === '' || band.min == null ? null : Number(band.min)
+        const max = band.max === '' || band.max == null ? null : Number(band.max)
+        if (Number.isFinite(comparable)) {
+          if (min != null && comparable < min) continue
+          if (max != null && comparable >= max) continue
+        }
+        return band.label || displayValue(band.key)
+      }
+      return 'Other'
+    }
     const nextFeatures = fc.features.map((feature) => {
       const props = { ...(feature.properties || {}) }
-      const groupValue = props._group_value
-      if (groupValue == null) return feature
-      const cfg = groupConfig?.[String(groupValue)]
       delete props._color
       delete props._icon
       delete props._icon_disabled
+      if (advanced) {
+        let path = Array.isArray(props._group_path) ? props._group_path : []
+        if (!path.length && Array.isArray(groupConfig.__grouping?.levels)) {
+          path = groupConfig.__grouping.levels.map((level) =>
+            level.mode === 'bands'
+              ? resolveBandValue(props[level.field], level)
+              : displayValue(props[level.field])
+          )
+        }
+        if (!path.length) return { ...feature, properties: props }
+        const style = {
+          color: layerStyle.color || '',
+          icon: layerStyle.icon || '',
+        }
+        for (let i = 0; i < path.length; i++) {
+          const cfg = groups[pathKey(path.slice(0, i + 1))]
+          if (!cfg || typeof cfg !== 'object') continue
+          if (cfg.color) style.color = cfg.color
+          if (Object.prototype.hasOwnProperty.call(cfg, 'icon')) style.icon = cfg.icon || ''
+        }
+        if (style.color) props._color = style.color
+        if (style.icon === '__none') {
+          props._icon_disabled = 1
+        } else if (style.icon) {
+          props._icon = style.icon
+        }
+        return { ...feature, properties: props }
+      }
+      const groupValue = props._group_value
+      if (groupValue == null) return feature
+      const cfg = groupConfig?.[String(groupValue)]
       if (cfg?.color) props._color = cfg.color
       if (cfg?.icon === '__none') {
         props._icon_disabled = 1

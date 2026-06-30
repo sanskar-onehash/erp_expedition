@@ -150,6 +150,7 @@ watch(feature, async (v) => {
 const title = computed(() => {
   const f = feature.value
   if (!f) return ''
+  if (f.properties._group_label) return f.properties._group_label
   // Per-group override label takes precedence
   const gv = f.properties._group_value
   const cfg = (f.layer && f.layer.group_config) || {}
@@ -169,7 +170,7 @@ const subtitle = computed(() => {
 const propRows = computed(() => {
   const f = feature.value
   if (!f) return []
-  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_color', '_icon', '_icon_disabled', '_popup_fields'])
+  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_group_path', '_group_label', '_group_values', '_color', '_icon', '_icon_disabled', '_popup_fields'])
   const rows = []
   for (const [k, v] of Object.entries(f.properties || {})) {
     if (skip.has(k)) continue

@@ -98,14 +98,36 @@ function toDM(deg, axis) {
 }
 
 async function copy() {
-  if (lat.value == null) return
+  if (lat.value == null || lng.value == null) return
+  const text = `${lat.value.toFixed(6)}, ${lng.value.toFixed(6)}`
+  const fallbackCopy = () => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+    } finally {
+      document.body.removeChild(ta)
+    }
+  }
+
   try {
-    await navigator.clipboard.writeText(`${lat.value},${lng.value}`)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+      } catch (_) {
+        fallbackCopy()
+      }
+    } else {
+      fallbackCopy()
+    }
     copied.value = true
     setTimeout(() => { copied.value = false }, 1200)
-  } catch (_) {
-    // Clipboard API can be unavailable (insecure context). Silently
-    // no-op — the user can read the values off the pill.
+  } catch (e) {
+    console.warn('[expedition] coordinate copy failed', e)
   }
 }
 

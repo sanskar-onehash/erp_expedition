@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import frappe
@@ -42,6 +43,26 @@ LAYOUT_FIELD_TYPES = {
     "Image",
     "Fold",
 }
+
+GROUP_PALETTE = [
+    "#3B82F6",
+    "#10B981",
+    "#F59E0B",
+    "#EC4899",
+    "#8B5CF6",
+    "#06B6D4",
+    "#F97316",
+    "#84CC16",
+    "#EF4444",
+    "#6366F1",
+    "#14B8A6",
+    "#A855F7",
+]
+
+
+def _auto_group_color(value: Any) -> str:
+    digest = hashlib.sha1(str(value).encode("utf-8")).digest()
+    return GROUP_PALETTE[digest[0] % len(GROUP_PALETTE)]
 
 FILTERABLE_FIELD_TYPES = {
     "Attach",
@@ -350,6 +371,8 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
         return {}
     out = {}
     for value, cfg in parsed.items():
+        if str(value).startswith("__"):
+            continue
         if not isinstance(cfg, dict):
             continue
         entry = {}
@@ -364,11 +387,100 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
     return out
 
 
+def _coerce_grouping_rules(raw: str | dict | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    rules = parsed.get("__grouping")
+    if not isinstance(rules, dict) or rules.get("mode") != "bands":
+        return {}
+    kind = str(rules.get("kind") or "number").lower()
+    if kind not in {"number", "date", "datetime", "time"}:
+        kind = "number"
+    bands = []
+    for idx, band in enumerate(rules.get("bands") or []):
+        if not isinstance(band, dict):
+            continue
+        key = str(band.get("key") or f"band_{idx + 1}")
+        item = {"key": key}
+        for edge in ("min", "max"):
+            value = band.get(edge)
+            if value in (None, ""):
+                item[edge] = None
+                continue
+            item[edge] = value
+        if item.get("min") is None and item.get("max") is None:
+            continue
+        if isinstance(band.get("label"), str):
+            item["label"] = band["label"]
+        if isinstance(band.get("color"), str) and band["color"].startswith("#"):
+            item["color"] = band["color"]
+        if isinstance(band.get("icon"), str) and band["icon"]:
+            item["icon"] = band["icon"]
+        bands.append(item)
+    return {"mode": "bands", "kind": kind, "bands": bands} if bands else {}
+
+
+def _band_sort_value(value: Any, kind: str) -> float | str | None:
+    if value in (None, ""):
+        return None
+    try:
+        if kind == "number":
+            return float(value)
+        if kind == "date":
+            if isinstance(value, datetime):
+                return value.date().isoformat()
+            if isinstance(value, date):
+                return value.isoformat()
+            return date.fromisoformat(str(value)[:10]).isoformat()
+        if kind == "datetime":
+            if isinstance(value, datetime):
+                return value.isoformat(sep=" ")
+            return datetime.fromisoformat(
+                str(value).replace("Z", "+00:00")
+            ).isoformat(sep=" ")
+        if kind == "time":
+            if isinstance(value, timedelta):
+                return value.total_seconds()
+            if isinstance(value, time):
+                return value.isoformat()
+            return time.fromisoformat(str(value)).isoformat()
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _resolve_group_band(value: Any, rules: dict) -> tuple[str | None, dict | None]:
+    if not rules or rules.get("mode") != "bands":
+        return None, None
+    kind = rules.get("kind") or "number"
+    comparable = _band_sort_value(value, kind)
+    if comparable is None:
+        return None, None
+    for band in rules.get("bands") or []:
+        min_value = _band_sort_value(band.get("min"), kind)
+        max_value = _band_sort_value(band.get("max"), kind)
+        if min_value is not None and comparable < min_value:
+            continue
+        if max_value is not None and comparable >= max_value:
+            continue
+        return str(band["key"]), {
+            k: band[k] for k in ("color", "icon", "label") if band.get(k)
+        }
+    return "__unmatched", {"label": "Other"}
+
+
 def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
     assert_icon_readable(icon)
     cfg = _coerce_group_config(group_config_json)
     for item in cfg.values():
-        assert_icon_readable(item.get("icon"))
+        if item.get("icon") != "__none":
+            assert_icon_readable(item.get("icon"))
 
 
 def _coerce_popup_fields(raw: str | list | None) -> list[str]:
@@ -511,6 +623,7 @@ def get_features(
 
     features = []
     group_config = _coerce_group_config(layer_doc.group_config_json)
+    group_rules = _coerce_grouping_rules(layer_doc.group_config_json)
     group_by_field = (layer_doc.group_by_field or "").strip() or None
     popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
     # Add group_by_field to fetched fields if not already present
@@ -548,16 +661,30 @@ def get_features(
         # Resolve per-feature group style (segmentation).
         group_value = None
         if group_by_field:
-            group_value = r.get(group_by_field)
+            source_group_value = r.get(group_by_field)
+            band_override = None
+            if group_rules.get("mode") == "bands":
+                group_value, band_override = _resolve_group_band(
+                    source_group_value, group_rules
+                )
+            else:
+                group_value = source_group_value
             props["_group_value"] = group_value
             override = (
                 group_config.get(str(group_value)) if group_value is not None else None
             )
-            if override:
-                if override.get("color"):
-                    props["_color"] = override["color"]
-                if override.get("icon"):
-                    props["_icon"] = override["icon"]
+            if not override and band_override:
+                override = band_override
+            if group_value is not None:
+                props["_color"] = (
+                    override.get("color")
+                    if override and override.get("color")
+                    else _auto_group_color(group_value)
+                )
+            if override and override.get("icon") == "__none":
+                props["_icon_disabled"] = 1
+            elif override and override.get("icon"):
+                props["_icon"] = override["icon"]
 
         # Render the Jinja popup_template against the source row. The
         # rendered HTML is attached as `_popup_html`. `safe_render=True`

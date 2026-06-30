@@ -95,6 +95,29 @@ export const useLayersStore = defineStore('layers', () => {
     _emitLayersChanged()
   }
 
+  function previewGroupStyles(layerName, groupConfig) {
+    const fc = features.value[layerName]
+    if (!fc || !Array.isArray(fc.features)) return
+    const nextFeatures = fc.features.map((feature) => {
+      const props = { ...(feature.properties || {}) }
+      const groupValue = props._group_value
+      if (groupValue == null) return feature
+      const cfg = groupConfig?.[String(groupValue)]
+      delete props._color
+      delete props._icon
+      delete props._icon_disabled
+      if (cfg?.color) props._color = cfg.color
+      if (cfg?.icon === '__none') {
+        props._icon_disabled = 1
+      } else if (cfg?.icon) {
+        props._icon = cfg.icon
+      }
+      return { ...feature, properties: props }
+    })
+    features.value[layerName] = { ...fc, features: nextFeatures }
+    _emitFeaturesUpdated(layerName)
+  }
+
   function _styleFromDto(d) {
     return {
       color: d.color, icon: d.icon, size: d.size,
@@ -345,6 +368,7 @@ export const useLayersStore = defineStore('layers', () => {
     lastFetched,
     visibleLayers,
     fetchFeatures,
+    refetchLayer,
     getLayerStyle,
     clearFeatures,
     bounds,
@@ -357,6 +381,7 @@ export const useLayersStore = defineStore('layers', () => {
     reorderLayers,
     replaceMapLayers,
     previewLayerFields,
+    previewGroupStyles,
     loadMasters,
     addMaster,
     updateMaster,

@@ -64,16 +64,21 @@ function computeGlobeFitZoom(width, height) {
 }
 
 function sourceId(layerName) { return `src-${layerName}` }
+function groupedSourceId(layerName, groupKey) { return `src-${layerName}-grp-${groupKey}` }
 function shadowLayerId(layerName) { return `lyr-${layerName}-shadow` }
 function ringLayerId(layerName) { return `lyr-${layerName}-ring` }
 function layerId(layerName) { return `lyr-${layerName}` }
 function clusterLayerId(layerName) { return `lyr-${layerName}-clusters` }
 function clusterCountId(layerName) { return `lyr-${layerName}-cluster-count` }
 function iconLayerId(layerName) { return `lyr-${layerName}-icon` }
+function groupedLayerBase(layerName, groupKey) { return `lyr-${layerName}-grp-${groupKey}` }
 function heatmapLayerId(layerName) { return `lyr-${layerName}-heatmap` }
 function haloLayerId(layerName) { return `lyr-${layerName}-halo` }
 function extrusionLayerId(layerName) { return `lyr-${layerName}-extrude` }
 function extrusionSourceId(layerName) { return `src-${layerName}-extrude` }
+function safeMapIdPart(value) {
+  return encodeURIComponent(String(value ?? 'empty')).replace(/[^a-zA-Z0-9_-]/g, '_')
+}
 
 // MapLibre's fill-extrusion only renders polygons, but Expedition
 // layers are Point sources. To get a 3D column per pin, we synthesize
@@ -107,6 +112,64 @@ function _extrusionFeatureCollection(pointFc, layerName) {
       return { type: 'Feature', geometry: _extrusionPolygonForPoint(lng, lat), properties: props }
     }).filter(Boolean),
   }
+}
+
+function _removeGroupedArtifacts(layerName) {
+  if (!map || !map.getStyle()) return
+  const layerPrefix = `lyr-${layerName}-grp-`
+  const sourcePrefix = `src-${layerName}-grp-`
+  for (const layer of [...(map.getStyle().layers || [])].reverse()) {
+    if (layer.id && layer.id.startsWith(layerPrefix)) {
+      if (map.getLayer(layer.id)) map.removeLayer(layer.id)
+      _interactivePointLayers.delete(layer.id)
+    }
+  }
+  for (const id of Object.keys(map.getStyle().sources || {})) {
+    if (id.startsWith(sourcePrefix) && map.getSource(id)) map.removeSource(id)
+  }
+}
+
+function _removeBasePointArtifacts(layerName) {
+  if (!map) return
+  for (const id of [
+    heatmapLayerId(layerName),
+    haloLayerId(layerName),
+    clusterCountId(layerName),
+    clusterLayerId(layerName),
+    iconLayerId(layerName),
+    layerId(layerName),
+    ringLayerId(layerName),
+    shadowLayerId(layerName),
+  ]) {
+    if (map.getLayer(id)) map.removeLayer(id)
+    _interactivePointLayers.delete(id)
+  }
+  if (map.getSource(sourceId(layerName))) map.removeSource(sourceId(layerName))
+}
+
+function _pruneGroupedArtifacts(layerName, activeSourceIds, activeLayerPrefixes) {
+  if (!map || !map.getStyle()) return
+  const layerPrefix = `lyr-${layerName}-grp-`
+  const sourcePrefix = `src-${layerName}-grp-`
+  for (const layer of [...(map.getStyle().layers || [])].reverse()) {
+    if (!layer.id || !layer.id.startsWith(layerPrefix)) continue
+    const keep = [...activeLayerPrefixes].some((prefix) => layer.id === prefix || layer.id.startsWith(`${prefix}-`))
+    if (!keep && map.getLayer(layer.id)) {
+      map.removeLayer(layer.id)
+      _interactivePointLayers.delete(layer.id)
+    }
+  }
+  for (const id of Object.keys(map.getStyle().sources || {})) {
+    if (id.startsWith(sourcePrefix) && !activeSourceIds.has(id) && map.getSource(id)) map.removeSource(id)
+  }
+}
+
+function layerNameFromRenderedLayerId(id) {
+  const grouped = id.match(/^lyr-(.+)-grp-[^-]+(?:-(shadow|ring|icon|clusters|cluster-count|halo))?$/)
+  if (grouped) return grouped[1]
+  return id
+    .replace(/^lyr-/, '')
+    .replace(/-(ring|shadow|icon|clusters|cluster-count|halo)$/, '')
 }
 
 const mapEl = ref(null)
@@ -273,7 +336,13 @@ function featureDisplayColor(feature, fallback) {
 }
 
 function featureDisplayIcon(feature, layerIcon) {
+  if (feature?.properties?._icon_disabled) return ''
   return feature?.properties?._icon || layerIcon || ''
+}
+
+function featureGroupKey(feature) {
+  const value = feature?.properties?._group_value
+  return value == null || value === '' ? null : String(value)
 }
 
 function iconRenderSpec(iconKey, color) {
@@ -442,6 +511,7 @@ function haloPaint(color, layerName) {
   const field = ui.radiusField[layerName]
   const fallback = ui.radiusMeters[layerName] || 5000
   const scale = ui.radiusScale[layerName] || 1
+  const displayColor = pinColorExpression(color)
   // Per-layer opacity. Falls back to 0.18 if the layer doc didn't
   // ship the field (older saved maps).
   const layerDoc = layerStore.layers.find((l) => l.name === layerName)
@@ -465,9 +535,9 @@ function haloPaint(color, layerName) {
       10, ['/', base, 40],
       14, ['/', base, 20],
     ],
-    'circle-color': color,
+    'circle-color': displayColor,
     'circle-opacity': opacity * scale,
-    'circle-stroke-color': color,
+    'circle-stroke-color': displayColor,
     'circle-stroke-width': 1,
     'circle-stroke-opacity': Math.min(1, opacity * 2.5) * scale,
     'circle-pitch-alignment': 'map',
@@ -516,6 +586,22 @@ function _addLayerOnMap(layerName) {
       },
     }
   })
+
+  const groupedCluster = wantsCluster && sourceFeatures.some((feature) => featureGroupKey(feature))
+  if (groupedCluster) {
+    _addGroupedClusterLayerOnMap({
+      layerName,
+      fc,
+      sourceFeatures,
+      color,
+      radius,
+      enabled,
+      iconSpecs,
+    })
+    lastLoadedFeatures[layerName] = fc
+    return
+  }
+  _removeGroupedArtifacts(layerName)
 
   const sourceSpec = {
     type: 'geojson',
@@ -660,6 +746,7 @@ function _addLayerOnMap(layerName) {
         paint: { 'text-color': '#FFFFFF' },
       })
     }
+    map.off('click', cid, onClusterClick)
     map.on('click', cid, onClusterClick)
   } else {
     if (map.getLayer(ccid)) map.removeLayer(ccid)
@@ -768,6 +855,158 @@ function _addLayerOnMap(layerName) {
   if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
 }
 
+function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, radius, enabled, iconSpecs }) {
+  _removeBasePointArtifacts(layerName)
+
+  const groups = new Map()
+  for (const feature of sourceFeatures) {
+    const key = featureGroupKey(feature) || '__ungrouped'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(feature)
+  }
+  const activeSourceIds = new Set()
+  const activeLayerPrefixes = new Set()
+
+  for (const [groupValue, features] of groups.entries()) {
+    const groupKey = safeMapIdPart(groupValue)
+    const base = groupedLayerBase(layerName, groupKey)
+    activeSourceIds.add(groupedSourceId(layerName, groupKey))
+    activeLayerPrefixes.add(base)
+
+    const sid = groupedSourceId(layerName, groupKey)
+    const groupColor = featureDisplayColor(features[0], color)
+    const sourceSpec = {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features },
+      promoteId: '_id',
+      cluster: true,
+      clusterRadius: 40,
+      clusterMaxZoom: 12,
+    }
+    const existing = map.getSource(sid)
+    if (existing && existing.type === 'geojson') {
+      existing.setData(sourceSpec.data)
+    } else {
+      map.addSource(sid, sourceSpec)
+    }
+
+    const shid = `${base}-shadow`
+    const rid = `${base}-ring`
+    const lid = base
+    const iid = `${base}-icon`
+    const cid = `${base}-clusters`
+    const ccid = `${base}-cluster-count`
+    const haloId = `${base}-halo`
+
+    if (!map.getLayer(shid)) {
+      map.addLayer({ id: shid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: shadowPaint(radius) })
+    } else {
+      map.setPaintProperty(shid, 'circle-radius', shadowPaint(radius)['circle-radius'])
+    }
+    if (!map.getLayer(rid)) {
+      map.addLayer({ id: rid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: ringPaint(radius) })
+    } else {
+      map.setPaintProperty(rid, 'circle-radius', ringPaint(radius)['circle-radius'])
+    }
+    if (!map.getLayer(lid)) {
+      map.addLayer({ id: lid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: pinPaint(color, radius) })
+    } else {
+      map.setPaintProperty(lid, 'circle-color', pinColorExpression(color))
+      map.setPaintProperty(lid, 'circle-radius', radius)
+    }
+
+    for (const id of [lid, rid, shid]) {
+      map.setPaintProperty(id, 'circle-opacity', enabled ? (id === shid ? 0.45 : 1) : 0)
+    }
+
+    const groupIconSpecs = [...iconSpecs.values()]
+    if (groupIconSpecs.length) {
+      const iconSize = iconSizeForRadius(radius)
+      registerColoredIcons(map, groupIconSpecs, ICON_IMAGE_SIZE).then(() => {
+        if (!map.getLayer(iid)) {
+          map.addLayer({
+            id: iid,
+            type: 'symbol',
+            source: sid,
+            filter: iconPointFilter(true),
+            layout: {
+              'icon-image': ['get', '_display_icon_image'],
+              'icon-size': iconSize,
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              'icon-anchor': 'center',
+            },
+            paint: { 'icon-opacity': enabled ? 1 : 0 },
+          })
+        } else {
+          map.setLayoutProperty(iid, 'icon-image', ['get', '_display_icon_image'])
+          map.setLayoutProperty(iid, 'icon-size', iconSize)
+          map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
+        }
+      }).catch((e) => {
+        console.warn('[expedition] icon register failed', groupIconSpecs, e)
+      })
+    } else if (map.getLayer(iid)) {
+      map.removeLayer(iid)
+    }
+
+    if (!map.getLayer(cid)) {
+      map.addLayer({
+        id: cid,
+        type: 'circle',
+        source: sid,
+        filter: ['has', 'point_count'],
+        paint: clusterPaint(groupColor),
+      })
+    } else {
+      map.setPaintProperty(cid, 'circle-color', groupColor)
+    }
+    if (!map.getLayer(ccid)) {
+      map.addLayer({
+        id: ccid,
+        type: 'symbol',
+        source: sid,
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-size': 11,
+          'text-font': ['Noto Sans Regular'],
+        },
+        paint: { 'text-color': '#FFFFFF' },
+      })
+    }
+    map.off('click', cid, onClusterClick)
+    map.on('click', cid, onClusterClick)
+
+    if (enabled && ui.isRadiusOn(layerName)) {
+      const halo = haloPaint(color, layerName)
+      if (!map.getLayer(haloId)) {
+        map.addLayer({ id: haloId, type: 'circle', source: sid, filter: ['!', ['has', 'point_count']], paint: halo })
+      } else {
+        map.setPaintProperty(haloId, 'circle-color', halo['circle-color'])
+        map.setPaintProperty(haloId, 'circle-radius', halo['circle-radius'])
+        map.setPaintProperty(haloId, 'circle-opacity', halo['circle-opacity'])
+        map.setPaintProperty(haloId, 'circle-stroke-color', halo['circle-stroke-color'])
+        map.setPaintProperty(haloId, 'circle-stroke-opacity', halo['circle-stroke-opacity'])
+      }
+    } else if (map.getLayer(haloId)) {
+      map.removeLayer(haloId)
+    }
+
+    const heatOn = enabled && ui.isHeatmapOn(layerName)
+    for (const id of [lid, rid, shid]) {
+      if (map.getLayer(id)) map.setPaintProperty(id, 'circle-opacity', heatOn ? 0 : (enabled ? (id === shid ? 0.45 : 1) : 0))
+    }
+    if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', heatOn ? 0 : (enabled ? 1 : 0))
+    _bindPointLayerHandlers(lid)
+    _bindPointLayerHandlers(iid)
+  }
+
+  _pruneGroupedArtifacts(layerName, activeSourceIds, activeLayerPrefixes)
+  lastLoadedFeatures[layerName] = fc
+  if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
+}
+
 function onPointClick(e) {
   const f = e.features && e.features[0]
   if (!f) return
@@ -775,9 +1014,7 @@ function onPointClick(e) {
   // lyr-<name>-shadow, lyr-<name>-clusters. Strip the prefix and
   // any of the suffixes to recover the layer name.
   const rawId = e.targetLayer || (f.layer && f.layer.id) || ''
-  const layerName = rawId
-    .replace(/^lyr-/, '')
-    .replace(/-(ring|shadow|icon|clusters|cluster-count)$/, '')
+  const layerName = layerNameFromRenderedLayerId(rawId)
   const fc = layerStore.features[layerName]
   const layerMeta = fc?.layer || layerStore.layers.find((l) => l.name === layerName)
   // Clear previous selection on the source, then mark the clicked one.
@@ -811,16 +1048,22 @@ function onPointMouseLeave() {
 
 async function onClusterClick(e) {
   const cid = (e.targetLayer || (e.features && e.features[0]?.layer?.id) || '')
-  const layerName = cid.replace(/^lyr-/, '').replace(/-clusters$/, '')
-  const features = map.queryRenderedFeatures(e.point, { layers: [clusterLayerId(layerName)] })
-  const clusterId = features[0]?.properties?.cluster_id
-  if (clusterId == null) return
-  const src = map.getSource(sourceId(layerName))
+  const layerName = layerNameFromRenderedLayerId(cid)
+  const queryLayer = map.getLayer(cid) ? cid : clusterLayerId(layerName)
+  if (!map.getLayer(queryLayer)) return
+  const rendered = map.queryRenderedFeatures(e.point, { layers: [queryLayer] })
+  const activeFeature = rendered[0]
+  const activeClusterId = activeFeature?.properties?.cluster_id
+  if (activeClusterId == null) return
+  const srcId = cid.includes('-grp-')
+    ? cid.replace(/^lyr-/, 'src-').replace(/-clusters$/, '')
+    : sourceId(layerName)
+  const src = map.getSource(srcId)
   if (!src) return
   try {
-    const zoom = await src.getClusterExpansionZoom(clusterId)
+    const zoom = await src.getClusterExpansionZoom(activeClusterId)
     map.easeTo({
-      center: features[0].geometry.coordinates,
+      center: activeFeature.geometry.coordinates,
       zoom,
       duration: 500,
       easing: t => 1 - Math.pow(1 - t, 3),
@@ -830,6 +1073,7 @@ async function onClusterClick(e) {
 
 function _removeLayerFromMap(layerName) {
   if (!map) return
+  _removeGroupedArtifacts(layerName)
   for (const id of [
     heatmapLayerId(layerName),
     haloLayerId(layerName),

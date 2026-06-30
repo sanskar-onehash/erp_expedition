@@ -169,7 +169,7 @@ const subtitle = computed(() => {
 const propRows = computed(() => {
   const f = feature.value
   if (!f) return []
-  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_color', '_icon', '_popup_fields'])
+  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_color', '_icon', '_icon_disabled', '_popup_fields'])
   const rows = []
   for (const [k, v] of Object.entries(f.properties || {})) {
     if (skip.has(k)) continue

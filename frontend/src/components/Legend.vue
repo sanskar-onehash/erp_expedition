@@ -9,8 +9,10 @@
  */
 import { computed } from 'vue'
 import { useLayersStore } from '../state/layers.js'
+import { useUiStore } from '../state/ui.js'
 
 const layerStore = useLayersStore()
+const ui = useUiStore()
 
 // All layers with their current enabled state, ordered by sequence
 const allLayers = computed(() =>
@@ -25,6 +27,10 @@ function colorOf(l) {
 function toggle(name, enabled) {
   layerStore.updateLayer(name, { enabled: enabled ? 0 : 1 })
 }
+
+function edit(l) {
+  ui.openLayerEditor(l)
+}
 </script>
 
 <template>
@@ -38,6 +44,7 @@ function toggle(name, enabled) {
       :title="(l.title || l.name) + ' (' + (l.source_doctype || '') + ')'"
       :aria-label="'Toggle ' + (l.title || l.name)"
       @click="toggle(l.name, l.enabled !== false && l.enabled !== 0)"
+      @contextmenu.prevent="edit(l)"
     >
       <span class="legend__swatch" :style="{ background: colorOf(l) }" />
       <span class="legend__label">{{ l.title || l.name }}</span>

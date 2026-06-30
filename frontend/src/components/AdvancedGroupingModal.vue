@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { call } from '../api/client.js'
 import { useIconsStore } from '../state/icons.js'
 import { ICON_PATHS } from '../api/icons.js'
@@ -29,6 +29,35 @@ const search = ref('')
 const expanded = ref(new Set())
 const treeTruncated = ref(false)
 const openIconMenuKey = ref('')
+const bandEdgePicker = ref({ key: '', levelIndex: -1, bandIndex: -1, edge: '', month: '', top: 0, left: 0 })
+const bandEdgePickerOpen = computed(() => !!bandEdgePicker.value.key)
+const bandEdgePickerTitle = computed(() =>
+  bandEdgePicker.value.edge === 'min' ? 'From' : 'To'
+)
+const activeBandKind = computed(() =>
+  levels.value[bandEdgePicker.value.levelIndex]?.kind || 'number'
+)
+const bandEdgeMonthLabel = computed(() => {
+  const date = monthDate(bandEdgePicker.value.month)
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+})
+const bandEdgeCalendarDays = computed(() => {
+  const base = monthDate(bandEdgePicker.value.month)
+  const first = new Date(base.getFullYear(), base.getMonth(), 1)
+  const startOffset = first.getDay()
+  const daysInMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate()
+  const out = []
+  for (let i = 0; i < startOffset; i++) out.push(null)
+  for (let day = 1; day <= daysInMonth; day++) {
+    const value = dateInputValue(new Date(base.getFullYear(), base.getMonth(), day))
+    out.push({ day, value })
+  }
+  return out
+})
+const bandEdgePickerStyle = computed(() => ({
+  top: `${bandEdgePicker.value.top || 0}px`,
+  left: `${bandEdgePicker.value.left || 0}px`,
+}))
 
 const availableFields = computed(() =>
   props.sourceFields.filter((field) => !levels.value.some((level) => level.field === field.fieldname))
@@ -63,11 +92,25 @@ watch(
 )
 
 watch(
-  () => levels.value.map((level) => level.field).join('|'),
+  () => JSON.stringify(levels.value.map(serializeLevel)),
   () => {
     if (props.open) loadTree()
   }
 )
+
+function onDocumentClick(e) {
+  if (!e.target?.closest?.('.agm__band-date-menu') && !e.target?.closest?.('.agm__date-trigger')) {
+    closeBandEdgePicker()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
+})
 
 function clone(value) {
   try {
@@ -342,18 +385,183 @@ function setLevelMode(index, mode) {
   pruneGroupsToLevels()
 }
 
+function bandKey() {
+  return `band_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+}
+
+function dateInputValue(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function monthDate(value) {
+  const source = value || dateInputValue(new Date())
+  const [year, month] = String(source).split('-').map((part) => Number(part))
+  return new Date(year || new Date().getFullYear(), Math.max(0, (month || 1) - 1), 1)
+}
+
+function addMonths(date, months) {
+  const next = new Date(date)
+  next.setMonth(next.getMonth() + months)
+  return next
+}
+
+function bandEdgeValue(levelIndex, bandIndex, edge) {
+  return levels.value[levelIndex]?.bands?.[bandIndex]?.[edge] ?? ''
+}
+
+function bandEdgeDate(value) {
+  return String(value || '').slice(0, 10)
+}
+
+function bandEdgeTime(value) {
+  const text = String(value || '')
+  if (text.includes('T')) return text.slice(11, 16)
+  if (text.includes(' ')) return text.slice(11, 16)
+  if (/^\d{2}:\d{2}/.test(text)) return text.slice(0, 5)
+  return ''
+}
+
+function formatBandEdgeValue(value, placeholder) {
+  return value === '' || value == null ? placeholder : String(value).replace('T', ' ')
+}
+
+function openBandEdgePicker(levelIndex, bandIndex, edge, event = null) {
+  const value = bandEdgeValue(levelIndex, bandIndex, edge)
+  const dateText = bandEdgeDate(value) || dateInputValue(new Date())
+  const rect = event?.currentTarget?.getBoundingClientRect?.()
+  const pickerWidth = 236
+  const pickerHeight = levels.value[levelIndex]?.kind === 'time' ? 118 : 292
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
+  const left = rect ? Math.min(Math.max(rect.left, 8), Math.max(8, viewportWidth - pickerWidth - 8)) : 0
+  const below = rect ? rect.bottom + 6 : 0
+  const above = rect ? rect.top - pickerHeight - 6 : 0
+  const top = rect && below + pickerHeight > viewportHeight - 8 && above > 8 ? above : below
+  bandEdgePicker.value = {
+    key: `${levelIndex}:${bandIndex}:${edge}`,
+    levelIndex,
+    bandIndex,
+    edge,
+    month: dateText,
+    top,
+    left,
+  }
+}
+
+function closeBandEdgePicker() {
+  bandEdgePicker.value = { key: '', levelIndex: -1, bandIndex: -1, edge: '', month: '', top: 0, left: 0 }
+}
+
+function shiftBandEdgeMonth(delta) {
+  bandEdgePicker.value = {
+    ...bandEdgePicker.value,
+    month: dateInputValue(addMonths(monthDate(bandEdgePicker.value.month), delta)),
+  }
+}
+
+function updateLevelBand(levelIndex, bandIndex, patch) {
+  const level = levels.value[levelIndex]
+  if (!level?.bands?.[bandIndex]) return
+  const bands = [...level.bands]
+  const current = bands[bandIndex]
+  if (Object.prototype.hasOwnProperty.call(patch, 'max') && bands[bandIndex + 1] && sameBandEdge(bands[bandIndex + 1].min, current.max)) {
+    bands[bandIndex + 1] = withBandLabel({ ...bands[bandIndex + 1], min: patch.max })
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'min') && bands[bandIndex - 1] && sameBandEdge(bands[bandIndex - 1].max, current.min)) {
+    bands[bandIndex - 1] = withBandLabel({ ...bands[bandIndex - 1], max: patch.min })
+  }
+  bands[bandIndex] = withBandLabel({ ...bands[bandIndex], ...patch })
+  const next = [...levels.value]
+  next[levelIndex] = { ...level, bands }
+  levels.value = next
+}
+
+function selectBandDate(dateText) {
+  const { levelIndex, bandIndex, edge } = bandEdgePicker.value
+  if (levelIndex < 0 || bandIndex < 0 || !edge) return
+  const current = bandEdgeValue(levelIndex, bandIndex, edge)
+  const kind = levels.value[levelIndex]?.kind
+  const time = kind === 'datetime' ? (bandEdgeTime(current) || '00:00') : ''
+  updateLevelBand(levelIndex, bandIndex, { [edge]: kind === 'datetime' ? `${dateText}T${time}` : dateText })
+  if (kind === 'date') closeBandEdgePicker()
+}
+
+function updateBandEdgeTime(value) {
+  const { levelIndex, bandIndex, edge } = bandEdgePicker.value
+  if (levelIndex < 0 || bandIndex < 0 || !edge) return
+  const kind = levels.value[levelIndex]?.kind
+  if (kind === 'time') {
+    updateLevelBand(levelIndex, bandIndex, { [edge]: value })
+    return
+  }
+  const dateText = bandEdgeDate(bandEdgeValue(levelIndex, bandIndex, edge)) || dateInputValue(new Date())
+  updateLevelBand(levelIndex, bandIndex, { [edge]: `${dateText}T${value || '00:00'}` })
+}
+
+function sameBandEdge(a, b) {
+  return String(a ?? '') === String(b ?? '')
+}
+
+function withBandLabel(band) {
+  return { ...band, label: bandLabel({ ...band, label: '' }) }
+}
+
+function addLevelBand(levelIndex) {
+  const level = levels.value[levelIndex]
+  if (!level || level.mode !== 'bands') return
+  const bands = [...(level.bands || [])]
+  const previous = bands[bands.length - 1]
+  bands.push(withBandLabel({ key: bandKey(), min: previous?.max ?? '', max: '' }))
+  const next = [...levels.value]
+  next[levelIndex] = { ...level, bands }
+  levels.value = next
+}
+
+function removeLevelBand(levelIndex, bandIndex) {
+  const level = levels.value[levelIndex]
+  if (!level || level.mode !== 'bands') return
+  const bands = [...(level.bands || [])]
+  bands.splice(bandIndex, 1)
+  const next = [...levels.value]
+  next[levelIndex] = { ...level, bands }
+  levels.value = next
+}
+
 function defaultBands(kind) {
+  if (kind === 'date') {
+    const today = new Date()
+    const nextMonth = dateInputValue(addMonths(today, 1))
+    const afterNextMonth = dateInputValue(addMonths(today, 2))
+    return [
+      { key: bandKey(), min: '', max: nextMonth, label: `< ${nextMonth}` },
+      { key: bandKey(), min: nextMonth, max: afterNextMonth, label: `${nextMonth} - ${afterNextMonth}` },
+      { key: bandKey(), min: afterNextMonth, max: '', label: `>= ${afterNextMonth}` },
+    ]
+  }
+  if (kind === 'datetime') {
+    const today = new Date()
+    const nextMonth = `${dateInputValue(addMonths(today, 1))}T00:00`
+    const afterNextMonth = `${dateInputValue(addMonths(today, 2))}T00:00`
+    return [
+      { key: bandKey(), min: '', max: nextMonth, label: `< ${nextMonth}` },
+      { key: bandKey(), min: nextMonth, max: afterNextMonth, label: `${nextMonth} - ${afterNextMonth}` },
+      { key: bandKey(), min: afterNextMonth, max: '', label: `>= ${afterNextMonth}` },
+    ]
+  }
   if (kind === 'time') {
     return [
-      { key: 'band_1', min: '', max: '09:00', label: '< 09:00' },
-      { key: 'band_2', min: '09:00', max: '17:00', label: '09:00 - 17:00' },
-      { key: 'band_3', min: '17:00', max: '', label: '>= 17:00' },
+      { key: bandKey(), min: '', max: '09:00', label: '< 09:00' },
+      { key: bandKey(), min: '09:00', max: '17:00', label: '09:00 - 17:00' },
+      { key: bandKey(), min: '17:00', max: '', label: '>= 17:00' },
     ]
   }
   return [
-    { key: 'band_1', min: '', max: 1000, label: '< 1000' },
-    { key: 'band_2', min: 1000, max: 2000, label: '1000 - 2000' },
-    { key: 'band_3', min: 2000, max: '', label: '>= 2000' },
+    { key: bandKey(), min: '', max: 1000, label: '< 1000' },
+    { key: bandKey(), min: 1000, max: 2000, label: '1000 - 2000' },
+    { key: bandKey(), min: 2000, max: '', label: '>= 2000' },
   ]
 }
 
@@ -510,23 +718,62 @@ function clearGrouping() {
           <div v-for="(level, index) in levels" :key="index" class="agm__level">
             <span class="agm__level-index">{{ index + 1 }}</span>
             <div class="agm__level-main">
-              <select class="agm__input" :value="level.field" @change="updateLevel(index, $event.target.value)">
-                <option :value="level.field">{{ fieldByName.get(level.field)?.label || level.field }}</option>
-                <option v-for="field in availableFields" :key="field.fieldname" :value="field.fieldname">
-                  {{ field.label }} · {{ field.fieldname }}
-                </option>
-              </select>
-              <select
-                v-if="fieldSupportsBands(level.field)"
-                class="agm__input agm__input--mode"
-                :value="level.mode"
-                @change="setLevelMode(index, $event.target.value)"
-              >
-                <option value="value">Exact values</option>
-                <option value="bands">Bands</option>
-              </select>
+              <div class="agm__level-config">
+                <div class="agm__level-pickers">
+                <select class="agm__input" :value="level.field" @change="updateLevel(index, $event.target.value)">
+                  <option :value="level.field">{{ fieldByName.get(level.field)?.label || level.field }}</option>
+                  <option v-for="field in availableFields" :key="field.fieldname" :value="field.fieldname">
+                    {{ field.label }} · {{ field.fieldname }}
+                  </option>
+                </select>
+                  <select
+                    v-if="fieldSupportsBands(level.field)"
+                    class="agm__input agm__input--mode"
+                    :value="level.mode"
+                    @change="setLevelMode(index, $event.target.value)"
+                  >
+                    <option value="value">Exact values</option>
+                    <option value="bands">Bands</option>
+                  </select>
+                </div>
+                <button type="button" class="agm__icon-btn" aria-label="Remove level" @click="removeLevel(index)">×</button>
+              </div>
             </div>
-            <button type="button" class="agm__icon-btn" aria-label="Remove level" @click="removeLevel(index)">×</button>
+            <div v-if="level.mode === 'bands'" class="agm__bands">
+              <div v-for="(band, bandIndex) in level.bands" :key="band.key" class="agm__band-row">
+                <input
+                  v-if="level.kind === 'number'"
+                  class="agm__input agm__band-number"
+                  type="number"
+                  placeholder="From"
+                  :value="band.min"
+                  @input="updateLevelBand(index, bandIndex, { min: $event.target.value })"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="agm__date-trigger"
+                  @click="openBandEdgePicker(index, bandIndex, 'min', $event)"
+                >{{ formatBandEdgeValue(band.min, 'From') }}</button>
+                <input
+                  v-if="level.kind === 'number'"
+                  class="agm__input agm__band-number"
+                  type="number"
+                  placeholder="To"
+                  :value="band.max"
+                  @input="updateLevelBand(index, bandIndex, { max: $event.target.value })"
+                />
+                <button
+                  v-else
+                  type="button"
+                  class="agm__date-trigger"
+                  @click="openBandEdgePicker(index, bandIndex, 'max', $event)"
+                >{{ formatBandEdgeValue(band.max, 'To') }}</button>
+                <span class="agm__band-label">{{ bandLabel(band) }}</span>
+                <button type="button" class="agm__mini-btn" aria-label="Remove band" @click="removeLevelBand(index, bandIndex)">×</button>
+              </div>
+              <button type="button" class="agm__ghost agm__add-band" @click="addLevelBand(index)">Add band</button>
+            </div>
           </div>
           <p v-if="levels.length > 3" class="agm__warn">More than 3 levels can make the legend and map harder to scan.</p>
           <button type="button" class="agm__danger" @click="clearGrouping" :disabled="!hasAdvancedGrouping">Clear grouping</button>
@@ -672,6 +919,46 @@ function clearGrouping() {
         <button type="button" class="agm__primary" @click="save">Apply grouping</button>
       </footer>
     </section>
+    <div
+      v-if="bandEdgePickerOpen"
+      class="agm__band-date-menu"
+      :style="bandEdgePickerStyle"
+    >
+      <div class="agm__date-head">
+        <button type="button" class="agm__date-nav" @click="shiftBandEdgeMonth(-1)" aria-label="Previous month">‹</button>
+        <span>{{ activeBandKind === 'time' ? bandEdgePickerTitle : bandEdgeMonthLabel }}</span>
+        <button v-if="activeBandKind !== 'time'" type="button" class="agm__date-nav" @click="shiftBandEdgeMonth(1)" aria-label="Next month">›</button>
+      </div>
+      <template v-if="activeBandKind !== 'time'">
+        <div class="agm__date-week">
+          <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+        </div>
+        <div class="agm__date-grid">
+          <span v-for="(day, dayIndex) in bandEdgeCalendarDays" :key="dayIndex" class="agm__date-empty">
+            <button
+              v-if="day"
+              type="button"
+              class="agm__date-day"
+              :data-active="bandEdgeDate(bandEdgeValue(bandEdgePicker.levelIndex, bandEdgePicker.bandIndex, bandEdgePicker.edge)) === day.value"
+              @click="selectBandDate(day.value)"
+            >{{ day.day }}</button>
+          </span>
+        </div>
+      </template>
+      <label v-if="activeBandKind !== 'date'" class="agm__time-row">
+        <span>Time</span>
+        <input
+          class="agm__input agm__time-input"
+          type="time"
+          :value="bandEdgeTime(bandEdgeValue(bandEdgePicker.levelIndex, bandEdgePicker.bandIndex, bandEdgePicker.edge))"
+          @input="updateBandEdgeTime($event.target.value)"
+        />
+      </label>
+      <div class="agm__date-actions">
+        <button type="button" class="agm__ghost" @click="updateLevelBand(bandEdgePicker.levelIndex, bandEdgePicker.bandIndex, { [bandEdgePicker.edge]: '' }); closeBandEdgePicker()">Clear</button>
+        <button type="button" class="agm__ghost" @click="closeBandEdgePicker">Done</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -750,7 +1037,7 @@ function clearGrouping() {
 .agm__toolbar { margin-bottom: 12px; }
 .agm__level {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 30px;
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
   gap: 8px;
   margin-bottom: 8px;
@@ -760,6 +1047,166 @@ function clearGrouping() {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.agm__level-config {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: start;
+}
+.agm__level-pickers {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agm__bands {
+  grid-column: 2 / 3;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agm__band-row {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  gap: 5px;
+  align-items: center;
+  padding: 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.38);
+}
+.agm__band-number {
+  grid-column: 1;
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+.agm__date-trigger {
+  grid-column: 1 / 3;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(15, 23, 42, 0.72);
+  color: rgba(226, 232, 240, 0.86);
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.agm__date-trigger:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.agm__band-label {
+  grid-column: 1;
+  min-width: 0;
+  color: rgba(226, 232, 240, 0.62);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agm__mini-btn {
+  grid-column: 2;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #E2E8F0;
+  cursor: pointer;
+}
+.agm__add-band {
+  width: max-content;
+  height: 28px;
+  font-size: 11px;
+}
+.agm__band-date-menu {
+  position: fixed;
+  z-index: 100;
+  width: 210px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 20, 24, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+}
+.agm__date-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #E6E8EC;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.agm__date-nav {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #E6E8EC;
+  cursor: pointer;
+}
+.agm__date-week,
+.agm__date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.agm__date-week {
+  margin-bottom: 4px;
+  color: rgba(230, 232, 236, 0.42);
+  font-size: 10px;
+  text-align: center;
+}
+.agm__date-empty {
+  min-height: 26px;
+}
+.agm__date-day {
+  width: 100%;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.84);
+  cursor: pointer;
+}
+.agm__date-day:hover,
+.agm__date-day[data-active="true"] {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.55);
+}
+.agm__time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: rgba(230, 232, 236, 0.68);
+  font-size: 11px;
+}
+.agm__time-input {
+  width: 112px;
+  height: 28px;
+  font-size: 11px;
+}
+.agm__date-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
 }
 .agm__level-index {
   display: grid;

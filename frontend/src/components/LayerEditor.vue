@@ -286,7 +286,7 @@ function onGroupIconMenuToggle(e) {
 function onDocumentClick(e) {
   if (!e.target?.closest?.('.le__group-icon-menu')) closeGroupIconMenus()
   if (!e.target?.closest?.('.le__group-color-menu')) closeGroupColorMenus()
-  if (!e.target?.closest?.('.le__band-date-menu')) closeBandEdgePicker()
+  if (!e.target?.closest?.('.le__band-date-menu') && !e.target?.closest?.('.le__date-trigger')) closeBandEdgePicker()
   if (!e.target?.closest?.('.le__group-field-menu')) {
     document.querySelectorAll('.le__group-field-menu[open]').forEach((menu) => {
       menu.removeAttribute('open')

@@ -858,6 +858,14 @@ function _addLayerOnMap(layerName) {
 function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, radius, enabled, iconSpecs }) {
   _removeBasePointArtifacts(layerName)
 
+  const groupIconSpecs = [...iconSpecs.values()]
+  const iconSize = iconSizeForRadius(radius)
+  const iconsReady = groupIconSpecs.length
+    ? registerColoredIcons(map, groupIconSpecs, ICON_IMAGE_SIZE).catch((e) => {
+        console.warn('[expedition] icon register failed', groupIconSpecs, e)
+      })
+    : Promise.resolve()
+
   const groups = new Map()
   for (const feature of sourceFeatures) {
     const key = featureGroupKey(feature) || '__ungrouped'
@@ -919,10 +927,8 @@ function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, ra
       map.setPaintProperty(id, 'circle-opacity', enabled ? (id === shid ? 0.45 : 1) : 0)
     }
 
-    const groupIconSpecs = [...iconSpecs.values()]
     if (groupIconSpecs.length) {
-      const iconSize = iconSizeForRadius(radius)
-      registerColoredIcons(map, groupIconSpecs, ICON_IMAGE_SIZE).then(() => {
+      iconsReady.then(() => {
         if (!map.getLayer(iid)) {
           map.addLayer({
             id: iid,
@@ -943,8 +949,6 @@ function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, ra
           map.setLayoutProperty(iid, 'icon-size', iconSize)
           map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
         }
-      }).catch((e) => {
-        console.warn('[expedition] icon register failed', groupIconSpecs, e)
       })
     } else if (map.getLayer(iid)) {
       map.removeLayer(iid)

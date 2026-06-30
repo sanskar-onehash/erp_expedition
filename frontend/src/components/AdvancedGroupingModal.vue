@@ -28,6 +28,7 @@ const error = ref('')
 const search = ref('')
 const expanded = ref(new Set())
 const treeTruncated = ref(false)
+const openIconMenuKey = ref('')
 
 const availableFields = computed(() =>
   props.sourceFields.filter((field) => !levels.value.some((level) => level.field === field.fieldname))
@@ -236,6 +237,18 @@ const treeRows = computed(() => {
     if (!query && !ancestorsExpanded(row)) return false
     if (!query) return true
     return row.fullLabel.toLowerCase().includes(query)
+  }).map((row) => {
+    const override = groupOverride(row.key)
+    const style = effectiveStyle(row)
+    return {
+      ...row,
+      override,
+      style,
+      displayLabel: override.label || row.label,
+      colorInheritance: inheritanceLabel(row, 'color'),
+      iconInheritance: inheritanceLabel(row, 'icon'),
+      triggerIconKey: triggerIconFromStyle(row, style, override),
+    }
   })
 })
 
@@ -392,13 +405,6 @@ function inheritanceLabel(row, prop) {
   return `Inherited from ${row.values[row.values.length - 2]}`
 }
 
-function iconSelectValue(row) {
-  const override = groupOverride(row.key)
-  return Object.prototype.hasOwnProperty.call(override, 'icon')
-    ? override.icon
-    : effectiveStyle(row).icon
-}
-
 function setGroupProp(key, prop, value) {
   const nextGroups = { ...groups.value }
   const next = { ...(nextGroups[key] || {}) }
@@ -436,9 +442,15 @@ function iconOption(iconKey) {
   return iconKey ? iconStore.byKey.get(iconKey) : null
 }
 
-function triggerIcon(row) {
-  const iconKey = iconSelectValue(row)
+function triggerIconFromStyle(row, style, override = groupOverride(row.key)) {
+  const iconKey = Object.prototype.hasOwnProperty.call(override, 'icon')
+    ? override.icon
+    : style.icon
   return iconKey === '__none' ? '' : iconKey
+}
+
+function onIconMenuToggle(row, event) {
+  openIconMenuKey.value = event?.target?.open ? row.key : ''
 }
 
 function closeRowMenu(event) {
@@ -547,17 +559,17 @@ function clearGrouping() {
               >{{ row.hasChildren ? (expanded.has(row.key) ? '⌄' : '›') : '' }}</button>
               <div class="agm__node">
                 <div class="agm__node-title">
-                  <span class="agm__swatch" :style="{ background: effectiveStyle(row).color }" />
-                  <span>{{ groupOverride(row.key).label || row.label }}</span>
+                  <span class="agm__swatch" :style="{ background: row.style.color }" />
+                  <span>{{ row.displayLabel }}</span>
                   <small v-if="row.depth > 0">{{ row.fullLabel }}</small>
                 </div>
                 <div class="agm__controls">
                   <div class="agm__prop">
-                    <span>{{ inheritanceLabel(row, 'color') }}</span>
+                    <span>{{ row.colorInheritance }}</span>
                     <details class="agm__color-menu">
                       <summary
                         class="agm__color-trigger"
-                        :style="{ background: groupOverride(row.key).color || effectiveStyle(row).color }"
+                        :style="{ background: row.override.color || row.style.color }"
                         :title="'Color for ' + row.fullLabel"
                       />
                       <div class="agm__color-popover">
@@ -566,20 +578,20 @@ function clearGrouping() {
                           :key="color"
                           type="button"
                           class="agm__color-chip"
-                          :class="{ 'agm__color-chip--active': groupOverride(row.key).color === color }"
+                          :class="{ 'agm__color-chip--active': row.override.color === color }"
                           :style="{ background: color }"
                           @click="setGroupProp(row.key, 'color', color); closeRowMenu($event)"
                         />
                         <input
                           class="agm__input agm__color-code"
-                          :value="groupOverride(row.key).color || effectiveStyle(row).color"
+                          :value="row.override.color || row.style.color"
                           placeholder="#RRGGBB"
                           @input="setGroupProp(row.key, 'color', $event.target.value)"
                         />
                         <input
                           class="agm__color-picker"
                           type="color"
-                          :value="groupOverride(row.key).color || effectiveStyle(row).color"
+                          :value="row.override.color || row.style.color"
                           title="Pick custom color"
                           @input="setGroupProp(row.key, 'color', $event.target.value)"
                         />
@@ -588,40 +600,40 @@ function clearGrouping() {
                     <button type="button" class="agm__reset" @click="resetGroupProp(row.key, 'color')">Reset</button>
                   </div>
                   <div class="agm__prop">
-                    <span>{{ inheritanceLabel(row, 'icon') }}</span>
-                    <details class="agm__icon-menu">
-                      <summary class="agm__icon-trigger" :title="iconLabel(iconOption(triggerIcon(row))) || 'No icon'">
-                        <template v-if="iconOption(triggerIcon(row))">
-                          <svg v-if="isBuiltinIcon(iconOption(triggerIcon(row)))" class="agm__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
-                            <path :d="ICON_PATHS[iconOption(triggerIcon(row)).key] || ''" fill="currentColor" />
+                    <span>{{ row.iconInheritance }}</span>
+                    <details class="agm__icon-menu" @toggle="onIconMenuToggle(row, $event)">
+                      <summary class="agm__icon-trigger" :title="iconLabel(iconOption(row.triggerIconKey)) || 'No icon'">
+                        <template v-if="iconOption(row.triggerIconKey)">
+                          <svg v-if="isBuiltinIcon(iconOption(row.triggerIconKey))" class="agm__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
+                            <path :d="ICON_PATHS[iconOption(row.triggerIconKey).key] || ''" fill="currentColor" />
                           </svg>
-                          <span v-else-if="iconOption(triggerIcon(row)).icon_format !== 'Image'" class="agm__icon-preview agm__icon-preview--custom" v-html="iconOption(triggerIcon(row)).svg_content" />
-                          <img v-else class="agm__icon-preview agm__icon-preview--image" :src="iconOption(triggerIcon(row)).image_data_url" alt="" />
+                          <span v-else-if="iconOption(row.triggerIconKey).icon_format !== 'Image'" class="agm__icon-preview agm__icon-preview--custom" v-html="iconOption(row.triggerIconKey).svg_content" />
+                          <img v-else class="agm__icon-preview agm__icon-preview--image" :src="iconOption(row.triggerIconKey).image_data_url" alt="" />
                         </template>
                         <span v-else class="agm__icon-preview agm__icon-preview--none">∅</span>
                       </summary>
-                      <div class="agm__icons" role="radiogroup" :aria-label="'Icon for ' + row.fullLabel">
+                      <div v-if="openIconMenuKey === row.key" class="agm__icons" role="radiogroup" :aria-label="'Icon for ' + row.fullLabel">
                         <button
                           type="button"
                           class="agm__icon"
-                          :data-active="!Object.prototype.hasOwnProperty.call(groupOverride(row.key), 'icon')"
+                          :data-active="!Object.prototype.hasOwnProperty.call(row.override, 'icon')"
                           title="Inherited icon"
                           aria-label="Inherited icon"
                           @click="resetGroupProp(row.key, 'icon'); closeRowMenu($event)"
                         >
-                          <template v-if="iconOption(effectiveStyle(row).icon)">
-                            <svg v-if="isBuiltinIcon(iconOption(effectiveStyle(row).icon))" class="agm__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
-                              <path :d="ICON_PATHS[iconOption(effectiveStyle(row).icon).key] || ''" fill="currentColor" />
+                          <template v-if="iconOption(row.style.icon)">
+                            <svg v-if="isBuiltinIcon(iconOption(row.style.icon))" class="agm__icon-preview" viewBox="0 0 24 24" aria-hidden="true">
+                              <path :d="ICON_PATHS[iconOption(row.style.icon).key] || ''" fill="currentColor" />
                             </svg>
-                            <span v-else-if="iconOption(effectiveStyle(row).icon).icon_format !== 'Image'" class="agm__icon-preview agm__icon-preview--custom" v-html="iconOption(effectiveStyle(row).icon).svg_content" />
-                            <img v-else class="agm__icon-preview agm__icon-preview--image" :src="iconOption(effectiveStyle(row).icon).image_data_url" alt="" />
+                            <span v-else-if="iconOption(row.style.icon).icon_format !== 'Image'" class="agm__icon-preview agm__icon-preview--custom" v-html="iconOption(row.style.icon).svg_content" />
+                            <img v-else class="agm__icon-preview agm__icon-preview--image" :src="iconOption(row.style.icon).image_data_url" alt="" />
                           </template>
                           <span v-else class="agm__icon-preview agm__icon-preview--none">∅</span>
                         </button>
                         <button
                           type="button"
                           class="agm__icon"
-                          :data-active="groupOverride(row.key).icon === '__none'"
+                          :data-active="row.override.icon === '__none'"
                           title="No icon"
                           aria-label="No icon"
                           @click="setGroupProp(row.key, 'icon', '__none'); closeRowMenu($event)"
@@ -633,7 +645,7 @@ function clearGrouping() {
                           :key="icon.key"
                           type="button"
                           class="agm__icon"
-                          :data-active="groupOverride(row.key).icon === icon.key"
+                          :data-active="row.override.icon === icon.key"
                           :title="iconLabel(icon)"
                           :aria-label="iconLabel(icon)"
                           @click="setGroupProp(row.key, 'icon', icon.key); closeRowMenu($event)"

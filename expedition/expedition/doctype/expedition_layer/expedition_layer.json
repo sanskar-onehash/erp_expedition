@@ -10,30 +10,68 @@
   "map",
   "sequence",
   "enabled",
-  "source_section",
+
+  "tab_source",
   "source_doctype",
   "latitude_field",
   "longitude_field",
   "label_field",
+  "column_source_b",
   "preset",
-  "filter_json",
-  "group_by_field",
-  "group_config_json",
+  "source_section",
+
+  "tab_filters",
+  "filter_section",
+  "filters",
+
+  "tab_style",
   "style_section",
   "color",
   "icon",
   "size",
   "cluster",
-  "heatmap",
+  "column_style_b",
   "stroke_color",
   "stroke_width",
   "fill_opacity",
+  "radius_enabled",
+  "radius_field",
+  "radius_meters",
+  "radius_opacity",
+
+  "tab_group",
+  "group_section",
+  "group_by_field",
+  "column_group_b",
+  "groups",
+
+  "tab_heatmap",
+  "heatmap_section",
+  "heatmap",
+  "heatmap_mode",
+  "heatmap_weight_field",
+  "heatmap_weight_min",
+  "heatmap_weight_max",
+  "heatmap_weight_scale",
+  "column_heatmap_b",
+  "heatmap_radius_min",
+  "heatmap_radius_max",
+  "heatmap_intensity_max",
+  "heatmap_opacity",
+  "heatmap_ramp_json",
+
+  "tab_popup",
   "popup_section",
+  "click_action",
   "popup_template",
   "popup_fields_json",
-  "click_action",
+
+  "tab_permissions",
   "permissions_section",
-  "use_source_permissions"
+  "use_source_permissions",
+
+  "filter_json",
+  "group_config_json"
  ],
  "fields": [
   {
@@ -63,8 +101,8 @@
    "default": "1"
   },
   {
-   "fieldname": "source_section",
-   "fieldtype": "Section Break",
+   "fieldname": "tab_source",
+   "fieldtype": "Tab Break",
    "label": "Source"
   },
   {
@@ -96,6 +134,10 @@
    "description": "Optional DocType field used as the pin label."
   },
   {
+   "fieldname": "column_source_b",
+   "fieldtype": "Column Break"
+  },
+  {
    "fieldname": "preset",
    "fieldtype": "Link",
    "label": "Style Preset",
@@ -103,22 +145,30 @@
    "description": "Optional pre-styled template (color/icon/size)."
   },
   {
-   "fieldname": "filter_json",
-   "fieldtype": "Code",
-   "label": "Filter",
-   "description": "JSON filter applied on the source DocType before fetching rows. Server is the permission boundary; this is advisory."
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source"
   },
   {
-   "fieldname": "group_by_field",
-   "fieldtype": "Data",
-   "label": "Group Pins By",
-   "description": "Source-DocType field to segment pins by (e.g. customer_type, status, division). Empty = single color."
+   "fieldname": "tab_filters",
+   "fieldtype": "Tab Break",
+   "label": "Filters"
   },
   {
-   "fieldname": "group_config_json",
-   "fieldtype": "Code",
-   "label": "Group Config",
-   "description": "JSON: { \"<value>\": { \"color\": \"#xxx\", \"icon\": \"id\", \"label\": \"...\" }, ... }. Per-group overrides."
+   "fieldname": "filter_section",
+   "fieldtype": "Section Break",
+   "label": "Filters"
+  },
+  {
+   "fieldname": "filters",
+   "fieldtype": "Table",
+   "label": "Filters",
+   "options": "Expedition Layer Filter"
+  },
+  {
+   "fieldname": "tab_style",
+   "fieldtype": "Tab Break",
+   "label": "Style"
   },
   {
    "fieldname": "style_section",
@@ -150,10 +200,8 @@
    "default": "1"
   },
   {
-   "fieldname": "heatmap",
-   "fieldtype": "Check",
-   "label": "Heatmap",
-   "default": "0"
+   "fieldname": "column_style_b",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "stroke_color",
@@ -173,40 +221,153 @@
    "default": "0.6"
   },
   {
-   "fieldname": "radius_section",
-   "fieldtype": "Section Break",
-   "label": "Radius Halo"
-  },
-  {
    "fieldname": "radius_enabled",
    "fieldtype": "Check",
-   "label": "Render Radius Halo",
-   "default": "0",
-   "description": "Draw a translucent circle around each pin representing a service area."
+   "label": "Enable Radius",
+   "default": "0"
   },
   {
    "fieldname": "radius_field",
    "fieldtype": "Data",
    "label": "Radius Field",
-   "description": "Source-DocType field with a per-feature numeric radius (e.g. service_radius_km). Empty = use the layer default meters below."
+   "description": "Numeric field whose value (in meters) sets the circle radius for each feature. Leave empty to use a fixed radius."
   },
   {
    "fieldname": "radius_meters",
    "fieldtype": "Int",
-   "label": "Default Radius (m)",
-   "default": "5000",
-   "description": "Used when radius_field is empty or a feature is missing the value."
+   "label": "Fixed Radius (meters)",
+   "default": "5000"
   },
   {
    "fieldname": "radius_opacity",
    "fieldtype": "Float",
-   "label": "Halo Opacity",
+   "label": "Radius Fill Opacity",
    "default": "0.18"
+  },
+  {
+   "fieldname": "tab_group",
+   "fieldtype": "Tab Break",
+   "label": "Group By"
+  },
+  {
+   "fieldname": "group_section",
+   "fieldtype": "Section Break",
+   "label": "Segmentation"
+  },
+  {
+   "fieldname": "group_by_field",
+   "fieldtype": "Data",
+   "label": "Group Pins By",
+   "description": "Source-DocType field to segment pins by (e.g. customer_type, status, division). Empty = single color."
+  },
+  {
+   "fieldname": "column_group_b",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "groups",
+   "fieldtype": "Table",
+   "label": "Groups",
+   "options": "Expedition Layer Group"
+  },
+  {
+   "fieldname": "tab_heatmap",
+   "fieldtype": "Tab Break",
+   "label": "Heatmap"
+  },
+  {
+   "fieldname": "heatmap_section",
+   "fieldtype": "Section Break",
+   "label": "Heatmap"
+  },
+  {
+   "fieldname": "heatmap",
+   "fieldtype": "Check",
+   "label": "Heatmap",
+   "default": "0"
+  },
+  {
+   "fieldname": "heatmap_mode",
+   "fieldtype": "Select",
+   "label": "Heatmap Mode",
+   "options": "count\nsum",
+   "default": "count",
+   "description": "count = record density. sum = weighted density using a numeric source field."
+  },
+  {
+   "fieldname": "heatmap_weight_field",
+   "fieldtype": "Data",
+   "label": "Heatmap Metric Field",
+   "description": "Numeric source field used when Heatmap Mode is sum."
+  },
+  {
+   "fieldname": "heatmap_weight_min",
+   "fieldtype": "Float",
+   "label": "Heatmap Metric Min"
+  },
+  {
+   "fieldname": "heatmap_weight_max",
+   "fieldtype": "Float",
+   "label": "Heatmap Metric Max"
+  },
+  {
+   "fieldname": "heatmap_weight_scale",
+   "fieldtype": "Select",
+   "label": "Heatmap Metric Scale",
+   "options": "linear\nlog",
+   "default": "linear"
+  },
+  {
+   "fieldname": "column_heatmap_b",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "heatmap_radius_min",
+   "fieldtype": "Int",
+   "label": "Heatmap Radius Min",
+   "default": "10"
+  },
+  {
+   "fieldname": "heatmap_radius_max",
+   "fieldtype": "Int",
+   "label": "Heatmap Radius",
+   "default": "30"
+  },
+  {
+   "fieldname": "heatmap_intensity_max",
+   "fieldtype": "Float",
+   "label": "Heatmap Intensity",
+   "default": "2.5"
+  },
+  {
+   "fieldname": "heatmap_opacity",
+   "fieldtype": "Float",
+   "label": "Heatmap Opacity",
+   "default": "0.75"
+  },
+  {
+   "fieldname": "heatmap_ramp_json",
+   "fieldtype": "Code",
+   "label": "Heatmap Color Ramp",
+   "description": "Optional JSON array of {stop, color, alpha} ramp stops."
+  },
+  {
+   "fieldname": "tab_popup",
+   "fieldtype": "Tab Break",
+   "label": "Popup"
   },
   {
    "fieldname": "popup_section",
    "fieldtype": "Section Break",
-   "label": "Popup"
+   "label": "Popup & Behavior"
+  },
+  {
+   "fieldname": "click_action",
+   "fieldtype": "Select",
+   "label": "Click Action",
+   "options": "popup\nopen_form\nschedule_visit",
+   "default": "popup",
+   "description": "What happens when a user clicks a pin."
   },
   {
    "fieldname": "popup_template",
@@ -221,12 +382,9 @@
    "description": "JSON array of fieldnames to show in the default popup. Empty = shows key fields. Example: [\"name\", \"customer_name\", \"status\"]"
   },
   {
-   "fieldname": "click_action",
-   "fieldtype": "Select",
-   "label": "Click Action",
-   "options": "popup\nopen_form\nschedule_visit",
-   "default": "popup",
-   "description": "What happens when a user clicks a pin."
+   "fieldname": "tab_permissions",
+   "fieldtype": "Tab Break",
+   "label": "Permissions"
   },
   {
    "fieldname": "permissions_section",
@@ -239,6 +397,20 @@
    "label": "Enforce source DocType permissions",
    "default": "1",
    "description": "If enabled, rows are filtered to those the current user has read permission for. Always true in v1; kept as a flag for v1.1+ overrides."
+  },
+  {
+   "fieldname": "filter_json",
+   "fieldtype": "Code",
+   "label": "Filter",
+   "hidden": 1,
+   "description": "Auto-serialized from Filters child table. Do not edit directly."
+  },
+  {
+   "fieldname": "group_config_json",
+   "fieldtype": "Code",
+   "label": "Group Config",
+   "hidden": 1,
+   "description": "Auto-serialized from Groups child table. Do not edit directly."
   }
  ],
  "is_submittable": 0,

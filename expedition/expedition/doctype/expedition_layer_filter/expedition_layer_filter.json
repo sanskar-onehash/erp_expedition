@@ -1,0 +1,88 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "fieldname",
+  "label",
+  "fieldtype",
+  "operator",
+  "value",
+  "column_break_1",
+  "from_value",
+  "to_value",
+  "condition"
+ ],
+ "fields": [
+  {
+   "fieldname": "fieldname",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Field",
+   "reqd": 1
+  },
+  {
+   "fieldname": "label",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Label",
+   "read_only": 1
+  },
+  {
+   "fieldname": "fieldtype",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Type"
+  },
+  {
+   "fieldname": "operator",
+   "fieldtype": "Select",
+   "label": "Operator",
+   "options": "is\nis not\nequals\nnot equals\nlike\nnot like\nin\nnot in\ngreater than\ngreater or equal\nless than\nless or equal\nbetween",
+   "reqd": 1
+  },
+  {
+   "fieldname": "value",
+   "fieldtype": "Data",
+   "label": "Value"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "from_value",
+   "fieldtype": "Data",
+   "label": "From",
+   "description": "Used when Operator is \"between\""
+  },
+  {
+   "fieldname": "to_value",
+   "fieldtype": "Data",
+   "label": "To",
+   "description": "Used when Operator is \"between\""
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Select",
+   "label": "Combine with next",
+   "options": "AND\nOR",
+   "default": "AND"
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Expedition",
+ "name": "Expedition Layer Filter",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 0,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

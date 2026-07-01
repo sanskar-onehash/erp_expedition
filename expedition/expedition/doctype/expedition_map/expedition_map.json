@@ -9,17 +9,29 @@
   "title",
   "is_template",
   "template_category",
-  "map_section",
+
+  "tab_map",
   "basemap_style",
+  "map_section",
   "viewport",
-  "filters_json",
-  "summary_json",
-  "campaign_section",
-  "campaign",
-  "owner_user",
+
+  "tab_filters",
+  "filters_section",
+  "layer_filters",
+
+  "tab_sharing",
   "shared_section",
   "is_public",
-  "last_opened_at"
+  "owner_user",
+  "owner_section",
+
+  "tab_activity",
+  "campaign_section",
+  "campaign",
+  "last_opened_at",
+
+  "filters_json",
+  "summary_json"
  ],
  "fields": [
   {
@@ -42,8 +54,8 @@
    "depends_on": "eval:doc.is_template"
   },
   {
-   "fieldname": "map_section",
-   "fieldtype": "Section Break",
+   "fieldname": "tab_map",
+   "fieldtype": "Tab Break",
    "label": "Map State"
   },
   {
@@ -54,41 +66,36 @@
    "default": "light"
   },
   {
+   "fieldname": "map_section",
+   "fieldtype": "Section Break",
+   "label": "Viewport"
+  },
+  {
    "fieldname": "viewport",
    "fieldtype": "JSON",
    "label": "Viewport",
    "description": "{ center: [lat, lng], zoom, bearing, pitch }"
   },
   {
-   "fieldname": "filters_json",
-   "fieldtype": "Code",
-   "label": "Filters",
-   "description": "JSON of cross-layer filter selections. Server is the permission boundary; this is advisory."
+   "fieldname": "tab_filters",
+   "fieldtype": "Tab Break",
+   "label": "Filters"
   },
   {
-   "fieldname": "summary_json",
-   "fieldtype": "Code",
-   "label": "Cached Summary",
-   "read_only": 1,
-   "description": "Cached aggregate counts (e.g. { customers: 1234, leads: 567 }). Recomputed hourly."
-  },
-  {
-   "fieldname": "campaign_section",
+   "fieldname": "filters_section",
    "fieldtype": "Section Break",
-   "label": "Activity"
+   "label": "Cross-Layer Filters"
   },
   {
-   "fieldname": "campaign",
-   "fieldtype": "Link",
-   "label": "Linked Campaign (optional)",
-   "options": "Campaign"
+   "fieldname": "layer_filters",
+   "fieldtype": "Table",
+   "label": "Layer Filters",
+   "options": "Expedition Map Filter"
   },
   {
-   "fieldname": "owner_user",
-   "fieldtype": "Link",
-   "label": "Owner User",
-   "options": "User",
-   "read_only": 1
+   "fieldname": "tab_sharing",
+   "fieldtype": "Tab Break",
+   "label": "Sharing"
   },
   {
    "fieldname": "shared_section",
@@ -103,10 +110,52 @@
    "description": "If true, any logged-in user with the Expedition Map role can view."
   },
   {
+   "fieldname": "owner_user",
+   "fieldtype": "Link",
+   "label": "Owner",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "owner_section",
+   "fieldtype": "Section Break",
+   "label": "Owner"
+  },
+  {
+   "fieldname": "tab_activity",
+   "fieldtype": "Tab Break",
+   "label": "Activity"
+  },
+  {
+   "fieldname": "campaign_section",
+   "fieldtype": "Section Break",
+   "label": "Activity"
+  },
+  {
+   "fieldname": "campaign",
+   "fieldtype": "Link",
+   "label": "Linked Campaign (optional)",
+   "options": "Campaign"
+  },
+  {
    "fieldname": "last_opened_at",
    "fieldtype": "Datetime",
    "label": "Last Opened At",
    "read_only": 1
+  },
+  {
+   "fieldname": "filters_json",
+   "fieldtype": "Code",
+   "label": "Filters",
+   "hidden": 1,
+   "description": "Auto-serialized from Layer Filters child table. Do not edit directly."
+  },
+  {
+   "fieldname": "summary_json",
+   "fieldtype": "Code",
+   "label": "Cached Summary",
+   "read_only": 1,
+   "description": "Cached aggregate counts (e.g. { customers: 1234, leads: 567 }). Recomputed hourly."
   }
  ],
  "index_web_pages_for_search": 1,

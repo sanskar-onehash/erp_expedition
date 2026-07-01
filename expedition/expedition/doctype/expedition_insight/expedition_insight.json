@@ -7,15 +7,17 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
-  "map",
   "insight_type",
   "severity",
   "summary",
+  "detail_section",
   "detail_json",
+  "linked_section",
   "linked_doctype",
   "linked_name",
   "centroid_lat",
   "centroid_lng",
+  "meta_section",
   "computed_at",
   "expires_at",
   "is_active"
@@ -27,12 +29,6 @@
    "in_list_view": 1,
    "label": "Title",
    "reqd": 1
-  },
-  {
-   "fieldname": "map",
-   "fieldtype": "Link",
-   "label": "Map",
-   "options": "Expedition Map"
   },
   {
    "fieldname": "insight_type",
@@ -55,10 +51,20 @@
    "reqd": 1
   },
   {
+   "fieldname": "detail_section",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
    "fieldname": "detail_json",
    "fieldtype": "Code",
    "label": "Detail (JSON)",
    "description": "Structured payload — counts, fields, drill-down refs."
+  },
+  {
+   "fieldname": "linked_section",
+   "fieldtype": "Section Break",
+   "label": "Link"
   },
   {
    "fieldname": "linked_doctype",
@@ -80,6 +86,11 @@
    "fieldname": "centroid_lng",
    "fieldtype": "Float",
    "label": "Centroid Longitude"
+  },
+  {
+   "fieldname": "meta_section",
+   "fieldtype": "Section Break",
+   "label": "Metadata"
   },
   {
    "fieldname": "computed_at",

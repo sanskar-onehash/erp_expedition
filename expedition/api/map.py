@@ -68,6 +68,18 @@ def load_full(name: str) -> dict:
             "size",
             "cluster",
             "heatmap",
+            "heatmap_mode",
+            "heatmap_weight_field",
+            "heatmap_weight_min",
+            "heatmap_weight_max",
+            "heatmap_weight_scale",
+            "heatmap_weight_stops_json",
+            "heatmap_radius_min",
+            "heatmap_radius_max",
+            "heatmap_intensity_min",
+            "heatmap_intensity_max",
+            "heatmap_opacity",
+            "heatmap_ramp_json",
             "preset",
             "label_field",
             "popup_template",
@@ -268,6 +280,19 @@ def save_map_card(
     return {"name": doc.name, "title": doc.title, "updated": False}
 
 
+def _clone_child_table(
+    child_doctype: str, source_filters: dict, target_filters: dict
+) -> None:
+    """Copy child table rows from a source doc to a target doc."""
+    for row in frappe.get_all(child_doctype, filters=source_filters, fields=["*"]):
+        new_row = frappe.new_doc(child_doctype)
+        new_row.update({k: v for k, v in row.items() if k != "name"})
+        new_row.parent = target_filters.get("parent")
+        new_row.parenttype = target_filters.get("parenttype")
+        new_row.parentfield = row.get("parentfield", "")
+        new_row.insert(ignore_permissions=True)
+
+
 @frappe.whitelist()
 def clone_template(template_name: str, title: str | None = None) -> dict:
     """
@@ -309,6 +334,18 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
             "size",
             "cluster",
             "heatmap",
+            "heatmap_mode",
+            "heatmap_weight_field",
+            "heatmap_weight_min",
+            "heatmap_weight_max",
+            "heatmap_weight_scale",
+            "heatmap_weight_stops_json",
+            "heatmap_radius_min",
+            "heatmap_radius_max",
+            "heatmap_intensity_min",
+            "heatmap_intensity_max",
+            "heatmap_opacity",
+            "heatmap_ramp_json",
             "stroke_color",
             "stroke_width",
             "fill_opacity",
@@ -335,6 +372,20 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_layer.size = tl.size
         new_layer.cluster = tl.cluster if tl.cluster is not None else 1
         new_layer.heatmap = tl.heatmap if tl.heatmap is not None else 0
+        new_layer.heatmap_mode = tl.heatmap_mode or "count"
+        new_layer.heatmap_weight_field = tl.heatmap_weight_field or ""
+        new_layer.heatmap_weight_min = tl.heatmap_weight_min
+        new_layer.heatmap_weight_max = tl.heatmap_weight_max
+        new_layer.heatmap_weight_scale = tl.heatmap_weight_scale or "linear"
+        new_layer.heatmap_weight_stops_json = tl.heatmap_weight_stops_json or ""
+        new_layer.heatmap_radius_min = tl.heatmap_radius_min or 10
+        new_layer.heatmap_radius_max = tl.heatmap_radius_max or 30
+        new_layer.heatmap_intensity_min = tl.heatmap_intensity_min or 1
+        new_layer.heatmap_intensity_max = tl.heatmap_intensity_max or 2.5
+        new_layer.heatmap_opacity = (
+            tl.heatmap_opacity if tl.heatmap_opacity is not None else 0.75
+        )
+        new_layer.heatmap_ramp_json = tl.heatmap_ramp_json or ""
         new_layer.stroke_color = tl.stroke_color
         new_layer.stroke_width = tl.stroke_width if tl.stroke_width is not None else 2
         new_layer.fill_opacity = tl.fill_opacity if tl.fill_opacity is not None else 0.6
@@ -347,6 +398,20 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_layer.enabled = 1
         new_layer.use_source_permissions = 1
         new_layer.insert(ignore_permissions=True)
+
+        # Clone filter child table rows from the template layer.
+        _clone_child_table(
+            "Expedition Layer Filter",
+            {"parent": tl.name, "parenttype": "Expedition Layer"},
+            {"parent": new_layer.name, "parenttype": "Expedition Layer"},
+        )
+
+        # Clone group child table rows from the template layer.
+        _clone_child_table(
+            "Expedition Layer Group",
+            {"parent": tl.name, "parenttype": "Expedition Layer"},
+            {"parent": new_layer.name, "parenttype": "Expedition Layer"},
+        )
 
     # Clone zones.
     template_zones = frappe.get_all(

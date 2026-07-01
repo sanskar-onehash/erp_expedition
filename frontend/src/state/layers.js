@@ -171,6 +171,7 @@ export const useLayersStore = defineStore('layers', () => {
     return {
       color: d.color, icon: d.icon, size: d.size,
       cluster: d.cluster, heatmap: d.heatmap,
+      heatmap_config: d.heatmap_config,
       stroke_color: d.stroke_color, stroke_width: d.stroke_width,
       fill_opacity: d.fill_opacity,
     }

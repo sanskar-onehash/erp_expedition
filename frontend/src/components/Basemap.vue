@@ -37,6 +37,15 @@ import { useIconsStore } from '../state/icons.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
+import {
+  RAMP_PRESETS,
+  buildHeatmapColor,
+  buildHeatmapIntensity,
+  buildHeatmapRadius,
+  buildHeatmapWeight,
+  parseRampJson,
+  parseWeightStopsJson,
+} from '../api/heatmap.js'
 
 // Pin radii. Apple/Google-tier: default `m` is 11px (22px disk
 // visually with the white ring). xs/s are for dense layers; l/xl
@@ -73,7 +82,9 @@ function clusterCountId(layerName) { return `lyr-${layerName}-cluster-count` }
 function iconLayerId(layerName) { return `lyr-${layerName}-icon` }
 function groupedLayerBase(layerName, groupKey) { return `lyr-${layerName}-grp-${groupKey}` }
 function heatmapLayerId(layerName) { return `lyr-${layerName}-heatmap` }
+function haloSourceId(layerName) { return `src-${layerName}-halo` }
 function haloLayerId(layerName) { return `lyr-${layerName}-halo` }
+function haloStrokeLayerId(layerName) { return `lyr-${layerName}-halo-stroke` }
 function extrusionLayerId(layerName) { return `lyr-${layerName}-extrude` }
 function extrusionSourceId(layerName) { return `src-${layerName}-extrude` }
 function safeMapIdPart(value) {
@@ -133,6 +144,7 @@ function _removeBasePointArtifacts(layerName) {
   if (!map) return
   for (const id of [
     heatmapLayerId(layerName),
+    haloStrokeLayerId(layerName),
     haloLayerId(layerName),
     clusterCountId(layerName),
     clusterLayerId(layerName),
@@ -144,6 +156,7 @@ function _removeBasePointArtifacts(layerName) {
     if (map.getLayer(id)) map.removeLayer(id)
     _interactivePointLayers.delete(id)
   }
+  if (map.getSource(haloSourceId(layerName))) map.removeSource(haloSourceId(layerName))
   if (map.getSource(sourceId(layerName))) map.removeSource(sourceId(layerName))
 }
 
@@ -392,75 +405,45 @@ function clusterPaint(color) {
   }
 }
 
-/**
- * Heatmap paint — PR-7.
- *
- * Uses MapLibre's built-in `heatmap` layer type. Two-tier weight via
- * the optional `weight_field` (numeric property); falls back to a
- * constant weight when no field is set, so a plain point layer still
- * renders as a usable density map.
- *
- *   - Radius scales with zoom so the blob stays roughly the same on
- *     screen (10 → 30px from z0 to z12). Apple/Google-tier "always
- *     readable" feel.
- *   - Intensity scales with zoom too, so far-out views stay soft and
- *     close-up views pop.
- *   - Color ramp is the user's layer color → transparent. We feed the
- *     heatmap `heatmap-color` an interpolate expression over the layer
- *     color so it matches the rest of the chrome.
- */
-function heatmapPaint(color) {
-  // 5-stop ramp: transparent → light tint → mid → full color → bright.
-  // Built from a single base hue by varying alpha; interpolation between
-  // rgba stops handles the gradient.
-  const c = hexToRgb(color || FALLBACK_COLOR)
+function heatmapPaint(color, layerDoc, style = {}) {
+  const config = {
+    ...(style.heatmap_config || {}),
+    ...(layerDoc.heatmap_config || {}),
+  }
+  const mode = layerDoc.heatmap_mode || config.mode || 'count'
+  const weightField = mode === 'sum'
+    ? (layerDoc.heatmap_weight_field || config.weight_field || '')
+    : ''
+  const weightMin = Number(layerDoc.heatmap_weight_min ?? config.weight_min)
+  const weightMax = Number(layerDoc.heatmap_weight_max ?? config.weight_max)
+  const radiusMin = Number(layerDoc.heatmap_radius_min ?? config.radius_min ?? 10)
+  const radiusMax = Number(layerDoc.heatmap_radius_max ?? config.radius_max ?? 30)
+  const intensityMin = Number(layerDoc.heatmap_intensity_min ?? config.intensity_min ?? 1)
+  const intensityMax = Number(layerDoc.heatmap_intensity_max ?? config.intensity_max ?? 2.5)
+  const opacity = Number(layerDoc.heatmap_opacity ?? config.opacity ?? 0.75)
+  const ramp = parseRampJson(layerDoc.heatmap_ramp_json)
+    || (Array.isArray(config.ramp) && config.ramp.length ? config.ramp : null)
+    || RAMP_PRESETS.monochrome.build(color || FALLBACK_COLOR)
+  const stops = parseWeightStopsJson(layerDoc.heatmap_weight_stops_json)
+    || (Array.isArray(config.weight_stops) ? config.weight_stops : null)
   return {
-    'heatmap-weight': 1,
-    'heatmap-intensity': [
-      'interpolate', ['linear'], ['zoom'],
-      0, 1,
-      12, 2.5,
-    ],
-    'heatmap-radius': [
-      'interpolate', ['linear'], ['zoom'],
-      0, 10,
-      6, 18,
-      12, 30,
-    ],
-    'heatmap-opacity': [
-      'interpolate', ['linear'], ['zoom'],
-      0, 0.85,
-      12, 0.7,
-    ],
-    'heatmap-color': [
-      'interpolate', ['linear'], ['heatmap-density'],
-      0,   'rgba(0, 0, 0, 0)',
-      0.2, `rgba(${c.r}, ${c.g}, ${c.b}, 0.25)`,
-      0.5, `rgba(${c.r}, ${c.g}, ${c.b}, 0.55)`,
-      0.8, `rgba(${c.r}, ${c.g}, ${c.b}, 0.85)`,
-      1,   `rgba(${Math.min(255, c.r + 60)}, ${Math.min(255, c.g + 60)}, ${Math.min(255, c.b + 60)}, 1)`,
-    ],
-  }
-}
-
-function hexToRgb(hex) {
-  const raw = String(hex || '').trim()
-  const rgb = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i)
-  if (rgb) {
-    const channels = rgb.slice(1, 4).map((n) => Math.max(0, Math.min(255, Number(n))))
-    return { r: channels[0], g: channels[1], b: channels[2] }
-  }
-  let h = raw.replace('#', '')
-  if (h.length === 3 || h.length === 4) {
-    h = h.slice(0, 3).split('').map((c) => c + c).join('')
-  } else if (h.length === 8) {
-    h = h.slice(0, 6)
-  }
-  if (h.length !== 6) return { r: 255, g: 59, b: 48 }
-  return {
-    r: parseInt(h.slice(0, 2), 16),
-    g: parseInt(h.slice(2, 4), 16),
-    b: parseInt(h.slice(4, 6), 16),
+    'heatmap-weight': buildHeatmapWeight({
+      field: weightField,
+      log: (layerDoc.heatmap_weight_scale || config.weight_scale) === 'log',
+      min: Number.isFinite(weightMin) ? weightMin : null,
+      max: Number.isFinite(weightMax) ? weightMax : null,
+      stops,
+    }),
+    'heatmap-intensity': buildHeatmapIntensity(
+      Number.isFinite(intensityMin) ? intensityMin : 1,
+      Number.isFinite(intensityMax) ? intensityMax : 2.5,
+    ),
+    'heatmap-radius': buildHeatmapRadius(
+      Number.isFinite(radiusMin) ? radiusMin : 10,
+      Number.isFinite(radiusMax) ? radiusMax : 30,
+    ),
+    'heatmap-opacity': Math.max(0, Math.min(1, Number.isFinite(opacity) ? opacity : 0.75)),
+    'heatmap-color': buildHeatmapColor(ramp),
   }
 }
 
@@ -492,55 +475,79 @@ function extrusionPaint(color, layerName) {
 }
 
 /**
- * Halo paint — PR-8 radius rendering.
+ * Halo rendering — PR-8 radius rendering.
  *
- * The halo is a translucent disk drawn behind the pin stack. Its
- * radius scales with zoom and (optionally) a per-feature numeric
- * property, so a layer with a `service_radius_km` field gets a halo
- * proportional to that value. Without a field, a fixed halo in
- * pixel-equivalent units (configurable via ui.radiusMeters) is used.
- *
- * Note: MapLibre circle-radius is in pixels, not meters. We approximate
- * meters-to-pixels via a per-zoom curve calibrated so that at zoom 10
- * (city-block scale), 1000 "units" ≈ 1000 pixels on a 96dpi screen.
- * The exact conversion is a known compromise; the visual goal is "a
- * bigger number reads as a bigger disk" rather than survey-grade
- * accuracy.
+ * The halo is a translucent ground footprint drawn behind the pin
+ * stack. It is generated as a polygon, not a screen-space circle, so
+ * pitched camera views naturally turn it into a perspective ellipse.
+ * The radius comes from a per-feature numeric property or the fallback
+ * ui.radiusMeters value, with ui.radiusScale applied as a multiplier.
  */
-function haloPaint(color, layerName) {
+function haloStyle(color, layerName) {
+  const displayColor = pinColorExpression(color)
+  const layerDoc = layerStore.layers.find((l) => l.name === layerName)
+  const rawOpacity = (layerDoc && layerDoc.radius_opacity != null)
+    ? Number(layerDoc.radius_opacity)
+    : 0.18
+  const opacity = Number.isFinite(rawOpacity) ? Math.max(0, Math.min(1, rawOpacity)) : 0.18
+  return {
+    fill: {
+      'fill-color': displayColor,
+      'fill-opacity': opacity,
+    },
+    stroke: {
+      'line-color': displayColor,
+      'line-opacity': Math.min(1, opacity * 2.5),
+      'line-width': 1.25,
+    },
+  }
+}
+
+function haloRadiusMeters(feature, layerName) {
   const field = ui.radiusField[layerName]
   const fallback = ui.radiusMeters[layerName] || 5000
   const scale = ui.radiusScale[layerName] || 1
-  const displayColor = pinColorExpression(color)
-  // Per-layer opacity. Falls back to 0.18 if the layer doc didn't
-  // ship the field (older saved maps).
-  const layerDoc = layerStore.layers.find((l) => l.name === layerName)
-  const opacity = (layerDoc && layerDoc.radius_opacity != null)
-    ? Number(layerDoc.radius_opacity) || 0.18
-    : 0.18
-  // Pixel-equivalent radius: take the property (or fallback), divide
-  // by 10 so a typical 5km radius renders as ~25px on a city zoom,
-  // then multiply by the per-zoom scale so far-out zooms grow.
-  const base = field
-    ? ['coalesce', ['to-number', ['get', field]], fallback]
-    : fallback
+  const value = field
+    ? Number(feature?.properties?.[field] ?? fallback)
+    : Number(fallback)
+  const radius = (Number.isFinite(value) && value > 0 ? value : Number(fallback)) * scale
+  return Math.max(1, radius)
+}
+
+function haloPolygon(lng, lat, radiusMeters, steps = 64) {
+  const earthRadius = 6378137
+  const latRad = lat * Math.PI / 180
+  const lngRad = lng * Math.PI / 180
+  const angularDistance = radiusMeters / earthRadius
+  const coordinates = []
+  for (let i = 0; i <= steps; i += 1) {
+    const bearing = (i / steps) * Math.PI * 2
+    const pointLat = Math.asin(
+      Math.sin(latRad) * Math.cos(angularDistance)
+      + Math.cos(latRad) * Math.sin(angularDistance) * Math.cos(bearing),
+    )
+    const pointLng = lngRad + Math.atan2(
+      Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latRad),
+      Math.cos(angularDistance) - Math.sin(latRad) * Math.sin(pointLat),
+    )
+    coordinates.push([pointLng * 180 / Math.PI, pointLat * 180 / Math.PI])
+  }
+  return { type: 'Polygon', coordinates: [coordinates] }
+}
+
+function haloFeatureCollection(features, layerName) {
   return {
-    'circle-radius': [
-      'interpolate', ['linear'], ['zoom'],
-      // base is in "units" (e.g. meters or km as the user chose).
-      // We scale down for pixel-pleasant rendering. Users wanting
-      // different scaling can change the per-layer multiplier.
-      0,  ['/', base, 200],
-      6,  ['/', base, 80],
-      10, ['/', base, 40],
-      14, ['/', base, 20],
-    ],
-    'circle-color': displayColor,
-    'circle-opacity': opacity * scale,
-    'circle-stroke-color': displayColor,
-    'circle-stroke-width': 1,
-    'circle-stroke-opacity': Math.min(1, opacity * 2.5) * scale,
-    'circle-pitch-alignment': 'map',
+    type: 'FeatureCollection',
+    features: (features || []).map((feature) => {
+      const [lng, lat] = (feature.geometry && feature.geometry.coordinates) || []
+      if (lng == null || lat == null) return null
+      return {
+        type: 'Feature',
+        id: feature._id,
+        geometry: haloPolygon(lng, lat, haloRadiusMeters(feature, layerName)),
+        properties: { ...(feature.properties || {}), _id: feature._id },
+      }
+    }).filter(Boolean),
   }
 }
 
@@ -564,6 +571,7 @@ function _addLayerOnMap(layerName) {
   const radius = SIZE_TO_RADIUS[sizeKey] || SIZE_TO_RADIUS.m
   const wantsCluster = !!(style.cluster || layerDoc.cluster)
   const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
+  const heatOn = enabled && ui.isHeatmapOn(layerName)
 
   const sid = sourceId(layerName)
   const lid = layerId(layerName)
@@ -597,6 +605,8 @@ function _addLayerOnMap(layerName) {
       radius,
       enabled,
       iconSpecs,
+      layerDoc,
+      style,
     })
     lastLoadedFeatures[layerName] = fc
     return
@@ -789,27 +799,47 @@ function _addLayerOnMap(layerName) {
   // the heatmap — it's part of the per-feature visual identity and
   // should sit below heatmap density but above the pin (so a heatmap
   // turn-off reveals pin-on-halo cleanly).
+  const haloSid = haloSourceId(layerName)
   const haloId = haloLayerId(layerName)
+  const haloStrokeId = haloStrokeLayerId(layerName)
   const radiusOn = enabled && ui.isRadiusOn(layerName)
   if (radiusOn) {
-    const halo = haloPaint(color, layerName)
+    const halo = haloStyle(color, layerName)
+    const haloFc = haloFeatureCollection(fc.features, layerName)
+    const haloSource = map.getSource(haloSid)
+    if (haloSource && haloSource.type === 'geojson') {
+      haloSource.setData(haloFc)
+    } else {
+      map.addSource(haloSid, { type: 'geojson', data: haloFc, promoteId: '_id' })
+    }
     if (!map.getLayer(haloId)) {
       map.addLayer({
         id: haloId,
-        type: 'circle',
-        source: sid,
-        filter: wantsCluster ? ['!', ['has', 'point_count']] : ['all'],
-        paint: halo,
-      })
+        type: 'fill',
+        source: haloSid,
+        paint: halo.fill,
+      }, shid)
     } else {
-      map.setPaintProperty(haloId, 'circle-color', halo['circle-color'])
-      map.setPaintProperty(haloId, 'circle-radius', halo['circle-radius'])
-      map.setPaintProperty(haloId, 'circle-opacity', halo['circle-opacity'])
-      map.setPaintProperty(haloId, 'circle-stroke-color', halo['circle-stroke-color'])
-      map.setPaintProperty(haloId, 'circle-stroke-opacity', halo['circle-stroke-opacity'])
+      for (const [key, value] of Object.entries(halo.fill)) {
+        map.setPaintProperty(haloId, key, value)
+      }
     }
-  } else if (map.getLayer(haloId)) {
-    map.removeLayer(haloId)
+    if (!map.getLayer(haloStrokeId)) {
+      map.addLayer({
+        id: haloStrokeId,
+        type: 'line',
+        source: haloSid,
+        paint: halo.stroke,
+      }, shid)
+    } else {
+      for (const [key, value] of Object.entries(halo.stroke)) {
+        map.setPaintProperty(haloStrokeId, key, value)
+      }
+    }
+  } else {
+    if (map.getLayer(haloStrokeId)) map.removeLayer(haloStrokeId)
+    if (map.getLayer(haloId)) map.removeLayer(haloId)
+    if (map.getSource(haloSid)) map.removeSource(haloSid)
   }
 
   // Heatmap (PR-7). Adds a heatmap layer above the source and
@@ -817,18 +847,19 @@ function _addLayerOnMap(layerName) {
   // density visualization dominates. When heatmap is on, the pin body
   // layers go invisible (they would otherwise crowd the gradient).
   const hid = heatmapLayerId(layerName)
-  const heatOn = enabled && ui.isHeatmapOn(layerName)
   if (heatOn) {
+    const paint = heatmapPaint(color, layerDoc, style)
     if (!map.getLayer(hid)) {
       map.addLayer({
         id: hid,
         type: 'heatmap',
         source: sid,
-        maxzoom: 14,
-        paint: heatmapPaint(color),
+        paint,
       })
     } else {
-      map.setPaintProperty(hid, 'heatmap-color', heatmapPaint(color)['heatmap-color'])
+      for (const [key, value] of Object.entries(paint)) {
+        map.setPaintProperty(hid, key, value)
+      }
     }
     // Hide the pin-stack layers — heatmap replaces them at low zoom.
     map.setPaintProperty(lid, 'circle-opacity', 0)
@@ -855,7 +886,7 @@ function _addLayerOnMap(layerName) {
   if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
 }
 
-function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, radius, enabled, iconSpecs }) {
+function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, radius, enabled, iconSpecs, layerDoc, style }) {
   _removeBasePointArtifacts(layerName)
 
   const groupIconSpecs = [...iconSpecs.values()]
@@ -904,7 +935,11 @@ function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, ra
     const iid = `${base}-icon`
     const cid = `${base}-clusters`
     const ccid = `${base}-cluster-count`
+    const haloSid = `${sid}-halo`
     const haloId = `${base}-halo`
+    const haloStrokeId = `${base}-halo-stroke`
+    const heatId = `${base}-heatmap`
+    activeSourceIds.add(haloSid)
 
     if (!map.getLayer(shid)) {
       map.addLayer({ id: shid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: shadowPaint(radius) })
@@ -983,21 +1018,53 @@ function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, ra
     map.on('click', cid, onClusterClick)
 
     if (enabled && ui.isRadiusOn(layerName)) {
-      const halo = haloPaint(color, layerName)
-      if (!map.getLayer(haloId)) {
-        map.addLayer({ id: haloId, type: 'circle', source: sid, filter: ['!', ['has', 'point_count']], paint: halo })
+      const halo = haloStyle(groupColor, layerName)
+      const haloFc = haloFeatureCollection(features, layerName)
+      const haloSource = map.getSource(haloSid)
+      if (haloSource && haloSource.type === 'geojson') {
+        haloSource.setData(haloFc)
       } else {
-        map.setPaintProperty(haloId, 'circle-color', halo['circle-color'])
-        map.setPaintProperty(haloId, 'circle-radius', halo['circle-radius'])
-        map.setPaintProperty(haloId, 'circle-opacity', halo['circle-opacity'])
-        map.setPaintProperty(haloId, 'circle-stroke-color', halo['circle-stroke-color'])
-        map.setPaintProperty(haloId, 'circle-stroke-opacity', halo['circle-stroke-opacity'])
+        map.addSource(haloSid, { type: 'geojson', data: haloFc, promoteId: '_id' })
       }
-    } else if (map.getLayer(haloId)) {
-      map.removeLayer(haloId)
+      if (!map.getLayer(haloId)) {
+        map.addLayer({ id: haloId, type: 'fill', source: haloSid, paint: halo.fill }, shid)
+      } else {
+        for (const [key, value] of Object.entries(halo.fill)) {
+          map.setPaintProperty(haloId, key, value)
+        }
+      }
+      if (!map.getLayer(haloStrokeId)) {
+        map.addLayer({ id: haloStrokeId, type: 'line', source: haloSid, paint: halo.stroke }, shid)
+      } else {
+        for (const [key, value] of Object.entries(halo.stroke)) {
+          map.setPaintProperty(haloStrokeId, key, value)
+        }
+      }
+    } else {
+      if (map.getLayer(haloStrokeId)) map.removeLayer(haloStrokeId)
+      if (map.getLayer(haloId)) map.removeLayer(haloId)
+      if (map.getSource(haloSid)) map.removeSource(haloSid)
     }
 
     const heatOn = enabled && ui.isHeatmapOn(layerName)
+    if (heatOn) {
+      const paint = heatmapPaint(groupColor, layerDoc, style)
+      if (!map.getLayer(heatId)) {
+        map.addLayer({
+          id: heatId,
+          type: 'heatmap',
+          source: sid,
+          paint,
+        })
+      } else {
+        for (const [key, value] of Object.entries(paint)) {
+          map.setPaintProperty(heatId, key, value)
+        }
+      }
+    } else if (map.getLayer(heatId)) {
+      map.removeLayer(heatId)
+    }
+
     for (const id of [lid, rid, shid]) {
       if (map.getLayer(id)) map.setPaintProperty(id, 'circle-opacity', heatOn ? 0 : (enabled ? (id === shid ? 0.45 : 1) : 0))
     }
@@ -1769,6 +1836,17 @@ watch(
     size: l.size || l.style?.size || '',
     cluster: !!(l.cluster || l.style?.cluster),
     heatmap: !!(l.heatmap || l.style?.heatmap),
+    heatmap_mode: l.heatmap_mode || '',
+    heatmap_weight_field: l.heatmap_weight_field || '',
+    heatmap_weight_min: l.heatmap_weight_min ?? null,
+    heatmap_weight_max: l.heatmap_weight_max ?? null,
+    heatmap_weight_scale: l.heatmap_weight_scale || '',
+    heatmap_radius_min: l.heatmap_radius_min ?? null,
+    heatmap_radius_max: l.heatmap_radius_max ?? null,
+    heatmap_intensity_min: l.heatmap_intensity_min ?? null,
+    heatmap_intensity_max: l.heatmap_intensity_max ?? null,
+    heatmap_opacity: l.heatmap_opacity ?? null,
+    heatmap_ramp_json: l.heatmap_ramp_json || '',
     iconVersion: iconStore.version,
   })),
   () => {

@@ -1,6 +1,6 @@
 {
  "actions": [],
- "allow_rename": 1,
+ "allow_rename": 0,
  "creation": "2026-06-19 10:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 0,
@@ -16,6 +16,7 @@
   "stroke_color",
   "stroke_width",
   "fill_opacity",
+  "preview_section",
   "preview_svg"
  ],
  "fields": [
@@ -78,6 +79,11 @@
    "fieldtype": "Float",
    "label": "Fill Opacity",
    "default": "0.6"
+  },
+  {
+   "fieldname": "preview_section",
+   "fieldtype": "Section Break",
+   "label": "Preview"
   },
   {
    "fieldname": "preview_svg",

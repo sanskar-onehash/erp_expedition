@@ -5,6 +5,27 @@ import frappe
 from frappe.model.document import Document
 
 
+OPERATOR_ALIASES = {
+    "equals": "=",
+    "equal": "=",
+    "not equals": "!=",
+    "not equal": "!=",
+    "greater than": ">",
+    "greater or equal": ">=",
+    "greater than or equal": ">=",
+    "less than": "<",
+    "less or equal": "<=",
+    "less than or equal": "<=",
+    "contains": "like",
+    "not contains": "not like",
+}
+
+
+def _canonical_operator(operator):
+    op = str(operator or "=").strip()
+    return OPERATOR_ALIASES.get(op.lower(), op)
+
+
 class ExpeditionMap(Document):
     """
     A saved map configuration. Layers, zones, viewport, basemap, filters
@@ -29,7 +50,37 @@ class ExpeditionMap(Document):
         if not self.owner_user and self.is_new():
             self.owner_user = frappe.session.user
 
+        # Serialize Layer Filters child table into hidden filters_json.
+        self._sync_filters_json_from_child_table()
+
+    def _sync_filters_json_from_child_table(self):
+        """Serialize the Layer Filters child table rows into filters_json."""
+        rows = self.get("layer_filters") or []
+        if not rows:
+            self.filters_json = ""
+            return
+        result = []
+        for row in rows:
+            layer = row.layer or ""
+            field = row.fieldname or ""
+            op = _canonical_operator(row.operator)
+            value = row.value or ""
+            if layer and field:
+                result.append(
+                    {"layer": layer, "fieldname": field, "operator": op, "value": value}
+                )
+        self.filters_json = frappe.json.dumps(result) if result else ""
+
     def on_update(self):
+        # Ensure hidden JSON field is kept in sync after save.
+        self._sync_filters_json_from_child_table()
+        if self.filters_json is not None:
+            frappe.db.set_value(
+                self.doctype,
+                self.name,
+                {"filters_json": self.filters_json or ""},
+                update_modified=False,
+            )
         # Touch the title to force re-index on rename. The DocType is
         # allow_rename=1, so we need search to reflect renames.
         frappe.flags.title_updated = True

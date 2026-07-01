@@ -3,3 +3,8 @@
 # Read docs to understand patches: https://frappeframework.com/docs/v15/user/en/database-migrations
 
 [post_model_sync]
+# v0.3.0 - Migrate filter_json / group_config_json to child tables
+# These run after the new child table DocTypes are synced.
+expedition.patches.v0_3_0.migrate_expedition_layer_filter_json_to_child_table
+expedition.patches.v0_3_0.migrate_expedition_layer_group_config_to_child_table
+expedition.patches.v0_3_0.migrate_expedition_map_filters_json_to_child_table

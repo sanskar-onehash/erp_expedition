@@ -144,6 +144,9 @@ STANDARD_FILTER_FIELDS = [
     },
 ]
 
+NUMERIC_FIELD_TYPES = {"Int", "Float", "Currency", "Percent", "Duration", "Rating"}
+HEATMAP_RAMP_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
 DOCSTATUS_FILTER_OPTIONS = [
     {"label": "Draft", "value": 0},
     {"label": "Submitted", "value": 1},
@@ -233,7 +236,24 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
 
 
 def _operator_key(op: str | None) -> str:
-    return str(op or "=").strip().lower()
+    key = str(op or "=").strip().lower()
+    return {
+        "equals": "=",
+        "equal": "=",
+        "not equals": "!=",
+        "not equal": "!=",
+        "is not": "!=",
+        "greater than": ">",
+        "greater or equal": ">=",
+        "greater than or equal": ">=",
+        "less than": "<",
+        "less or equal": "<=",
+        "less than or equal": "<=",
+        "contains": "like",
+        "not contains": "not like",
+        "is set": "is",
+        "is not set": "is",
+    }.get(key, key)
 
 
 def _operators_for_field(fieldtype: str | None) -> list[dict]:
@@ -632,7 +652,7 @@ def _coerce_popup_fields(raw: str | list | None) -> list[str]:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
         return []
-    if not isinstance(parsed, list):
+    if not isinstance(parsed, list) or len(parsed) < 2:
         return []
     return [str(f) for f in parsed if isinstance(f, str) and f]
 
@@ -742,6 +762,10 @@ def get_features(
     fields = ["name", layer_doc.latitude_field, layer_doc.longitude_field]
     if layer_doc.label_field and layer_doc.label_field not in fields:
         fields.append(layer_doc.label_field)
+    heatmap_config = _heatmap_config_dict(layer_doc)
+    heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
+    if heatmap_weight_field and heatmap_weight_field not in fields:
+        fields.append(heatmap_weight_field)
 
     # If the layer has a popup_template, we need the full row context (every
     # column on the source doc) to render it. Without this, only the
@@ -918,6 +942,7 @@ def get_features(
                 "stroke_color": layer_doc.stroke_color,
                 "stroke_width": layer_doc.stroke_width,
                 "fill_opacity": layer_doc.fill_opacity,
+                "heatmap_config": heatmap_config,
             },
         },
     }
@@ -1100,6 +1125,18 @@ def list_for_map(map_name: str) -> list[dict]:
             "size",
             "cluster",
             "heatmap",
+            "heatmap_mode",
+            "heatmap_weight_field",
+            "heatmap_weight_min",
+            "heatmap_weight_max",
+            "heatmap_weight_scale",
+            "heatmap_weight_stops_json",
+            "heatmap_radius_min",
+            "heatmap_radius_max",
+            "heatmap_intensity_min",
+            "heatmap_intensity_max",
+            "heatmap_opacity",
+            "heatmap_ramp_json",
             "stroke_color",
             "stroke_width",
             "fill_opacity",
@@ -1119,6 +1156,102 @@ def list_for_map(map_name: str) -> list[dict]:
         r["popup_fields"] = _coerce_popup_fields(r.get("popup_fields_json"))
         out.append({**r, "style": _layer_style_dict(r)})
     return out
+
+
+def _coerce_heatmap_ramp(raw: str | list | None) -> list[dict[str, Any]]:
+    """Parse heatmap_ramp_json into sorted [{stop, color, alpha}] stops."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        try:
+            stop = float(item.get("stop"))
+        except (TypeError, ValueError):
+            continue
+        color = str(item.get("color") or "").strip()
+        if stop < 0 or stop > 1 or not HEATMAP_RAMP_RE.match(color):
+            continue
+        try:
+            alpha = float(item.get("alpha", 1))
+        except (TypeError, ValueError):
+            alpha = 1.0
+        out.append(
+            {
+                "stop": stop,
+                "color": color,
+                "alpha": max(0.0, min(1.0, alpha)),
+            }
+        )
+    out.sort(key=lambda s: s["stop"])
+    return out
+
+
+def _coerce_weight_stops(raw: str | list | None) -> list[list[float]]:
+    """Parse heatmap_weight_stops_json into sorted [[value, weight]] pairs."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list) or len(parsed) < 2:
+        return []
+    out = []
+    for pair in parsed:
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        try:
+            value = float(pair[0])
+            weight = float(pair[1])
+        except (TypeError, ValueError):
+            continue
+        out.append([value, weight])
+    out.sort(key=lambda pair: pair[0])
+    return out
+
+
+def _validate_heatmap_weight_range(field: str | None, min_value: Any, max_value: Any) -> None:
+    """Weighted heatmaps need a usable input range for client expressions."""
+    if not field:
+        return
+    if min_value in (None, "") or max_value in (None, ""):
+        frappe.throw("Heatmap metric range requires both minimum and maximum.", frappe.ValidationError)
+    try:
+        min_number = float(min_value)
+        max_number = float(max_value)
+    except (TypeError, ValueError):
+        frappe.throw("Heatmap metric range must be numeric.", frappe.ValidationError)
+    if min_number == max_number:
+        frappe.throw("Heatmap metric minimum and maximum must be different.", frappe.ValidationError)
+
+
+def _heatmap_config_dict(layer: Any) -> dict[str, Any]:
+    """Return the client-facing heatmap configuration for a layer row/doc."""
+    get = layer.get if isinstance(layer, dict) else lambda key, default=None: getattr(layer, key, default)
+    mode = str(get("heatmap_mode") or "count").lower()
+    scale = str(get("heatmap_weight_scale") or "linear").lower()
+    return {
+        "mode": mode if mode in {"count", "sum"} else "count",
+        "weight_field": get("heatmap_weight_field") or "",
+        "weight_min": get("heatmap_weight_min"),
+        "weight_max": get("heatmap_weight_max"),
+        "weight_scale": "log" if scale == "log" else "linear",
+        "weight_stops": _coerce_weight_stops(get("heatmap_weight_stops_json") or ""),
+        "radius_min": get("heatmap_radius_min") or 10,
+        "radius_max": get("heatmap_radius_max") or 30,
+        "intensity_min": get("heatmap_intensity_min") or 1,
+        "intensity_max": get("heatmap_intensity_max") or 2.5,
+        "opacity": get("heatmap_opacity") if get("heatmap_opacity") is not None else 0.75,
+        "ramp": _coerce_heatmap_ramp(get("heatmap_ramp_json") or ""),
+    }
 
 
 @frappe.whitelist()
@@ -1141,6 +1274,18 @@ def create(
     popup_fields_json: str | None = None,
     click_action: str = "popup",
     heatmap: int = 0,
+    heatmap_mode: str = "count",
+    heatmap_weight_field: str | None = None,
+    heatmap_weight_min: float | None = None,
+    heatmap_weight_max: float | None = None,
+    heatmap_weight_scale: str = "linear",
+    heatmap_weight_stops_json: str | None = None,
+    heatmap_radius_min: int = 10,
+    heatmap_radius_max: int = 30,
+    heatmap_intensity_min: float = 1,
+    heatmap_intensity_max: float = 2.5,
+    heatmap_opacity: float = 0.75,
+    heatmap_ramp_json: str | None = None,
     radius_enabled: int = 0,
     radius_field: str | None = None,
     radius_meters: int = 5000,
@@ -1186,6 +1331,18 @@ def create(
             "sequence": int(last_seq),
             "use_source_permissions": 1,
             "heatmap": int(heatmap),
+            "heatmap_mode": heatmap_mode or "count",
+            "heatmap_weight_field": heatmap_weight_field or "",
+            "heatmap_weight_min": heatmap_weight_min,
+            "heatmap_weight_max": heatmap_weight_max,
+            "heatmap_weight_scale": heatmap_weight_scale or "linear",
+            "heatmap_weight_stops_json": heatmap_weight_stops_json or "",
+            "heatmap_radius_min": int(heatmap_radius_min or 10),
+            "heatmap_radius_max": int(heatmap_radius_max or 30),
+            "heatmap_intensity_min": float(heatmap_intensity_min or 1),
+            "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
+            "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
+            "heatmap_ramp_json": heatmap_ramp_json or "",
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
             "radius_meters": int(radius_meters),
@@ -1227,6 +1384,18 @@ def update(layer_name: str, **fields) -> dict:
         "click_action",
         "icon",
         "heatmap",
+        "heatmap_mode",
+        "heatmap_weight_field",
+        "heatmap_weight_min",
+        "heatmap_weight_max",
+        "heatmap_weight_scale",
+        "heatmap_weight_stops_json",
+        "heatmap_radius_min",
+        "heatmap_radius_max",
+        "heatmap_intensity_min",
+        "heatmap_intensity_max",
+        "heatmap_opacity",
+        "heatmap_ramp_json",
         "stroke_color",
         "stroke_width",
         "fill_opacity",
@@ -1569,6 +1738,7 @@ def _layer_style_dict(layer: dict) -> dict:
         "size": layer.get("size"),
         "cluster": layer.get("cluster"),
         "heatmap": layer.get("heatmap"),
+        "heatmap_config": _heatmap_config_dict(layer),
         "stroke_color": layer.get("stroke_color"),
         "stroke_width": layer.get("stroke_width"),
         "fill_opacity": layer.get("fill_opacity"),
@@ -1597,6 +1767,19 @@ def _layer_to_dto(doc) -> dict:
         "size": doc.size,
         "cluster": doc.cluster,
         "heatmap": doc.heatmap,
+        "heatmap_mode": doc.heatmap_mode or "count",
+        "heatmap_weight_field": doc.heatmap_weight_field or "",
+        "heatmap_weight_min": doc.heatmap_weight_min,
+        "heatmap_weight_max": doc.heatmap_weight_max,
+        "heatmap_weight_scale": doc.heatmap_weight_scale or "linear",
+        "heatmap_weight_stops_json": doc.heatmap_weight_stops_json or "",
+        "heatmap_radius_min": doc.heatmap_radius_min,
+        "heatmap_radius_max": doc.heatmap_radius_max,
+        "heatmap_intensity_min": doc.heatmap_intensity_min,
+        "heatmap_intensity_max": doc.heatmap_intensity_max,
+        "heatmap_opacity": doc.heatmap_opacity,
+        "heatmap_ramp_json": doc.heatmap_ramp_json or "",
+        "heatmap_config": _heatmap_config_dict(doc),
         "stroke_color": doc.stroke_color,
         "stroke_width": doc.stroke_width,
         "fill_opacity": doc.fill_opacity,
@@ -1613,6 +1796,18 @@ def _layer_to_dto(doc) -> dict:
                 "size": doc.size,
                 "cluster": doc.cluster,
                 "heatmap": doc.heatmap,
+                "heatmap_mode": doc.heatmap_mode,
+                "heatmap_weight_field": doc.heatmap_weight_field,
+                "heatmap_weight_min": doc.heatmap_weight_min,
+                "heatmap_weight_max": doc.heatmap_weight_max,
+                "heatmap_weight_scale": doc.heatmap_weight_scale,
+                "heatmap_weight_stops_json": doc.heatmap_weight_stops_json,
+                "heatmap_radius_min": doc.heatmap_radius_min,
+                "heatmap_radius_max": doc.heatmap_radius_max,
+                "heatmap_intensity_min": doc.heatmap_intensity_min,
+                "heatmap_intensity_max": doc.heatmap_intensity_max,
+                "heatmap_opacity": doc.heatmap_opacity,
+                "heatmap_ramp_json": doc.heatmap_ramp_json,
                 "stroke_color": doc.stroke_color,
                 "stroke_width": doc.stroke_width,
                 "fill_opacity": doc.fill_opacity,
@@ -1649,6 +1844,18 @@ def create_master(
     popup_fields_json: str | None = None,
     click_action: str = "popup",
     heatmap: int = 0,
+    heatmap_mode: str = "count",
+    heatmap_weight_field: str | None = None,
+    heatmap_weight_min: float | None = None,
+    heatmap_weight_max: float | None = None,
+    heatmap_weight_scale: str = "linear",
+    heatmap_weight_stops_json: str | None = None,
+    heatmap_radius_min: int = 10,
+    heatmap_radius_max: int = 30,
+    heatmap_intensity_min: float = 1,
+    heatmap_intensity_max: float = 2.5,
+    heatmap_opacity: float = 0.75,
+    heatmap_ramp_json: str | None = None,
     radius_enabled: int = 0,
     radius_field: str | None = None,
     radius_meters: int = 5000,
@@ -1686,6 +1893,18 @@ def create_master(
             "click_action": click_action or "popup",
             "use_source_permissions": 1,
             "heatmap": int(heatmap),
+            "heatmap_mode": heatmap_mode or "count",
+            "heatmap_weight_field": heatmap_weight_field or "",
+            "heatmap_weight_min": heatmap_weight_min,
+            "heatmap_weight_max": heatmap_weight_max,
+            "heatmap_weight_scale": heatmap_weight_scale or "linear",
+            "heatmap_weight_stops_json": heatmap_weight_stops_json or "",
+            "heatmap_radius_min": int(heatmap_radius_min or 10),
+            "heatmap_radius_max": int(heatmap_radius_max or 30),
+            "heatmap_intensity_min": float(heatmap_intensity_min or 1),
+            "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
+            "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
+            "heatmap_ramp_json": heatmap_ramp_json or "",
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
             "radius_meters": int(radius_meters),
@@ -1731,6 +1950,18 @@ def list_masters() -> list[dict]:
             "size",
             "cluster",
             "heatmap",
+            "heatmap_mode",
+            "heatmap_weight_field",
+            "heatmap_weight_min",
+            "heatmap_weight_max",
+            "heatmap_weight_scale",
+            "heatmap_weight_stops_json",
+            "heatmap_radius_min",
+            "heatmap_radius_max",
+            "heatmap_intensity_min",
+            "heatmap_intensity_max",
+            "heatmap_opacity",
+            "heatmap_ramp_json",
             "stroke_color",
             "stroke_width",
             "fill_opacity",
@@ -1803,6 +2034,19 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "icon": master.icon,
             "size": master.size,
             "cluster": master.cluster,
+            "heatmap": master.heatmap,
+            "heatmap_mode": master.heatmap_mode or "count",
+            "heatmap_weight_field": master.heatmap_weight_field or "",
+            "heatmap_weight_min": master.heatmap_weight_min,
+            "heatmap_weight_max": master.heatmap_weight_max,
+            "heatmap_weight_scale": master.heatmap_weight_scale or "linear",
+            "heatmap_weight_stops_json": master.heatmap_weight_stops_json or "",
+            "heatmap_radius_min": master.heatmap_radius_min or 10,
+            "heatmap_radius_max": master.heatmap_radius_max or 30,
+            "heatmap_intensity_min": master.heatmap_intensity_min or 1,
+            "heatmap_intensity_max": master.heatmap_intensity_max or 2.5,
+            "heatmap_opacity": master.heatmap_opacity if master.heatmap_opacity is not None else 0.75,
+            "heatmap_ramp_json": master.heatmap_ramp_json or "",
             "enabled": 1,
             "filter_json": master.filter_json,
             "stroke_color": master.stroke_color,

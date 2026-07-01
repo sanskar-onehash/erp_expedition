@@ -20,6 +20,7 @@ import { ICON_PATHS } from '../api/icons.js'
 import FilterBuilder from './FilterBuilder.vue'
 import AdvancedGroupingModal from './AdvancedGroupingModal.vue'
 import { parseFilterRows, serializeFilterRows } from '../lib/filters.js'
+import { RAMP_PRESETS, serializeRamp } from '../api/heatmap.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -56,6 +57,18 @@ const form = ref({
   group_by_field: '',  // '' = no grouping; otherwise a fieldname on source
   group_config: {},    // { "<value>": { color, icon, label } } — overrides default style
   click_action: 'popup', // 'popup' | 'redirect' | 'none'
+  heatmap: 0,
+  heatmap_mode: 'count',
+  heatmap_weight_field: '',
+  heatmap_weight_min: 0,
+  heatmap_weight_max: 100,
+  heatmap_weight_scale: 'linear',
+  heatmap_radius_min: 10,
+  heatmap_radius_max: 30,
+  heatmap_intensity_min: 1,
+  heatmap_intensity_max: 2.5,
+  heatmap_opacity: 0.75,
+  heatmap_ramp_json: '',
 })
 const saving = ref(false)
 const error = ref('')
@@ -129,6 +142,18 @@ watch(
         group_config: {},
         click_action: 'popup',
         heatmap: 0,
+        heatmap_mode: 'count',
+        heatmap_weight_field: '',
+        heatmap_weight_min: 0,
+        heatmap_weight_max: 100,
+        heatmap_weight_scale: 'linear',
+        heatmap_weight_stops_json: '',
+        heatmap_radius_min: 10,
+        heatmap_radius_max: 30,
+        heatmap_intensity_min: 1,
+        heatmap_intensity_max: 2.5,
+        heatmap_opacity: 0.75,
+        heatmap_ramp_json: '',
         radius_enabled: 0,
         radius_field: '',
         radius_meters: 5000,
@@ -177,6 +202,18 @@ watch(
         group_config: _parseGroupConfig(l.group_config_json || l.group_config),
         click_action: l.click_action || 'popup',
         heatmap: l.heatmap ? 1 : 0,
+        heatmap_mode: l.heatmap_mode || 'count',
+        heatmap_weight_field: l.heatmap_weight_field || '',
+        heatmap_weight_min: l.heatmap_weight_min ?? 0,
+        heatmap_weight_max: l.heatmap_weight_max ?? 100,
+        heatmap_weight_scale: l.heatmap_weight_scale || 'linear',
+        heatmap_weight_stops_json: l.heatmap_weight_stops_json || '',
+        heatmap_radius_min: l.heatmap_radius_min ?? 10,
+        heatmap_radius_max: l.heatmap_radius_max ?? 30,
+        heatmap_intensity_min: l.heatmap_intensity_min ?? 1,
+        heatmap_intensity_max: l.heatmap_intensity_max ?? 2.5,
+        heatmap_opacity: l.heatmap_opacity ?? 0.75,
+        heatmap_ramp_json: l.heatmap_ramp_json || '',
         radius_enabled: l.radius_enabled ? 1 : 0,
         radius_field: l.radius_field || '',
         radius_meters: l.radius_meters ?? 5000,
@@ -203,6 +240,17 @@ watch(
     enabled: form.value.enabled,
     icon: form.value.icon,
     heatmap: form.value.heatmap,
+    heatmap_mode: form.value.heatmap_mode,
+    heatmap_weight_field: form.value.heatmap_weight_field,
+    heatmap_weight_min: form.value.heatmap_weight_min,
+    heatmap_weight_max: form.value.heatmap_weight_max,
+    heatmap_weight_scale: form.value.heatmap_weight_scale,
+    heatmap_radius_min: form.value.heatmap_radius_min,
+    heatmap_radius_max: form.value.heatmap_radius_max,
+    heatmap_intensity_min: form.value.heatmap_intensity_min,
+    heatmap_intensity_max: form.value.heatmap_intensity_max,
+    heatmap_opacity: form.value.heatmap_opacity,
+    heatmap_ramp_json: form.value.heatmap_ramp_json,
     radius_enabled: form.value.radius_enabled,
     radius_field: form.value.radius_field,
     radius_meters: form.value.radius_meters,
@@ -223,8 +271,19 @@ watch(
       cluster: preview.cluster,
       enabled: preview.enabled,
       icon: preview.icon || '',
-      heatmap: preview.heatmap,
-      radius_enabled: preview.radius_enabled,
+        heatmap: preview.heatmap,
+        heatmap_mode: preview.heatmap_mode,
+        heatmap_weight_field: preview.heatmap_weight_field,
+        heatmap_weight_min: preview.heatmap_weight_min,
+        heatmap_weight_max: preview.heatmap_weight_max,
+        heatmap_weight_scale: preview.heatmap_weight_scale,
+        heatmap_radius_min: preview.heatmap_radius_min,
+        heatmap_radius_max: preview.heatmap_radius_max,
+        heatmap_intensity_min: preview.heatmap_intensity_min,
+        heatmap_intensity_max: preview.heatmap_intensity_max,
+        heatmap_opacity: preview.heatmap_opacity,
+        heatmap_ramp_json: preview.heatmap_ramp_json,
+        radius_enabled: preview.radius_enabled,
       radius_field: preview.radius_field || '',
       radius_meters: preview.radius_meters,
       radius_opacity: preview.radius_opacity,
@@ -625,6 +684,9 @@ const numericFields = computed(() =>
     ['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)
   )
 )
+const heatmapRampOptions = computed(() =>
+  Object.entries(RAMP_PRESETS).map(([key, preset]) => ({ key, label: preset.label }))
+)
 const selectedGroupField = computed(() =>
   sourceFields.value.find((f) => f.fieldname === form.value.group_by_field) || null
 )
@@ -639,6 +701,13 @@ const groupBandKind = computed(() => {
 const groupBySupportsBands = computed(() =>
   !!groupBandKind.value
 )
+
+function applyHeatmapRamp(key) {
+  const preset = RAMP_PRESETS[key]
+  if (!preset) return
+  const stops = preset.build ? preset.build(form.value.color) : preset.stops
+  form.value.heatmap_ramp_json = serializeRamp(stops)
+}
 const groupMode = computed(() =>
   form.value.group_config?.__grouping?.mode === 'bands' ? 'bands' : 'value'
 )
@@ -1018,6 +1087,18 @@ async function save() {
       saving.value = false
       return
     }
+    if (form.value.heatmap && form.value.heatmap_mode === 'sum') {
+      if (!form.value.heatmap_weight_field) {
+        error.value = 'Choose a numeric metric field for weighted heatmap mode.'
+        saving.value = false
+        return
+      }
+      if (Number(form.value.heatmap_weight_min) === Number(form.value.heatmap_weight_max)) {
+        error.value = 'Heatmap metric minimum and maximum must be different.'
+        saving.value = false
+        return
+      }
+    }
     if (isCreate.value) {
       if (!form.value.title.trim()) {
         error.value = 'Title is required'
@@ -1046,6 +1127,18 @@ async function save() {
         group_config_json: _serializeGroupConfig(form.value.group_config),
         click_action: form.value.click_action,
         heatmap: form.value.heatmap,
+        heatmap_mode: form.value.heatmap_mode,
+        heatmap_weight_field: form.value.heatmap_mode === 'sum' ? form.value.heatmap_weight_field : '',
+        heatmap_weight_min: form.value.heatmap_weight_min,
+        heatmap_weight_max: form.value.heatmap_weight_max,
+        heatmap_weight_scale: form.value.heatmap_weight_scale,
+        heatmap_weight_stops_json: form.value.heatmap_weight_stops_json || '',
+        heatmap_radius_min: form.value.heatmap_radius_min,
+        heatmap_radius_max: form.value.heatmap_radius_max,
+        heatmap_intensity_min: form.value.heatmap_intensity_min,
+        heatmap_intensity_max: form.value.heatmap_intensity_max,
+        heatmap_opacity: form.value.heatmap_opacity,
+        heatmap_ramp_json: form.value.heatmap_ramp_json || '',
         radius_enabled: form.value.radius_enabled,
         radius_field: form.value.radius_field,
         radius_meters: form.value.radius_meters,
@@ -1090,6 +1183,18 @@ async function save() {
         group_config_json: _serializeGroupConfig(form.value.group_config),
         click_action: form.value.click_action,
         heatmap: form.value.heatmap,
+        heatmap_mode: form.value.heatmap_mode,
+        heatmap_weight_field: form.value.heatmap_mode === 'sum' ? form.value.heatmap_weight_field : '',
+        heatmap_weight_min: form.value.heatmap_weight_min,
+        heatmap_weight_max: form.value.heatmap_weight_max,
+        heatmap_weight_scale: form.value.heatmap_weight_scale,
+        heatmap_weight_stops_json: form.value.heatmap_weight_stops_json || '',
+        heatmap_radius_min: form.value.heatmap_radius_min,
+        heatmap_radius_max: form.value.heatmap_radius_max,
+        heatmap_intensity_min: form.value.heatmap_intensity_min,
+        heatmap_intensity_max: form.value.heatmap_intensity_max,
+        heatmap_opacity: form.value.heatmap_opacity,
+        heatmap_ramp_json: form.value.heatmap_ramp_json || '',
         radius_enabled: form.value.radius_enabled,
         radius_field: form.value.radius_field,
         radius_meters: form.value.radius_meters,
@@ -1705,13 +1810,76 @@ function close() {
           </select>
         </label>
 
-        <!-- Heatmap mode (client-only visual toggle; the backend
-             heatmap field controls whether the server emits a separate
-             GeoJSON heatmap source). -->
-        <label class="le__check">
-          <input v-model="form.heatmap" type="checkbox" :true-value="1" :false-value="0" />
-          <span>Heatmap mode <span class="le__hint">(blur pins into intensity)</span></span>
-        </label>
+        <div class="le__filter">
+          <div class="le__filter-header">
+            <label class="le__check le__check--inline">
+              <input v-model="form.heatmap" type="checkbox" :true-value="1" :false-value="0" />
+              <span>Heatmap analysis <span class="le__hint">(density or weighted metric)</span></span>
+            </label>
+          </div>
+          <template v-if="form.heatmap">
+            <label class="le__field">
+              <span class="le__label">Question</span>
+              <select v-model="form.heatmap_mode" class="le__input le__input--sm">
+                <option value="count">Where are records concentrated?</option>
+                <option value="sum">Where is a numeric metric concentrated?</option>
+              </select>
+            </label>
+            <template v-if="form.heatmap_mode === 'sum'">
+              <div class="le__row">
+                <label class="le__field le__field--half">
+                  <span class="le__label">Metric field</span>
+                  <select v-model="form.heatmap_weight_field" class="le__input le__input--sm">
+                    <option value="">Choose metric</option>
+                    <option v-for="f in numericFields" :key="f.fieldname" :value="f.fieldname">
+                      {{ f.label }} ({{ f.fieldname }})
+                    </option>
+                  </select>
+                </label>
+                <label class="le__field le__field--half">
+                  <span class="le__label">Scale</span>
+                  <select v-model="form.heatmap_weight_scale" class="le__input le__input--sm">
+                    <option value="linear">Linear</option>
+                    <option value="log">Log</option>
+                  </select>
+                </label>
+              </div>
+              <div class="le__row">
+                <label class="le__field le__field--half">
+                  <span class="le__label">Metric min</span>
+                  <input v-model.number="form.heatmap_weight_min" class="le__input le__input--sm" type="number" />
+                </label>
+                <label class="le__field le__field--half">
+                  <span class="le__label">Metric max</span>
+                  <input v-model.number="form.heatmap_weight_max" class="le__input le__input--sm" type="number" />
+                </label>
+              </div>
+            </template>
+            <div class="le__row">
+              <label class="le__field le__field--half">
+                <span class="le__label">Radius</span>
+                <input v-model.number="form.heatmap_radius_max" class="le__input le__input--sm" type="number" min="8" max="80" step="1" />
+              </label>
+              <label class="le__field le__field--half">
+                <span class="le__label">Intensity</span>
+                <input v-model.number="form.heatmap_intensity_max" class="le__input le__input--sm" type="number" min="0.5" max="8" step="0.25" />
+              </label>
+            </div>
+            <div class="le__row">
+              <label class="le__field le__field--half">
+                <span class="le__label">Opacity</span>
+                <input v-model.number="form.heatmap_opacity" class="le__input le__input--sm" type="number" min="0.1" max="1" step="0.05" />
+              </label>
+              <label class="le__field le__field--half">
+                <span class="le__label">Ramp</span>
+                <select class="le__input le__input--sm" @change="e => applyHeatmapRamp(e.target.value)">
+                  <option value="">Layer color</option>
+                  <option v-for="r in heatmapRampOptions" :key="r.key" :value="r.key">{{ r.label }}</option>
+                </select>
+              </label>
+            </div>
+          </template>
+        </div>
 
         <!-- Halo radius controls (PR-8). When enabled, each pin gets a
              translucent circle around it representing a service area.

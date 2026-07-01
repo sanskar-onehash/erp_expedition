@@ -1,6 +1,6 @@
 {
  "actions": [],
- "allow_rename": 1,
+ "allow_rename": 0,
  "creation": "2026-06-19 10:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 0,
@@ -10,14 +10,18 @@
   "map",
   "zone_type",
   "geometry",
+  "tab_details",
+  "details_section",
   "centroid_lat",
   "centroid_lng",
+  "tag",
+  "notes",
+  "tab_style",
+  "style_section",
   "color",
   "fill_opacity",
   "stroke_color",
-  "stroke_width",
-  "tag",
-  "notes"
+  "stroke_width"
  ],
  "fields": [
   {
@@ -50,6 +54,16 @@
    "description": "GeoJSON geometry: Polygon or Point (with radius_m stored separately)."
   },
   {
+   "fieldname": "tab_details",
+   "fieldtype": "Tab Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "details_section",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
    "fieldname": "centroid_lat",
    "fieldtype": "Float",
    "label": "Centroid Latitude",
@@ -60,6 +74,27 @@
    "fieldtype": "Float",
    "label": "Centroid Longitude",
    "read_only": 1
+  },
+  {
+   "fieldname": "tag",
+   "fieldtype": "Data",
+   "label": "Tag",
+   "description": "Free-form tag for grouping zones (e.g. 'North region')."
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "tab_style",
+   "fieldtype": "Tab Break",
+   "label": "Style"
+  },
+  {
+   "fieldname": "style_section",
+   "fieldtype": "Section Break",
+   "label": "Style"
   },
   {
    "fieldname": "color",
@@ -82,17 +117,6 @@
    "fieldtype": "Int",
    "label": "Stroke Width",
    "default": "2"
-  },
-  {
-   "fieldname": "tag",
-   "fieldtype": "Data",
-   "label": "Tag",
-   "description": "Free-form tag for grouping zones (e.g. 'North region')."
-  },
-  {
-   "fieldname": "notes",
-   "fieldtype": "Text",
-   "label": "Notes"
   }
  ],
  "is_submittable": 0,

@@ -1,6 +1,6 @@
 {
  "actions": [],
- "allow_rename": 0,
+ "allow_rename": 1,
  "creation": "2026-06-19 10:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 0,
@@ -9,12 +9,15 @@
   "title",
   "activity_type",
   "user",
-  "related_doctype",
-  "related_name",
+  "basic_section",
   "map",
   "zone",
+  "related_doctype",
+  "related_name",
+  "location_section",
   "latitude",
   "longitude",
+  "details_section",
   "notes",
   "occurred_at",
   "duration_minutes",
@@ -44,15 +47,9 @@
    "reqd": 1
   },
   {
-   "fieldname": "related_doctype",
-   "fieldtype": "Link",
-   "label": "Related DocType",
-   "options": "DocType"
-  },
-  {
-   "fieldname": "related_name",
-   "fieldtype": "Data",
-   "label": "Related Name"
+   "fieldname": "basic_section",
+   "fieldtype": "Section Break",
+   "label": "Activity"
   },
   {
    "fieldname": "map",
@@ -67,6 +64,22 @@
    "options": "Expedition Zone"
   },
   {
+   "fieldname": "related_doctype",
+   "fieldtype": "Link",
+   "label": "Related DocType",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "related_name",
+   "fieldtype": "Data",
+   "label": "Related Name"
+  },
+  {
+   "fieldname": "location_section",
+   "fieldtype": "Section Break",
+   "label": "Location"
+  },
+  {
    "fieldname": "latitude",
    "fieldtype": "Float",
    "label": "Latitude"
@@ -75,6 +88,11 @@
    "fieldname": "longitude",
    "fieldtype": "Float",
    "label": "Longitude"
+  },
+  {
+   "fieldname": "details_section",
+   "fieldtype": "Section Break",
+   "label": "Details"
   },
   {
    "fieldname": "notes",

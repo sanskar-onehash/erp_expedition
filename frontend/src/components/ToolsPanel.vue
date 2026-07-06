@@ -13,12 +13,14 @@ import { useMapStore } from '../state/map.js'
 import { useUiStore } from '../state/ui.js'
 import { useZonesStore } from '../state/zones.js'
 import { useInsightsStore } from '../state/insights.js'
+import { useLayersStore } from '../state/layers.js'
 import { call } from '../api/client.js'
 
 const mapStore = useMapStore()
 const ui = useUiStore()
 const zoneStore = useZonesStore()
 const insights = useInsightsStore()
+const layerStore = useLayersStore()
 
 const activeMapName = computed(() => mapStore.activeMap?.map?.name)
 const zones = computed(() =>
@@ -37,6 +39,11 @@ const zoneTagsList = computed(() => {
   return Array.from(set).sort()
 })
 const insightList = computed(() => insights.active || [])
+const layerOptions = computed(() => layerStore.layers || [])
+const selectedZone = ref(null)
+const zoneSummary = ref(null)
+const zoneSummaryLoading = ref(false)
+const zoneSummaryError = ref('')
 
 const canEdit = computed(() => {
   const owner = mapStore.activeMap?.map?.owner
@@ -51,6 +58,7 @@ const openSections = ref({
   measure: true,
   pitch: true,
   activity: true,
+  coverage: true,
 })
 
 // Activity feed (PR-13-ish). Shows recent Expedition Activity rows
@@ -63,6 +71,11 @@ const activityError = ref('')
 const activityRange = ref('30d') // '7d' | '30d' | '90d' | 'all'
 const activityUser = ref('')
 const activityType = ref('')
+const coverageRadiusLayer = ref('')
+const coverageTargetLayer = ref('')
+const coverageResult = ref(null)
+const coverageLoading = ref(false)
+const coverageError = ref('')
 
 function rangeToDates(r) {
   const now = new Date()
@@ -139,6 +152,23 @@ function formatAgo(s) {
   return `${months}mo ago`
 }
 
+async function runCoverage() {
+  if (!coverageRadiusLayer.value || !coverageTargetLayer.value) return
+  coverageLoading.value = true
+  coverageError.value = ''
+  coverageResult.value = null
+  try {
+    coverageResult.value = await call('expedition.api.metric.radius_coverage', {
+      radius_layer: coverageRadiusLayer.value,
+      target_layer: coverageTargetLayer.value,
+    })
+  } catch (e) {
+    coverageError.value = e.message || String(e)
+  } finally {
+    coverageLoading.value = false
+  }
+}
+
 const SEVERITY_RING = {
   high: 'rgba(239, 68, 68, 0.55)',
   medium: 'rgba(245, 158, 11, 0.55)',
@@ -159,6 +189,24 @@ function focusZone(zone) {
       duration: 700,
       essential: true,
     })
+  }
+  loadZoneSummary(zone)
+}
+
+async function loadZoneSummary(zone) {
+  selectedZone.value = zone || null
+  zoneSummary.value = null
+  zoneSummaryError.value = ''
+  if (!zone?.name) return
+  zoneSummaryLoading.value = true
+  try {
+    zoneSummary.value = await call('expedition.api.metric.summarize_zone', {
+      zone_name: zone.name,
+    })
+  } catch (e) {
+    zoneSummaryError.value = e.message || String(e)
+  } finally {
+    zoneSummaryLoading.value = false
   }
 }
 async function removeZone(zone) {
@@ -255,6 +303,27 @@ function onInsightClick(ins) {
         </ul>
         <p v-else-if="openSections.zones" class="tp__empty">No zones yet. Use + to draw a region.</p>
 
+        <div v-if="openSections.zones && selectedZone" class="tp__zone-summary">
+          <div class="tp__zone-summary-head">
+            <span class="tp__zone-summary-title">{{ selectedZone.title || selectedZone.name }}</span>
+            <button type="button" class="tp__zone-summary-refresh" :disabled="zoneSummaryLoading" @click="loadZoneSummary(selectedZone)">
+              {{ zoneSummaryLoading ? 'Loading…' : 'Refresh' }}
+            </button>
+          </div>
+          <p v-if="zoneSummaryError" class="tp__empty tp__empty--err">{{ zoneSummaryError }}</p>
+          <p v-else-if="zoneSummaryLoading" class="tp__empty">Calculating zone metrics…</p>
+          <div v-else-if="zoneSummary" class="tp__zone-metrics">
+            <div v-for="row in zoneSummary.layers" :key="row.layer" class="tp__zone-metric">
+              <span class="tp__zone-metric-label">{{ row.title || row.source_doctype }}</span>
+              <span class="tp__zone-metric-value">{{ row.count }}</span>
+            </div>
+            <div v-for="metric in zoneSummary.metrics" :key="metric.label" class="tp__zone-metric">
+              <span class="tp__zone-metric-label">{{ metric.label }}</span>
+              <span class="tp__zone-metric-value">{{ metric.value ?? '—' }}</span>
+            </div>
+          </div>
+        </div>
+
         <div v-if="ui.drawMode === 'polygon' && openSections.zones" class="tp__draw">
           <input
             v-model="ui.zoneDraftTitle"
@@ -311,6 +380,56 @@ function onInsightClick(ins) {
               <span class="tp__activity-ago">{{ formatAgo(row.occurred_at) }}</span>
             </li>
           </ul>
+        </div>
+      </section>
+
+      <section v-if="mapStore.activeMap" class="tp__section">
+        <div class="tp__section-bar">
+          <button class="tp__section-toggle" type="button" @click="openSections.coverage = !openSections.coverage">
+            <span>Coverage</span>
+            <span class="tp__chevron" :data-open="openSections.coverage">▾</span>
+          </button>
+        </div>
+        <div v-if="openSections.coverage" class="tp__coverage">
+          <div class="tp__coverage-controls">
+            <select v-model="coverageRadiusLayer" class="tp__activity-select">
+              <option value="">Radius layer</option>
+              <option v-for="layer in layerOptions" :key="'radius-' + layer.name" :value="layer.name">
+                {{ layer.title || layer.name }}
+              </option>
+            </select>
+            <select v-model="coverageTargetLayer" class="tp__activity-select">
+              <option value="">Target layer</option>
+              <option v-for="layer in layerOptions" :key="'target-' + layer.name" :value="layer.name">
+                {{ layer.title || layer.name }}
+              </option>
+            </select>
+          </div>
+          <button
+            type="button"
+            class="tp__activity-refresh"
+            :disabled="coverageLoading || !coverageRadiusLayer || !coverageTargetLayer"
+            @click="runCoverage"
+          >{{ coverageLoading ? 'Analyzing…' : 'Analyze' }}</button>
+          <p v-if="coverageError" class="tp__empty tp__empty--err">{{ coverageError }}</p>
+          <div v-if="coverageResult" class="tp__coverage-grid">
+            <div class="tp__coverage-stat">
+              <span>Covered</span>
+              <strong>{{ coverageResult.covered }}</strong>
+            </div>
+            <div class="tp__coverage-stat">
+              <span>Uncovered</span>
+              <strong>{{ coverageResult.uncovered }}</strong>
+            </div>
+            <div class="tp__coverage-stat">
+              <span>Overlap</span>
+              <strong>{{ coverageResult.overlap }}</strong>
+            </div>
+            <div class="tp__coverage-stat">
+              <span>Coverage</span>
+              <strong>{{ Math.round(coverageResult.coverage_percent || 0) }}%</strong>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -701,6 +820,42 @@ function onInsightClick(ins) {
 }
 .tp__empty--err { color: #FCA5A5; }
 
+.tp__coverage {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tp__coverage-controls {
+  display: flex;
+  gap: 4px;
+}
+.tp__coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+.tp__coverage-stat {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tp__coverage-stat span {
+  color: rgba(230, 232, 236, 0.55);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tp__coverage-stat strong {
+  color: #E6E8EC;
+  font-size: 16px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Zone tag filter (chip row above the zone list). */
 .tp__zone-tags {
   padding: 4px 8px 6px;
@@ -747,4 +902,72 @@ function onInsightClick(ins) {
   font-family: inherit;
 }
 .tp__zone-tag-clear:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
+.tp__zone-summary {
+  margin: 6px 8px 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+}
+.tp__zone-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tp__zone-summary-title {
+  min-width: 0;
+  color: #E6E8EC;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__zone-summary-refresh {
+  flex: none;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.30);
+  color: #93C5FD;
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tp__zone-summary-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tp__zone-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tp__zone-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 5px;
+}
+.tp__zone-metric-label {
+  min-width: 0;
+  color: rgba(230, 232, 236, 0.72);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__zone-metric-value {
+  flex: none;
+  color: #E6E8EC;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 </style>

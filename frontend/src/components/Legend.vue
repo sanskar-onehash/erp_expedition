@@ -112,30 +112,6 @@ function groupSwatches(l) {
       <span class="legend__label">{{ l.title || l.name }}</span>
     </button>
   </div>
-  <div v-if="heatmapLayers.length" class="legend__heatmaps" role="region" aria-label="Heatmap legend">
-    <div v-for="l in heatmapLayers" :key="'heat-' + l.name" class="legend__heatmap">
-      <div class="legend__heatmap-top">
-        <span class="legend__heatmap-title">{{ l.title || l.name }}</span>
-        <span class="legend__heatmap-metric">{{ heatmapMetricLabel(l) }}</span>
-      </div>
-      <div v-if="groupSwatches(l).length" class="legend__groups">
-        <span
-          v-for="g in groupSwatches(l)"
-          :key="g.label"
-          class="legend__group"
-        >
-          <span class="legend__group-dot" :style="{ background: g.color }" />
-          <span>{{ g.label }}</span>
-        </span>
-        <span class="legend__heatmap-scale">Intensity: low to high</span>
-      </div>
-      <div v-else class="legend__heatmap-ramp">
-        <span>Low</span>
-        <span class="legend__heatmap-gradient" :style="{ background: heatmapGradient(l) }" />
-        <span>High</span>
-      </div>
-    </div>
-  </div>
 </template>
 
 <style scoped>

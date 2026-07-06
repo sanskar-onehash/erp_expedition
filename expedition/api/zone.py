@@ -21,6 +21,10 @@ import frappe
 from frappe.model.document import Document
 
 
+def _has_zone_stroke_style() -> bool:
+    return frappe.db.has_column("Expedition Zone", "stroke_style")
+
+
 def _assert_map_write(map_name: str) -> None:
     """Require write on Expedition Map <map_name>."""
     if not frappe.db.exists("Expedition Map", map_name):
@@ -50,6 +54,7 @@ def create_zone(
     fill_opacity: float = 0.25,
     stroke_color: str | None = None,
     stroke_width: int = 2,
+    stroke_style: str | None = "solid",
     tag: str | None = None,
 ) -> dict:
     """
@@ -72,8 +77,15 @@ def create_zone(
     doc.fill_opacity = fill_opacity
     doc.stroke_color = stroke_color or "#1E40AF"
     doc.stroke_width = stroke_width
+    if _has_zone_stroke_style():
+        doc.stroke_style = stroke_style or "solid"
     doc.tag = (tag or "").strip() or None
     doc.insert(ignore_permissions=True)
+    return _zone_to_dict(doc)
+
+
+def _zone_to_dict(doc) -> dict:
+    geom = _coerce_geometry(doc.geometry)
     return {
         "name": doc.name,
         "title": doc.title,
@@ -83,10 +95,52 @@ def create_zone(
         "fill_opacity": doc.fill_opacity,
         "stroke_color": doc.stroke_color,
         "stroke_width": doc.stroke_width,
+        "stroke_style": getattr(doc, "stroke_style", None) or "solid",
         "tag": doc.tag,
         "centroid_lat": doc.centroid_lat,
         "centroid_lng": doc.centroid_lng,
     }
+
+
+@frappe.whitelist()
+def update_zone(
+    name: str,
+    title: str | None = None,
+    geometry=None,
+    color: str | None = None,
+    fill_opacity: float | None = None,
+    stroke_color: str | None = None,
+    stroke_width: int | None = None,
+    stroke_style: str | None = None,
+    tag: str | None = None,
+) -> dict:
+    """Update a drawn zone. Permission gated on the parent map."""
+    if not frappe.db.exists("Expedition Zone", name):
+        frappe.throw(f"Unknown Expedition Zone {name}", frappe.DoesNotExistError)
+    doc = frappe.get_doc("Expedition Zone", name)
+    _assert_map_write(doc.map)
+    if title is not None:
+        if not title.strip():
+            frappe.throw("Zone title is required")
+        doc.title = title.strip()
+    if geometry is not None:
+        doc.geometry = json.dumps(_coerce_geometry(geometry))
+    if color is not None:
+        doc.color = color
+    if fill_opacity is not None:
+        doc.fill_opacity = fill_opacity
+    if stroke_color is not None:
+        doc.stroke_color = stroke_color
+    if stroke_width is not None:
+        doc.stroke_width = int(stroke_width)
+    if stroke_style is not None and _has_zone_stroke_style():
+        if stroke_style not in ("solid", "dashed", "dotted"):
+            frappe.throw("stroke_style must be solid, dashed, or dotted")
+        doc.stroke_style = stroke_style
+    if tag is not None:
+        doc.tag = tag.strip() or None
+    doc.save(ignore_permissions=True)
+    return _zone_to_dict(doc)
 
 
 @frappe.whitelist()

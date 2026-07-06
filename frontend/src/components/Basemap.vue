@@ -52,6 +52,8 @@ import {
 // for primary layers.
 const SIZE_TO_RADIUS = { xs: 7, s: 9, m: 11, l: 14, xl: 18 }
 const ICON_IMAGE_SIZE = 36
+const CLUSTER_MAX_ZOOM = 12
+const CLUSTERED_HALO_MIN_ZOOM = CLUSTER_MAX_ZOOM + 1
 // Punchy Apple-red fallback so even unconfigured layers read as
 // primary data points.
 const FALLBACK_COLOR = '#FF3B30'
@@ -72,23 +74,27 @@ function computeGlobeFitZoom(width, height) {
   return Math.max(0, Math.log2(Math.min(width, height) / TILE_PX))
 }
 
+const VIRTUAL_GROUP_SEPARATOR = '__grp__'
+
 function sourceId(layerName) { return `src-${layerName}` }
-function groupedSourceId(layerName, groupKey) { return `src-${layerName}-grp-${groupKey}` }
 function shadowLayerId(layerName) { return `lyr-${layerName}-shadow` }
 function ringLayerId(layerName) { return `lyr-${layerName}-ring` }
 function layerId(layerName) { return `lyr-${layerName}` }
 function clusterLayerId(layerName) { return `lyr-${layerName}-clusters` }
 function clusterCountId(layerName) { return `lyr-${layerName}-cluster-count` }
 function iconLayerId(layerName) { return `lyr-${layerName}-icon` }
-function groupedLayerBase(layerName, groupKey) { return `lyr-${layerName}-grp-${groupKey}` }
 function heatmapLayerId(layerName) { return `lyr-${layerName}-heatmap` }
 function haloSourceId(layerName) { return `src-${layerName}-halo` }
 function haloLayerId(layerName) { return `lyr-${layerName}-halo` }
 function haloStrokeLayerId(layerName) { return `lyr-${layerName}-halo-stroke` }
 function extrusionLayerId(layerName) { return `lyr-${layerName}-extrude` }
 function extrusionSourceId(layerName) { return `src-${layerName}-extrude` }
-function safeMapIdPart(value) {
-  return encodeURIComponent(String(value ?? 'empty')).replace(/[^a-zA-Z0-9_-]/g, '_')
+function virtualGroupName(layerName, groupKey) {
+  const safeKey = encodeURIComponent(String(groupKey ?? 'empty')).replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `${layerName}${VIRTUAL_GROUP_SEPARATOR}${safeKey}`
+}
+function parentLayerName(renderName) {
+  return String(renderName || '').split(VIRTUAL_GROUP_SEPARATOR)[0]
 }
 
 // MapLibre's fill-extrusion only renders polygons, but Expedition
@@ -127,62 +133,107 @@ function _extrusionFeatureCollection(pointFc, layerName) {
 
 function _removeGroupedArtifacts(layerName) {
   if (!map || !map.getStyle()) return
-  const layerPrefix = `lyr-${layerName}-grp-`
-  const sourcePrefix = `src-${layerName}-grp-`
+  const layerPrefixes = [
+    `lyr-${layerName}${VIRTUAL_GROUP_SEPARATOR}`,
+    `lyr-${layerName}-grp-`,
+  ]
+  const sourcePrefixes = [
+    `src-${layerName}${VIRTUAL_GROUP_SEPARATOR}`,
+    `src-${layerName}-grp-`,
+  ]
   for (const layer of [...(map.getStyle().layers || [])].reverse()) {
-    if (layer.id && layer.id.startsWith(layerPrefix)) {
+    if (layer.id && layerPrefixes.some((prefix) => layer.id.startsWith(prefix))) {
       if (map.getLayer(layer.id)) map.removeLayer(layer.id)
       _interactivePointLayers.delete(layer.id)
     }
   }
   for (const id of Object.keys(map.getStyle().sources || {})) {
-    if (id.startsWith(sourcePrefix) && map.getSource(id)) map.removeSource(id)
+    if (sourcePrefixes.some((prefix) => id.startsWith(prefix)) && map.getSource(id)) {
+      map.removeSource(id)
+      delete _sourceClusterState[id]
+    }
   }
 }
 
 function _removeBasePointArtifacts(layerName) {
   if (!map) return
+  _removeRenderArtifacts(layerName)
+}
+
+function _removeRenderArtifacts(renderName) {
+  if (!map) return
   for (const id of [
-    heatmapLayerId(layerName),
-    haloStrokeLayerId(layerName),
-    haloLayerId(layerName),
-    clusterCountId(layerName),
-    clusterLayerId(layerName),
-    iconLayerId(layerName),
-    layerId(layerName),
-    ringLayerId(layerName),
-    shadowLayerId(layerName),
+    heatmapLayerId(renderName),
+    haloStrokeLayerId(renderName),
+    haloLayerId(renderName),
+    extrusionLayerId(renderName),
+    clusterCountId(renderName),
+    clusterLayerId(renderName),
+    iconLayerId(renderName),
+    layerId(renderName),
+    ringLayerId(renderName),
+    shadowLayerId(renderName),
   ]) {
     if (map.getLayer(id)) map.removeLayer(id)
     _interactivePointLayers.delete(id)
   }
-  if (map.getSource(haloSourceId(layerName))) map.removeSource(haloSourceId(layerName))
-  if (map.getSource(sourceId(layerName))) map.removeSource(sourceId(layerName))
+  for (const id of [extrusionSourceId(renderName), haloSourceId(renderName), sourceId(renderName)]) {
+    if (map.getSource(id)) map.removeSource(id)
+    delete _sourceClusterState[id]
+  }
 }
 
-function _pruneGroupedArtifacts(layerName, activeSourceIds, activeLayerPrefixes) {
+function _pruneGroupedArtifacts(layerName, activeRenderNames) {
   if (!map || !map.getStyle()) return
-  const layerPrefix = `lyr-${layerName}-grp-`
-  const sourcePrefix = `src-${layerName}-grp-`
+  const activePrefixes = new Set([...activeRenderNames].map((name) => `lyr-${name}`))
+  const activeSources = new Set()
+  for (const name of activeRenderNames) {
+    activeSources.add(sourceId(name))
+    activeSources.add(haloSourceId(name))
+    activeSources.add(extrusionSourceId(name))
+  }
+  const layerPrefixes = [
+    `lyr-${layerName}${VIRTUAL_GROUP_SEPARATOR}`,
+    `lyr-${layerName}-grp-`,
+  ]
+  const sourcePrefixes = [
+    `src-${layerName}${VIRTUAL_GROUP_SEPARATOR}`,
+    `src-${layerName}-grp-`,
+  ]
   for (const layer of [...(map.getStyle().layers || [])].reverse()) {
-    if (!layer.id || !layer.id.startsWith(layerPrefix)) continue
-    const keep = [...activeLayerPrefixes].some((prefix) => layer.id === prefix || layer.id.startsWith(`${prefix}-`))
+    if (!layer.id || !layerPrefixes.some((prefix) => layer.id.startsWith(prefix))) continue
+    const keep = [...activePrefixes].some((prefix) => layer.id === prefix || layer.id.startsWith(`${prefix}-`))
     if (!keep && map.getLayer(layer.id)) {
       map.removeLayer(layer.id)
       _interactivePointLayers.delete(layer.id)
     }
   }
   for (const id of Object.keys(map.getStyle().sources || {})) {
-    if (id.startsWith(sourcePrefix) && !activeSourceIds.has(id) && map.getSource(id)) map.removeSource(id)
+    if (sourcePrefixes.some((prefix) => id.startsWith(prefix)) && !activeSources.has(id) && map.getSource(id)) {
+      map.removeSource(id)
+      delete _sourceClusterState[id]
+    }
   }
 }
 
 function layerNameFromRenderedLayerId(id) {
   const grouped = id.match(/^lyr-(.+)-grp-[^-]+(?:-(shadow|ring|icon|clusters|cluster-count|halo))?$/)
   if (grouped) return grouped[1]
-  return id
-    .replace(/^lyr-/, '')
-    .replace(/-(ring|shadow|icon|clusters|cluster-count|halo)$/, '')
+  let name = String(id || '').replace(/^lyr-/, '')
+  for (const suffix of [
+    '-cluster-count',
+    '-halo-stroke',
+    '-clusters',
+    '-heatmap',
+    '-extrude',
+    '-shadow',
+    '-ring',
+    '-icon',
+    '-halo',
+  ]) {
+    if (name.endsWith(suffix)) return name.slice(0, -suffix.length)
+  }
+  return name
 }
 
 const mapEl = ref(null)
@@ -196,6 +247,10 @@ let unsubscribeFeatures = null
 let lastLoadedFeatures = {}  // layer.name -> last FeatureCollection, for re-add on styledata
 let unsubscribeZones = null
 let unsubscribeZoneTags = null
+let _virtualGroupFetchKeys = {}
+let _sourceClusterState = {}
+let _zoneHandlersBound = false
+let _zoneDrag = null
 
 // Tracks whether each visible layer has ever been fetched with the
 // current viewport. On first paint we deliberately pass `null` bounds
@@ -208,11 +263,23 @@ let _layerFetchedOnce = new Set()
 let _interactivePointLayers = new Set()
 
 function _setMapCursor(kind = activeMapCursor(ui)) {
+  if (_zoneDrag) kind = 'grabbing'
+  if (ui.drawMode === 'polygon' || ui.drawMode === 'rectangle' || ui.drawMode === 'circle' || ui.drawMode === 'freehand') {
+    kind = 'crosshair'
+  } else if (ui.drawMode === 'text') {
+    kind = 'text'
+  } else if (ui.drawMode === 'note') {
+    kind = 'dot'
+  } else if (ui.measureMode) {
+    kind = 'cross'
+  }
   if (map) applyMapCursor(map.getCanvas(), kind)
 }
 
 function _resetFirstFetch() {
   _layerFetchedOnce = new Set()
+  _virtualGroupFetchKeys = {}
+  _sourceClusterState = {}
 }
 
 function _bindPointLayerHandlers(layerIdValue) {
@@ -223,13 +290,27 @@ function _bindPointLayerHandlers(layerIdValue) {
   _interactivePointLayers.add(layerIdValue)
 }
 
+function _hasRenderedLayer(layerName) {
+  if (!map || !map.getStyle()) return false
+  if (map.getLayer(layerId(layerName)) || map.getSource(sourceId(layerName))) return true
+  const layerPrefix = `lyr-${layerName}${VIRTUAL_GROUP_SEPARATOR}`
+  const sourcePrefix = `src-${layerName}${VIRTUAL_GROUP_SEPARATOR}`
+  return (map.getStyle().layers || []).some((layer) => layer.id?.startsWith(layerPrefix))
+    || Object.keys(map.getStyle().sources || {}).some((id) => id.startsWith(sourcePrefix))
+}
+
 // Zone source/layer ids. All zones live in a single source so we
 // don't pay addSource/removeSource overhead per draw.
 function zoneSourceId() { return 'src-zones' }
 function zoneFillLayerId() { return 'lyr-zones-fill' }
 function zoneStrokeLayerId() { return 'lyr-zones-stroke' }
+function zoneDashedStrokeLayerId() { return 'lyr-zones-stroke-dashed' }
+function zoneDottedStrokeLayerId() { return 'lyr-zones-stroke-dotted' }
 function zoneLabelLayerId() { return 'lyr-zones-label' }
+function zoneSelectedLayerId() { return 'lyr-zones-selected' }
 function zoneDraftLayerId() { return 'lyr-zones-draft' }
+function zoneDraftFillLayerId() { return 'lyr-zones-draft-fill' }
+function zoneDraftVertexLayerId() { return 'lyr-zones-draft-verts' }
 
 // True while a polygon draw is in progress and doubleClickZoom has been
 // disabled. Module-scope so the bare `map.on('click', ...)` handler and
@@ -354,8 +435,75 @@ function featureDisplayIcon(feature, layerIcon) {
 }
 
 function featureGroupKey(feature) {
-  const value = feature?.properties?._group_value
-  return value == null || value === '' ? null : String(value)
+  const props = feature?.properties || {}
+  if (props._group_value != null && props._group_value !== '') return String(props._group_value)
+  if (Object.prototype.hasOwnProperty.call(props, '_group_value')) return '(blank)'
+  if (Array.isArray(props._group_path) && props._group_path.length) return props._group_path.join('\x1f')
+  return null
+}
+
+function featureGroupLabel(feature, fallback) {
+  const props = feature?.properties || {}
+  return props._group_label || props._group_value || fallback
+}
+
+function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
+  if (Array.isArray(fc?.virtual_groups) && fc.virtual_groups.length) {
+    return fc.virtual_groups.map((group) => {
+      const renderName = virtualGroupName(layerName, group.key)
+      const groupFc = layerStore.features[renderName]
+      return {
+        renderName,
+        parentName: layerName,
+        groupKey: group.key,
+        groupLabel: group.label || group.key,
+        fc: groupFc || null,
+        layerDoc,
+        style: {
+          ...style,
+          ...(group.style || {}),
+        },
+      }
+    })
+  }
+
+  const groups = new Map()
+  for (const feature of fc?.features || []) {
+    const key = featureGroupKey(feature)
+    if (!key) continue
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(feature)
+  }
+  if (!groups.size) return []
+  return [...groups.entries()].map(([key, features]) => {
+    const first = features[0]
+    const groupColor = featureDisplayColor(first, color)
+    const inheritedIcon = style.icon || layerDoc.icon || ''
+    const groupIcon = featureDisplayIcon(first, inheritedIcon)
+    const renderName = virtualGroupName(layerName, key)
+    return {
+      renderName,
+      parentName: layerName,
+      groupKey: key,
+      fc: {
+        ...fc,
+        features,
+        layer: {
+          ...(fc.layer || {}),
+          name: layerName,
+          title: fc.layer?.title || layerDoc.title || layerName,
+          _virtual_group_key: key,
+          _virtual_group_label: featureGroupLabel(first, key),
+        },
+      },
+      layerDoc,
+      style: {
+        ...style,
+        color: groupColor,
+        icon: groupIcon,
+      },
+    }
+  })
 }
 
 function iconRenderSpec(iconKey, color) {
@@ -535,6 +683,57 @@ function haloPolygon(lng, lat, radiusMeters, steps = 64) {
   return { type: 'Polygon', coordinates: [coordinates] }
 }
 
+function distanceMeters(a, b) {
+  if (!a || !b) return 0
+  const earth = 6378137
+  const toRad = (deg) => deg * Math.PI / 180
+  const lat1 = toRad(a[1])
+  const lat2 = toRad(b[1])
+  const dLat = toRad(b[1] - a[1])
+  const dLng = toRad(b[0] - a[0])
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+  return earth * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
+}
+
+function rectanglePolygon(a, b) {
+  if (!a || !b) return null
+  const west = Math.min(a[0], b[0])
+  const east = Math.max(a[0], b[0])
+  const south = Math.min(a[1], b[1])
+  const north = Math.max(a[1], b[1])
+  return {
+    type: 'Polygon',
+    coordinates: [[
+      [west, south],
+      [east, south],
+      [east, north],
+      [west, north],
+      [west, south],
+    ]],
+  }
+}
+
+function draftColor() {
+  return ui.drawingColor || '#3B82F6'
+}
+
+function draftStrokeColor() {
+  return ui.drawingStrokeColor || '#1E40AF'
+}
+
+function draftFillOpacity() {
+  return Number(ui.drawingFillOpacity ?? 0.22)
+}
+
+function draftStrokeWidth() {
+  return Number(ui.drawingStrokeWidth ?? 2)
+}
+
+function draftStrokeStyle() {
+  return ui.drawingStrokeStyle || 'solid'
+}
+
 function haloFeatureCollection(features, layerName) {
   return {
     type: 'FeatureCollection',
@@ -551,7 +750,7 @@ function haloFeatureCollection(features, layerName) {
   }
 }
 
-function _addLayerOnMap(layerName) {
+function _addLayerOnMap(layerName, renderContext = null) {
   // `isStyleLoaded()` returns false when basemap tile sources are
   // still loading, which can take 1-2s after a `setStyle`. But
   // addSource/addLayer only need the style *object* to be loaded,
@@ -561,22 +760,65 @@ function _addLayerOnMap(layerName) {
   if (!map || !map.getStyle()) {
     return
   }
-  const fc = layerStore.features[layerName]
+  const fc = renderContext?.fc || layerStore.features[layerName]
   if (!fc) return
-  const layerDoc = layerStore.layers.find((l) => l.name === layerName)
+  const parentName = renderContext?.parentName || parentLayerName(layerName)
+  const renderName = renderContext?.renderName || layerName
+  const layerDoc = renderContext?.layerDoc || layerStore.layers.find((l) => l.name === parentName)
   if (!layerDoc) return
-  const style = layerStore.getLayerStyle(layerName) || {}
+  const style = renderContext?.style || (renderName !== parentName ? fc?.layer?.style : null) || layerStore.getLayerStyle(parentName) || {}
   const color = style.color || layerDoc.color || FALLBACK_COLOR
   const sizeKey = style.size || layerDoc.size || 'm'
   const radius = SIZE_TO_RADIUS[sizeKey] || SIZE_TO_RADIUS.m
   const wantsCluster = !!(style.cluster || layerDoc.cluster)
   const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
-  const heatOn = enabled && ui.isHeatmapOn(layerName)
+  const heatOn = enabled && ui.isHeatmapOn(parentName)
 
-  const sid = sourceId(layerName)
-  const lid = layerId(layerName)
-  const shid = shadowLayerId(layerName)
-  const rid = ringLayerId(layerName)
+  if (!renderContext && renderName === parentName) {
+    const virtualGroups = buildVirtualGroupLayers(layerName, fc, layerDoc, style, color)
+    if (virtualGroups.length) {
+      _removeBasePointArtifacts(layerName)
+      const activeRenderNames = new Set()
+      const groupsToFetch = []
+      for (const group of virtualGroups) {
+        activeRenderNames.add(group.renderName)
+        if (group.fc) {
+          _addLayerOnMap(group.renderName, group)
+        }
+        const fetchKey = JSON.stringify({
+          parentFetched: layerStore.lastFetched?.[layerName] || 0,
+          bounds: layerStore.lastBounds?.[layerName] || null,
+          groupKey: group.groupKey,
+        })
+        if (_virtualGroupFetchKeys[group.renderName] !== fetchKey && !layerStore.loading?.[group.renderName]) {
+          _virtualGroupFetchKeys[group.renderName] = fetchKey
+          groupsToFetch.push({
+            cacheKey: group.renderName,
+            groupKey: group.groupKey,
+          })
+        }
+      }
+      if (groupsToFetch.length) {
+        layerStore.fetchVirtualGroupFeatures(
+          layerName,
+          layerStore.lastBounds?.[layerName] || null,
+          groupsToFetch,
+        ).catch((e) => {
+          for (const group of groupsToFetch) delete _virtualGroupFetchKeys[group.cacheKey]
+          console.warn('[expedition] virtual group batch fetch failed', layerName, e)
+        })
+      }
+      _pruneGroupedArtifacts(layerName, activeRenderNames)
+      lastLoadedFeatures[layerName] = fc
+      return
+    }
+    _removeGroupedArtifacts(layerName)
+  }
+
+  const sid = sourceId(renderName)
+  const lid = layerId(renderName)
+  const shid = shadowLayerId(renderName)
+  const rid = ringLayerId(renderName)
 
   const iconSpecs = new Map()
   const sourceFeatures = (fc.features || []).map((feature) => {
@@ -595,24 +837,6 @@ function _addLayerOnMap(layerName) {
     }
   })
 
-  const groupedCluster = wantsCluster && sourceFeatures.some((feature) => featureGroupKey(feature))
-  if (groupedCluster) {
-    _addGroupedClusterLayerOnMap({
-      layerName,
-      fc,
-      sourceFeatures,
-      color,
-      radius,
-      enabled,
-      iconSpecs,
-      layerDoc,
-      style,
-    })
-    lastLoadedFeatures[layerName] = fc
-    return
-  }
-  _removeGroupedArtifacts(layerName)
-
   const sourceSpec = {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: sourceFeatures },
@@ -621,15 +845,24 @@ function _addLayerOnMap(layerName) {
   if (wantsCluster) {
     sourceSpec.cluster = true
     sourceSpec.clusterRadius = 40
-    sourceSpec.clusterMaxZoom = 12
+    sourceSpec.clusterMaxZoom = CLUSTER_MAX_ZOOM
   }
 
-  const existing = map.getSource(sid)
+  let existing = map.getSource(sid)
+  const existingStyleSource = map.getStyle()?.sources?.[sid]
+  const existingWantsCluster = existingStyleSource
+    ? !!existingStyleSource.cluster
+    : _sourceClusterState[sid]
+  if (existing && existingWantsCluster !== undefined && existingWantsCluster !== wantsCluster) {
+    _removeRenderArtifacts(renderName)
+    existing = null
+  }
   if (existing && existing.type === 'geojson') {
     existing.setData(sourceSpec.data)
   } else {
     map.addSource(sid, sourceSpec)
   }
+  _sourceClusterState[sid] = wantsCluster
   lastLoadedFeatures[layerName] = fc
 
   // Z-order: shadow → ring → pin. Shadow first so it renders behind.
@@ -671,7 +904,7 @@ function _addLayerOnMap(layerName) {
   } else {
     map.setFilter(lid, circlePointFilter(wantsCluster))
     map.setPaintProperty(lid, 'circle-color', pinColorExpression(color))
-    map.setPaintProperty(lid, 'circle-radius', radius)
+    map.setPaintProperty(lid, 'circle-radius', pinPaint(color, radius)['circle-radius'])
   }
   // Toggle via opacity (cheap; no add/remove).
   if (enabled) {
@@ -687,7 +920,7 @@ function _addLayerOnMap(layerName) {
   // 4. Icon glyph (optional). Sits above the pin body so it reads as
   // "icon over dot". On clustered sources, the filter keeps glyphs on
   // individual pins only; cluster bubbles keep their own visual language.
-  const iid = iconLayerId(layerName)
+  const iid = iconLayerId(renderName)
   const iconSpecList = [...iconSpecs.values()]
   if (iconSpecList.length) {
     const filter = iconPointFilter(wantsCluster)
@@ -728,8 +961,8 @@ function _addLayerOnMap(layerName) {
   }
 
   // Cluster layers
-  const cid = clusterLayerId(layerName)
-  const ccid = clusterCountId(layerName)
+  const cid = clusterLayerId(renderName)
+  const ccid = clusterCountId(renderName)
   if (wantsCluster) {
     if (!map.getLayer(cid)) {
       map.addLayer({
@@ -768,11 +1001,11 @@ function _addLayerOnMap(layerName) {
   // pin stack + halos + heatmap all read on top of the columns.
   // MapLibre's fill-extrusion needs polygon geometry, so we maintain
   // a parallel polygon source (one 10m square per point).
-  const eid = extrusionLayerId(layerName)
-  const esid = extrusionSourceId(layerName)
+  const eid = extrusionLayerId(renderName)
+  const esid = extrusionSourceId(renderName)
   const extrudeOn = enabled && ui.pitchEnabled
   if (extrudeOn) {
-    const polyFc = _extrusionFeatureCollection(fc, layerName)
+    const polyFc = _extrusionFeatureCollection(fc, parentName)
     const esrc = map.getSource(esid)
     if (esrc && esrc.type === 'geojson') {
       esrc.setData(polyFc)
@@ -784,11 +1017,11 @@ function _addLayerOnMap(layerName) {
         id: eid,
         type: 'fill-extrusion',
         source: esid,
-        paint: extrusionPaint(color, layerName),
+        paint: extrusionPaint(color, parentName),
       })
     } else {
       map.setPaintProperty(eid, 'fill-extrusion-color', color)
-      map.setPaintProperty(eid, 'fill-extrusion-height', extrusionPaint(color, layerName)['fill-extrusion-height'])
+      map.setPaintProperty(eid, 'fill-extrusion-height', extrusionPaint(color, parentName)['fill-extrusion-height'])
     }
   } else if (map.getLayer(eid)) {
     map.removeLayer(eid)
@@ -799,13 +1032,13 @@ function _addLayerOnMap(layerName) {
   // the heatmap — it's part of the per-feature visual identity and
   // should sit below heatmap density but above the pin (so a heatmap
   // turn-off reveals pin-on-halo cleanly).
-  const haloSid = haloSourceId(layerName)
-  const haloId = haloLayerId(layerName)
-  const haloStrokeId = haloStrokeLayerId(layerName)
-  const radiusOn = enabled && ui.isRadiusOn(layerName)
+  const haloSid = haloSourceId(renderName)
+  const haloId = haloLayerId(renderName)
+  const haloStrokeId = haloStrokeLayerId(renderName)
+  const radiusOn = enabled && ui.isRadiusOn(parentName)
   if (radiusOn) {
-    const halo = haloStyle(color, layerName)
-    const haloFc = haloFeatureCollection(fc.features, layerName)
+    const halo = haloStyle(color, parentName)
+    const haloFc = haloFeatureCollection(fc.features, parentName)
     const haloSource = map.getSource(haloSid)
     if (haloSource && haloSource.type === 'geojson') {
       haloSource.setData(haloFc)
@@ -813,25 +1046,33 @@ function _addLayerOnMap(layerName) {
       map.addSource(haloSid, { type: 'geojson', data: haloFc, promoteId: '_id' })
     }
     if (!map.getLayer(haloId)) {
-      map.addLayer({
+      const haloLayer = {
         id: haloId,
         type: 'fill',
         source: haloSid,
         paint: halo.fill,
-      }, shid)
+      }
+      if (wantsCluster) haloLayer.minzoom = CLUSTERED_HALO_MIN_ZOOM
+      map.addLayer(haloLayer, shid)
     } else {
+      if (wantsCluster) map.setLayerZoomRange(haloId, CLUSTERED_HALO_MIN_ZOOM, 24)
+      else map.setLayerZoomRange(haloId, 0, 24)
       for (const [key, value] of Object.entries(halo.fill)) {
         map.setPaintProperty(haloId, key, value)
       }
     }
     if (!map.getLayer(haloStrokeId)) {
-      map.addLayer({
+      const haloStrokeLayer = {
         id: haloStrokeId,
         type: 'line',
         source: haloSid,
         paint: halo.stroke,
-      }, shid)
+      }
+      if (wantsCluster) haloStrokeLayer.minzoom = CLUSTERED_HALO_MIN_ZOOM
+      map.addLayer(haloStrokeLayer, shid)
     } else {
+      if (wantsCluster) map.setLayerZoomRange(haloStrokeId, CLUSTERED_HALO_MIN_ZOOM, 24)
+      else map.setLayerZoomRange(haloStrokeId, 0, 24)
       for (const [key, value] of Object.entries(halo.stroke)) {
         map.setPaintProperty(haloStrokeId, key, value)
       }
@@ -846,7 +1087,7 @@ function _addLayerOnMap(layerName) {
   // (importantly) above the cluster circles when those exist, so the
   // density visualization dominates. When heatmap is on, the pin body
   // layers go invisible (they would otherwise crowd the gradient).
-  const hid = heatmapLayerId(layerName)
+  const hid = heatmapLayerId(renderName)
   if (heatOn) {
     const paint = heatmapPaint(color, layerDoc, style)
     if (!map.getLayer(hid)) {
@@ -886,198 +1127,6 @@ function _addLayerOnMap(layerName) {
   if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
 }
 
-function _addGroupedClusterLayerOnMap({ layerName, fc, sourceFeatures, color, radius, enabled, iconSpecs, layerDoc, style }) {
-  _removeBasePointArtifacts(layerName)
-
-  const groupIconSpecs = [...iconSpecs.values()]
-  const iconSize = iconSizeForRadius(radius)
-  const iconsReady = groupIconSpecs.length
-    ? registerColoredIcons(map, groupIconSpecs, ICON_IMAGE_SIZE).catch((e) => {
-        console.warn('[expedition] icon register failed', groupIconSpecs, e)
-      })
-    : Promise.resolve()
-
-  const groups = new Map()
-  for (const feature of sourceFeatures) {
-    const key = featureGroupKey(feature) || '__ungrouped'
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(feature)
-  }
-  const activeSourceIds = new Set()
-  const activeLayerPrefixes = new Set()
-
-  for (const [groupValue, features] of groups.entries()) {
-    const groupKey = safeMapIdPart(groupValue)
-    const base = groupedLayerBase(layerName, groupKey)
-    activeSourceIds.add(groupedSourceId(layerName, groupKey))
-    activeLayerPrefixes.add(base)
-
-    const sid = groupedSourceId(layerName, groupKey)
-    const groupColor = featureDisplayColor(features[0], color)
-    const sourceSpec = {
-      type: 'geojson',
-      data: { type: 'FeatureCollection', features },
-      promoteId: '_id',
-      cluster: true,
-      clusterRadius: 40,
-      clusterMaxZoom: 12,
-    }
-    const existing = map.getSource(sid)
-    if (existing && existing.type === 'geojson') {
-      existing.setData(sourceSpec.data)
-    } else {
-      map.addSource(sid, sourceSpec)
-    }
-
-    const shid = `${base}-shadow`
-    const rid = `${base}-ring`
-    const lid = base
-    const iid = `${base}-icon`
-    const cid = `${base}-clusters`
-    const ccid = `${base}-cluster-count`
-    const haloSid = `${sid}-halo`
-    const haloId = `${base}-halo`
-    const haloStrokeId = `${base}-halo-stroke`
-    const heatId = `${base}-heatmap`
-    activeSourceIds.add(haloSid)
-
-    if (!map.getLayer(shid)) {
-      map.addLayer({ id: shid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: shadowPaint(radius) })
-    } else {
-      map.setPaintProperty(shid, 'circle-radius', shadowPaint(radius)['circle-radius'])
-    }
-    if (!map.getLayer(rid)) {
-      map.addLayer({ id: rid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: ringPaint(radius) })
-    } else {
-      map.setPaintProperty(rid, 'circle-radius', ringPaint(radius)['circle-radius'])
-    }
-    if (!map.getLayer(lid)) {
-      map.addLayer({ id: lid, type: 'circle', source: sid, filter: circlePointFilter(true), paint: pinPaint(color, radius) })
-    } else {
-      map.setPaintProperty(lid, 'circle-color', pinColorExpression(color))
-      map.setPaintProperty(lid, 'circle-radius', radius)
-    }
-
-    for (const id of [lid, rid, shid]) {
-      map.setPaintProperty(id, 'circle-opacity', enabled ? (id === shid ? 0.45 : 1) : 0)
-    }
-
-    if (groupIconSpecs.length) {
-      iconsReady.then(() => {
-        if (!map.getLayer(iid)) {
-          map.addLayer({
-            id: iid,
-            type: 'symbol',
-            source: sid,
-            filter: iconPointFilter(true),
-            layout: {
-              'icon-image': ['get', '_display_icon_image'],
-              'icon-size': iconSize,
-              'icon-allow-overlap': true,
-              'icon-ignore-placement': true,
-              'icon-anchor': 'center',
-            },
-            paint: { 'icon-opacity': enabled ? 1 : 0 },
-          })
-        } else {
-          map.setLayoutProperty(iid, 'icon-image', ['get', '_display_icon_image'])
-          map.setLayoutProperty(iid, 'icon-size', iconSize)
-          map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
-        }
-      })
-    } else if (map.getLayer(iid)) {
-      map.removeLayer(iid)
-    }
-
-    if (!map.getLayer(cid)) {
-      map.addLayer({
-        id: cid,
-        type: 'circle',
-        source: sid,
-        filter: ['has', 'point_count'],
-        paint: clusterPaint(groupColor),
-      })
-    } else {
-      map.setPaintProperty(cid, 'circle-color', groupColor)
-    }
-    if (!map.getLayer(ccid)) {
-      map.addLayer({
-        id: ccid,
-        type: 'symbol',
-        source: sid,
-        filter: ['has', 'point_count'],
-        layout: {
-          'text-field': ['get', 'point_count_abbreviated'],
-          'text-size': 11,
-          'text-font': ['Noto Sans Regular'],
-        },
-        paint: { 'text-color': '#FFFFFF' },
-      })
-    }
-    map.off('click', cid, onClusterClick)
-    map.on('click', cid, onClusterClick)
-
-    if (enabled && ui.isRadiusOn(layerName)) {
-      const halo = haloStyle(groupColor, layerName)
-      const haloFc = haloFeatureCollection(features, layerName)
-      const haloSource = map.getSource(haloSid)
-      if (haloSource && haloSource.type === 'geojson') {
-        haloSource.setData(haloFc)
-      } else {
-        map.addSource(haloSid, { type: 'geojson', data: haloFc, promoteId: '_id' })
-      }
-      if (!map.getLayer(haloId)) {
-        map.addLayer({ id: haloId, type: 'fill', source: haloSid, paint: halo.fill }, shid)
-      } else {
-        for (const [key, value] of Object.entries(halo.fill)) {
-          map.setPaintProperty(haloId, key, value)
-        }
-      }
-      if (!map.getLayer(haloStrokeId)) {
-        map.addLayer({ id: haloStrokeId, type: 'line', source: haloSid, paint: halo.stroke }, shid)
-      } else {
-        for (const [key, value] of Object.entries(halo.stroke)) {
-          map.setPaintProperty(haloStrokeId, key, value)
-        }
-      }
-    } else {
-      if (map.getLayer(haloStrokeId)) map.removeLayer(haloStrokeId)
-      if (map.getLayer(haloId)) map.removeLayer(haloId)
-      if (map.getSource(haloSid)) map.removeSource(haloSid)
-    }
-
-    const heatOn = enabled && ui.isHeatmapOn(layerName)
-    if (heatOn) {
-      const paint = heatmapPaint(groupColor, layerDoc, style)
-      if (!map.getLayer(heatId)) {
-        map.addLayer({
-          id: heatId,
-          type: 'heatmap',
-          source: sid,
-          paint,
-        })
-      } else {
-        for (const [key, value] of Object.entries(paint)) {
-          map.setPaintProperty(heatId, key, value)
-        }
-      }
-    } else if (map.getLayer(heatId)) {
-      map.removeLayer(heatId)
-    }
-
-    for (const id of [lid, rid, shid]) {
-      if (map.getLayer(id)) map.setPaintProperty(id, 'circle-opacity', heatOn ? 0 : (enabled ? (id === shid ? 0.45 : 1) : 0))
-    }
-    if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', heatOn ? 0 : (enabled ? 1 : 0))
-    _bindPointLayerHandlers(lid)
-    _bindPointLayerHandlers(iid)
-  }
-
-  _pruneGroupedArtifacts(layerName, activeSourceIds, activeLayerPrefixes)
-  lastLoadedFeatures[layerName] = fc
-  if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
-}
-
 function onPointClick(e) {
   const f = e.features && e.features[0]
   if (!f) return
@@ -1085,15 +1134,29 @@ function onPointClick(e) {
   // lyr-<name>-shadow, lyr-<name>-clusters. Strip the prefix and
   // any of the suffixes to recover the layer name.
   const rawId = e.targetLayer || (f.layer && f.layer.id) || ''
-  const layerName = layerNameFromRenderedLayerId(rawId)
+  const renderName = layerNameFromRenderedLayerId(rawId)
+  const layerName = parentLayerName(renderName)
   const fc = layerStore.features[layerName]
   const layerMeta = fc?.layer || layerStore.layers.find((l) => l.name === layerName)
+  const action = layerMeta?.click_action || 'popup'
+  if (action === 'none') return
+  if (action === 'open_form' || action === 'redirect') {
+    const props = f.properties || {}
+    if (props._doctype && props._name) {
+      const route = `/app/${encodeURIComponent(String(props._doctype).toLowerCase().replace(/ /g, '-'))}/${encodeURIComponent(props._name)}`
+      if (window.frappe?.set_route) {
+        try { window.frappe.set_route(route); return } catch {}
+      }
+      window.open(route, '_blank')
+      return
+    }
+  }
   // Clear previous selection on the source, then mark the clicked one.
-  const sid = sourceId(layerName)
+  const sid = sourceId(renderName)
   const src = map.getSource(sid)
   if (src && f.id != null) {
     // Clear all features' selected state.
-    for (const feat of layerStore.features[layerName]?.features || []) {
+    for (const feat of layerStore.features[renderName]?.features || layerStore.features[layerName]?.features || []) {
       if (feat._id != null && feat._id !== f.id) {
         try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
       }
@@ -1119,17 +1182,14 @@ function onPointMouseLeave() {
 
 async function onClusterClick(e) {
   const cid = (e.targetLayer || (e.features && e.features[0]?.layer?.id) || '')
-  const layerName = layerNameFromRenderedLayerId(cid)
-  const queryLayer = map.getLayer(cid) ? cid : clusterLayerId(layerName)
+  const renderName = layerNameFromRenderedLayerId(cid)
+  const queryLayer = map.getLayer(cid) ? cid : clusterLayerId(renderName)
   if (!map.getLayer(queryLayer)) return
   const rendered = map.queryRenderedFeatures(e.point, { layers: [queryLayer] })
   const activeFeature = rendered[0]
   const activeClusterId = activeFeature?.properties?.cluster_id
   if (activeClusterId == null) return
-  const srcId = cid.includes('-grp-')
-    ? cid.replace(/^lyr-/, 'src-').replace(/-clusters$/, '')
-    : sourceId(layerName)
-  const src = map.getSource(srcId)
+  const src = map.getSource(sourceId(renderName))
   if (!src) return
   try {
     const zoom = await src.getClusterExpansionZoom(activeClusterId)
@@ -1145,21 +1205,11 @@ async function onClusterClick(e) {
 function _removeLayerFromMap(layerName) {
   if (!map) return
   _removeGroupedArtifacts(layerName)
-  for (const id of [
-    heatmapLayerId(layerName),
-    haloLayerId(layerName),
-    extrusionLayerId(layerName),
-    clusterCountId(layerName),
-    clusterLayerId(layerName),
-    iconLayerId(layerName),
-    layerId(layerName),
-    ringLayerId(layerName),
-    shadowLayerId(layerName),
-  ]) {
-    if (map.getLayer(id)) map.removeLayer(id)
-    _interactivePointLayers.delete(id)
+  const groupPrefix = `${layerName}${VIRTUAL_GROUP_SEPARATOR}`
+  for (const key of Object.keys(_virtualGroupFetchKeys)) {
+    if (key.startsWith(groupPrefix)) delete _virtualGroupFetchKeys[key]
   }
-  if (map.getSource(sourceId(layerName))) map.removeSource(sourceId(layerName))
+  _removeRenderArtifacts(layerName)
 }
 
 function _fetchAllVisibleBounds() {
@@ -1229,13 +1279,15 @@ function _zonesFeatureCollection() {
           stroke: z.stroke_color || '#1E40AF',
           fill_opacity: z.fill_opacity ?? 0.25,
           stroke_width: z.stroke_width ?? 2,
+          stroke_style: z.stroke_style || 'solid',
+          selected: ui.selectedZone?.name === z.name ? 1 : 0,
         },
       })),
   }
 }
 
 function _reAddZones() {
-  if (!map || !map.isStyleLoaded()) return
+  if (!map || !map.getStyle()) return
   const fc = _zonesFeatureCollection()
   const sid = zoneSourceId()
   if (map.getSource(sid)) {
@@ -1255,17 +1307,58 @@ function _reAddZones() {
       },
     })
   }
-  // Stroke layer
-  if (!map.getLayer(zoneStrokeLayerId())) {
-    map.addLayer({
+  // Stroke layers. `line-dasharray` is not consistently data-driven
+  // across MapLibre versions, so style variants are separate layers.
+  const strokePaint = {
+    'line-color': ['coalesce', ['get', 'stroke'], '#1E40AF'],
+    'line-width': ['coalesce', ['get', 'stroke_width'], 2],
+  }
+  const strokeLayers = [
+    {
       id: zoneStrokeLayerId(),
+      filter: ['any', ['!', ['has', 'stroke_style']], ['==', ['get', 'stroke_style'], 'solid']],
+      dash: [1, 0],
+    },
+    {
+      id: zoneDashedStrokeLayerId(),
+      filter: ['==', ['get', 'stroke_style'], 'dashed'],
+      dash: [2, 1.5],
+    },
+    {
+      id: zoneDottedStrokeLayerId(),
+      filter: ['==', ['get', 'stroke_style'], 'dotted'],
+      dash: [0.5, 1.5],
+    },
+  ]
+  for (const layer of strokeLayers) {
+    if (!map.getLayer(layer.id)) {
+      map.addLayer({
+        id: layer.id,
+        type: 'line',
+        source: sid,
+        filter: layer.filter,
+        paint: { ...strokePaint, 'line-dasharray': layer.dash },
+      })
+    } else {
+      map.setFilter(layer.id, layer.filter)
+      map.setPaintProperty(layer.id, 'line-color', strokePaint['line-color'])
+      map.setPaintProperty(layer.id, 'line-width', strokePaint['line-width'])
+      map.setPaintProperty(layer.id, 'line-dasharray', layer.dash)
+    }
+  }
+  if (!map.getLayer(zoneSelectedLayerId())) {
+    map.addLayer({
+      id: zoneSelectedLayerId(),
       type: 'line',
       source: sid,
+      filter: ['==', ['get', 'selected'], 1],
       paint: {
-        'line-color': ['coalesce', ['get', 'stroke'], '#1E40AF'],
-        'line-width': ['coalesce', ['get', 'stroke_width'], 2],
+        'line-color': '#F59E0B',
+        'line-width': ['+', ['coalesce', ['get', 'stroke_width'], 2], 3],
       },
     })
+  } else {
+    map.setFilter(zoneSelectedLayerId(), ['==', ['get', 'selected'], 1])
   }
   // Label layer (centroid + title) — uses the centroid we already store
   // server-side so labels stay anchored when the polygon is irregular.
@@ -1329,6 +1422,139 @@ function _reAddZones() {
         'text-halo-width': 1.6,
       },
     })
+  }
+  _bindZoneHandlers()
+}
+
+function _bindZoneHandlers() {
+  if (!map || _zoneHandlersBound || !map.getLayer(zoneFillLayerId())) return
+  map.on('mousedown', zoneFillLayerId(), onZoneMouseDown)
+  map.on('click', zoneFillLayerId(), onZoneClick)
+  map.on('contextmenu', zoneFillLayerId(), onZoneContextMenu)
+  map.on('mouseenter', zoneFillLayerId(), () => _setMapCursor('pointer'))
+  map.on('mouseleave', zoneFillLayerId(), () => _setMapCursor())
+  _zoneHandlersBound = true
+}
+
+function onZoneClick(e) {
+  if (!ui.zoneEditMode) return
+  if (ui.drawMode !== 'off' || ui.measureMode) return
+  selectZoneFeature(e)
+}
+
+function onZoneContextMenu(e) {
+  if (ui.drawMode !== 'off' || ui.measureMode) return
+  e.preventDefault?.()
+  selectZoneFeature(e)
+}
+
+function selectZoneFeature(e) {
+  const f = e.features?.[0]
+  if (!f?.properties?.name) return
+  const mapName = mapStore.activeMap?.map?.name
+  const zone = (mapName && zoneStore.byMap?.[mapName] || []).find((z) => z.name === f.properties.name)
+  if (zone) {
+    ui.selectZone(zone)
+    _reAddZones()
+  }
+}
+
+function offsetPosition(position, deltaLng, deltaLat) {
+  if (!Array.isArray(position)) return position
+  return [Number(position[0]) + deltaLng, Number(position[1]) + deltaLat]
+}
+
+function offsetGeometry(geometry, deltaLng, deltaLat) {
+  if (!geometry) return null
+  if (geometry.type === 'Point') {
+    return { ...geometry, coordinates: offsetPosition(geometry.coordinates, deltaLng, deltaLat) }
+  }
+  if (geometry.type === 'LineString') {
+    return { ...geometry, coordinates: geometry.coordinates.map((p) => offsetPosition(p, deltaLng, deltaLat)) }
+  }
+  if (geometry.type === 'Polygon') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((ring) => ring.map((p) => offsetPosition(p, deltaLng, deltaLat))),
+    }
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((poly) => poly.map((ring) => ring.map((p) => offsetPosition(p, deltaLng, deltaLat)))),
+    }
+  }
+  return geometry
+}
+
+function centroidForGeometry(geometry) {
+  const coords = _flatCoords(geometry)
+  if (!coords.length) return null
+  let lng = 0
+  let lat = 0
+  for (const point of coords) {
+    lng += Number(point[0])
+    lat += Number(point[1])
+  }
+  return { centroid_lng: lng / coords.length, centroid_lat: lat / coords.length }
+}
+
+function replaceLocalZone(mapName, updated) {
+  const list = zoneStore.byMap?.[mapName] || []
+  zoneStore.setForMap(mapName, list.map((z) => z.name === updated.name ? { ...z, ...updated } : z))
+}
+
+function onZoneMouseDown(e) {
+  if (!ui.zoneEditMode) return
+  if (ui.drawMode !== 'off' || ui.measureMode) return
+  if (!e.originalEvent || e.originalEvent.button !== 0) return
+  const f = e.features?.[0]
+  if (!f?.properties?.name) return
+  const mapName = mapStore.activeMap?.map?.name
+  const zone = (mapName && zoneStore.byMap?.[mapName] || []).find((z) => z.name === f.properties.name)
+  if (!mapName || !zone?.geometry) return
+  e.preventDefault?.()
+  ui.selectZone(zone)
+  _zoneDrag = {
+    mapName,
+    zone,
+    startLngLat: [e.lngLat.lng, e.lngLat.lat],
+    currentGeometry: zone.geometry,
+  }
+  map.dragPan.disable()
+  _setMapCursor('grabbing')
+  map.on('mousemove', onZoneDragMove)
+  map.once('mouseup', onZoneDragEnd)
+}
+
+function onZoneDragMove(e) {
+  if (!_zoneDrag) return
+  const deltaLng = e.lngLat.lng - _zoneDrag.startLngLat[0]
+  const deltaLat = e.lngLat.lat - _zoneDrag.startLngLat[1]
+  const geometry = offsetGeometry(_zoneDrag.zone.geometry, deltaLng, deltaLat)
+  if (!geometry) return
+  _zoneDrag.currentGeometry = geometry
+  const updated = { ..._zoneDrag.zone, geometry, ...(centroidForGeometry(geometry) || {}) }
+  replaceLocalZone(_zoneDrag.mapName, updated)
+  ui.selectZone(updated)
+  _reAddZones()
+}
+
+async function onZoneDragEnd() {
+  if (!_zoneDrag) return
+  const drag = _zoneDrag
+  _zoneDrag = null
+  map.off('mousemove', onZoneDragMove)
+  map.dragPan.enable()
+  _setMapCursor()
+  if (!drag.currentGeometry) return
+  try {
+    const updated = await zoneStore.updateZone(drag.mapName, drag.zone.name, { geometry: drag.currentGeometry })
+    ui.selectZone(updated)
+  } catch (err) {
+    console.error('[expedition] zone move failed', err)
+    replaceLocalZone(drag.mapName, drag.zone)
+    ui.selectZone(drag.zone)
   }
 }
 
@@ -1477,6 +1703,10 @@ onMounted(() => {
   // event fires before this listener is attached.
   map.on('contextmenu', (e) => {
     // e.point gives canvas-relative coords; e.lngLat gives lat/lng.
+    if (map.getLayer(zoneFillLayerId())) {
+      const zones = map.queryRenderedFeatures(e.point, { layers: [zoneFillLayerId()] })
+      if (zones.length) return
+    }
     e.preventDefault?.()
     ui.openContextMenu(e.point.x, e.point.y, e.lngLat.lat, e.lngLat.lng)
   })
@@ -1575,7 +1805,7 @@ onMounted(() => {
       if (!map) return true
       _addLayerOnMap(layerName)
       if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
-      return !!map.getSource(sourceId(layerName))
+      return _hasRenderedLayer(layerName)
     }
     if (tryAdd()) return
     const onStyle = () => {
@@ -1591,8 +1821,17 @@ onMounted(() => {
   unsubscribeZones = watch(
     () => zoneStore.byMap,
     () => {
-      if (map.isStyleLoaded()) _reAddZones()
-      else map.once('styledata', _reAddZones)
+      const tryAdd = () => {
+        if (!map) return true
+        _reAddZones()
+        if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
+        return !!map.getSource(zoneSourceId())
+      }
+      if (tryAdd()) return
+      const onStyle = () => {
+        if (tryAdd()) map.off('styledata', onStyle)
+      }
+      map.on('styledata', onStyle)
     },
     { deep: true }
   )
@@ -1601,9 +1840,16 @@ onMounted(() => {
   unsubscribeZoneTags = watch(
     () => ui.zoneTags,
     () => {
-      if (map && map.isStyleLoaded()) _reAddZones()
+      if (map) _reAddZones()
     },
     { deep: true }
+  )
+
+  watch(
+    () => ui.selectedZone?.name,
+    () => {
+      if (map) _reAddZones()
+    }
   )
 
   // Expose a thin facade on window for non-Vue consumers (e.g. insight
@@ -1617,6 +1863,26 @@ onMounted(() => {
       getCenter: () => map && map.getCenter(),
       getZoom: () => map && map.getZoom(),
       getMap: () => map,
+      finishDrawing: () => _finishDrawing(),
+      getLayerDiagnostics: () => {
+        if (!map) return []
+        const styleSources = map.getStyle()?.sources || {}
+        return Object.keys(layerStore.features || {}).map((name) => {
+          const sid = sourceId(name)
+          return {
+            name,
+            source: sid,
+            parent: parentLayerName(name),
+            isVirtualGroup: name.includes(VIRTUAL_GROUP_SEPARATOR),
+            featureCount: layerStore.features[name]?.features?.length || 0,
+            styleCluster: !!styleSources[sid]?.cluster,
+            trackedCluster: _sourceClusterState[sid],
+            hasSource: !!map.getSource(sid),
+            hasClusterLayer: !!map.getLayer(clusterLayerId(name)),
+            hasClusterCountLayer: !!map.getLayer(clusterCountId(name)),
+          }
+        })
+      },
       // Return the active map's zones as a GeoJSON FeatureCollection.
       // Used by fit-to-data in App.vue so custom territories count
       // as "data" alongside pin layers.
@@ -1638,73 +1904,38 @@ onMounted(() => {
     }
   }
 
-  // ----- Zone draw mode -----
-  // While drawMode === 'polygon', clicks add vertices; double-click
-  // finishes the polygon and commits via the zone store.
-  //
-  // doubleClickZoom is disabled SYNCHRONOUSLY on the first vertex click
-  // (not via the drawMode watcher), so a user who double-clicks
-  // immediately after entering draw mode finishes the polygon instead
-  // of triggering a map zoom. The watcher still re-enables it on cancel.
+  // ----- Canvas drawing / zones -----
   map.on('click', (e) => {
-    if (ui.drawMode !== 'polygon') return
-    // If the click landed on an existing pin, let the pin handler take
-    // it instead of adding a vertex there. queryRenderedFeatures is the
-    // canonical MapLibre way to detect this without layer handlers
-    // racing each other.
-    const pinLayers = layerStore.layers
-      .map((l) => layerId(l.name))
-      .filter((id) => map.getLayer(id))
-    if (pinLayers.length > 0) {
-      const hits = map.queryRenderedFeatures(e.point, { layers: pinLayers })
-      if (hits.length > 0) return
-    }
-    if (!_dblClickDisabled) {
-      map.doubleClickZoom.disable()
-      _dblClickDisabled = true
-    }
-    ui.pushDraftVertex([e.lngLat.lng, e.lngLat.lat])
-    _renderDraft()
+    if (ui.drawMode === 'off') return
+    e.preventDefault?.()
+    _handleDrawClick(e)
   })
   map.on('dblclick', async (e) => {
-    if (ui.drawMode !== 'polygon') return
+    if (ui.drawMode === 'off') return
     e.preventDefault() // suppress default dblclick zoom
-    if (ui.draftVertices.length < 3) return // not a polygon
-    const ring = [...ui.draftVertices, ui.draftVertices[0]] // close ring
-    const geometry = {
-      type: 'Polygon',
-      coordinates: [ring],
-    }
-    const mapName = mapStore.activeMap?.map?.name
-    if (!mapName) return
-    try {
-      const title = (ui.zoneDraftTitle || '').trim() || 'Zone'
-      if (!ui.zoneDraftTitle || !ui.zoneDraftTitle.trim()) {
-        console.warn(
-          '[expedition] zone saved with default title (no user input)'
-        )
-      }
-      await zoneStore.createZone(mapName, {
-        title,
-        zone_type: 'polygon',
-        geometry,
-        color: '#3B82F6',
-        fill_opacity: 0.2,
-        stroke_color: '#1E40AF',
-        stroke_width: 2,
-      })
-    } catch (err) {
-      console.error('[expedition] zone create failed', err)
-    } finally {
-      ui.cancelDraw()
-      _clearDraft()
-    }
+    await _finishDrawing()
+  })
+  map.on('mousemove', (e) => {
+    if (ui.drawMode === 'off') return
+    const snapIndex = _snapIndexForPoint(e.point)
+    const snapped = snapIndex >= 0 ? ui.draftVertices[snapIndex] : [e.lngLat.lng, e.lngLat.lat]
+    ui.setDraftPointer(snapped, snapIndex)
+    _renderDraft()
   })
   _setMapCursor()
 
-  // Esc cancels an in-progress polygon draw.
   const onKey = (e) => {
-    if (e.key === 'Escape' && ui.drawMode === 'polygon') ui.cancelDraw()
+    if (ui.drawMode === 'off') return
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      ui.cancelDraw()
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      _finishDrawing()
+    } else if (e.key === 'Backspace' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z')) {
+      e.preventDefault()
+      ui.undoDraftVertex()
+    }
   }
   window.addEventListener('keydown', onKey)
   // Tear down on unmount via closure capture.
@@ -1741,26 +1972,128 @@ watch(
 
 function _draftFeatureCollection() {
   const v = ui.draftVertices
-  if (!v || v.length < 1) return { type: 'FeatureCollection', features: [] }
-  if (v.length === 1) {
-    return {
-      type: 'FeatureCollection',
-      features: [
-        { type: 'Feature', geometry: { type: 'Point', coordinates: v[0] }, properties: { kind: 'draft-vertex' } },
-      ],
+  const pointer = ui.draftPointer
+  const features = []
+  if (!v || v.length < 1) return { type: 'FeatureCollection', features }
+
+  if (ui.drawMode === 'circle' && v[0] && pointer) {
+    features.push({
+      type: 'Feature',
+      geometry: haloPolygon(v[0][0], v[0][1], distanceMeters(v[0], pointer)),
+      properties: { kind: 'draft-area' },
+    })
+  } else if (ui.drawMode === 'rectangle' && v[0] && pointer) {
+    const geometry = rectanglePolygon(v[0], pointer)
+    if (geometry) features.push({ type: 'Feature', geometry, properties: { kind: 'draft-area' } })
+  } else {
+    const line = pointer && v.length ? [...v, pointer] : v
+    if (line.length >= 2) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: line },
+        properties: { kind: 'draft-line' },
+      })
+    }
+    if (ui.drawMode === 'polygon' && v.length >= 3 && pointer && ui.draftSnapIndex === 0) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[...v, v[0]]] },
+        properties: { kind: 'draft-area' },
+      })
     }
   }
-  // 2+ vertices: render as a line. We close the ring visually only
-  // when the user finishes; until then it's an open polyline.
-  return {
-    type: 'FeatureCollection',
-    features: [
-      {
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: v },
-        properties: { kind: 'draft-line' },
-      },
-    ],
+
+  for (let i = 0; i < v.length; i += 1) {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: v[i] },
+      properties: { kind: 'draft-vertex', index: i, snap: ui.draftSnapIndex === i ? 1 : 0 },
+    })
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+function _snapIndexForPoint(point) {
+  if (!map || ui.drawMode !== 'polygon' || ui.draftVertices.length < 3) return -1
+  const first = ui.draftVertices[0]
+  const projected = map.project(first)
+  const dx = projected.x - point.x
+  const dy = projected.y - point.y
+  return Math.sqrt(dx * dx + dy * dy) <= 14 ? 0 : -1
+}
+
+function _handleDrawClick(e) {
+  if (!_dblClickDisabled) {
+    map.doubleClickZoom.disable()
+    _dblClickDisabled = true
+  }
+  const point = [e.lngLat.lng, e.lngLat.lat]
+  if (ui.drawMode === 'polygon') {
+    if (ui.draftSnapIndex === 0 && ui.draftVertices.length >= 3) {
+      _finishDrawing()
+      return
+    }
+    ui.pushDraftVertex(point)
+    _renderDraft()
+    return
+  }
+  if (ui.drawMode === 'circle' || ui.drawMode === 'rectangle') {
+    if (!ui.draftVertices.length) {
+      ui.pushDraftVertex(point)
+      ui.setDraftPointer(point)
+      _renderDraft()
+    } else {
+      ui.setDraftPointer(point)
+      _finishDrawing()
+    }
+    return
+  }
+  if (ui.drawMode === 'text' || ui.drawMode === 'note') {
+    ui.pushDraftVertex(point)
+    _renderDraft()
+  }
+}
+
+function _geometryFromDraft() {
+  const v = ui.draftVertices
+  const pointer = ui.draftPointer
+  if (ui.drawMode === 'polygon') {
+    if (!v || v.length < 3) return null
+    return { type: 'Polygon', coordinates: [[...v, v[0]]] }
+  }
+  if (ui.drawMode === 'circle') {
+    if (!v?.[0] || !pointer || distanceMeters(v[0], pointer) <= 1) return null
+    return haloPolygon(v[0][0], v[0][1], distanceMeters(v[0], pointer))
+  }
+  if (ui.drawMode === 'rectangle') {
+    if (!v?.[0] || !pointer) return null
+    return rectanglePolygon(v[0], pointer)
+  }
+  return null
+}
+
+async function _finishDrawing() {
+  const geometry = _geometryFromDraft()
+  if (!geometry) return
+  const mapName = mapStore.activeMap?.map?.name
+  if (!mapName) return
+  try {
+    const title = (ui.zoneDraftTitle || '').trim() || 'Zone'
+    await zoneStore.createZone(mapName, {
+      title,
+      zone_type: 'polygon',
+      geometry,
+      color: draftColor(),
+      fill_opacity: draftFillOpacity(),
+      stroke_color: draftStrokeColor(),
+      stroke_width: draftStrokeWidth(),
+      stroke_style: draftStrokeStyle(),
+    })
+  } catch (err) {
+    console.error('[expedition] zone create failed', err)
+  } finally {
+    ui.cancelDraw()
+    _clearDraft()
   }
 }
 
@@ -1773,40 +2106,64 @@ function _renderDraft() {
     map.getSource(sid).setData(_draftFeatureCollection())
   }
   const lid = zoneDraftLayerId()
+  const fillId = zoneDraftFillLayerId()
+  if (!map.getLayer(fillId)) {
+    map.addLayer({
+      id: fillId,
+      type: 'fill',
+      source: sid,
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: {
+        'fill-color': draftColor(),
+        'fill-opacity': draftFillOpacity(),
+      },
+    })
+  } else {
+    map.setPaintProperty(fillId, 'fill-color', draftColor())
+    map.setPaintProperty(fillId, 'fill-opacity', draftFillOpacity())
+  }
   if (!map.getLayer(lid)) {
     map.addLayer({
       id: lid,
       type: 'line',
       source: sid,
-      filter: ['==', ['geometry-type'], 'LineString'],
+      filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']],
       paint: {
-        'line-color': '#3B82F6',
-        'line-width': 2,
+        'line-color': draftStrokeColor(),
+        'line-width': draftStrokeWidth(),
         'line-dasharray': [2, 1],
       },
     })
     map.addLayer({
-      id: lid + '-verts',
+      id: zoneDraftVertexLayerId(),
       type: 'circle',
       source: sid,
       filter: ['==', ['geometry-type'], 'Point'],
       paint: {
-        'circle-radius': 4,
-        'circle-color': '#3B82F6',
+        'circle-radius': ['case', ['==', ['get', 'snap'], 1], 7, 4.5],
+        'circle-color': ['case', ['==', ['get', 'snap'], 1], '#F59E0B', draftColor()],
         'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 1.5,
       },
     })
+  } else {
+    map.setPaintProperty(lid, 'line-color', draftStrokeColor())
+    map.setPaintProperty(lid, 'line-width', draftStrokeWidth())
+    if (map.getLayer(zoneDraftVertexLayerId())) {
+      map.setPaintProperty(zoneDraftVertexLayerId(), 'circle-color', ['case', ['==', ['get', 'snap'], 1], '#F59E0B', draftColor()])
+    }
   }
 }
 
 function _clearDraft() {
   if (!map) return
   const sid = 'src-zones-draft'
-  if (map.getLayer(zoneDraftLayerId() + '-verts'))
-    map.removeLayer(zoneDraftLayerId() + '-verts')
+  if (map.getLayer(zoneDraftVertexLayerId()))
+    map.removeLayer(zoneDraftVertexLayerId())
   if (map.getLayer(zoneDraftLayerId()))
     map.removeLayer(zoneDraftLayerId())
+  if (map.getLayer(zoneDraftFillLayerId()))
+    map.removeLayer(zoneDraftFillLayerId())
   if (map.getSource(sid)) map.removeSource(sid)
 }
 
@@ -1852,7 +2209,7 @@ watch(
   () => {
     if (!map || !map.isStyleLoaded()) return
     for (const layer of layerStore.layers) {
-      if (map.getLayer(layerId(layer.name))) {
+      if (_hasRenderedLayer(layer.name)) {
         _addLayerOnMap(layer.name)
       }
     }
@@ -1868,7 +2225,7 @@ watch(
   () => {
     if (!map || !map.isStyleLoaded()) return
     for (const layer of layerStore.layers) {
-      if (map.getLayer(layerId(layer.name))) {
+      if (_hasRenderedLayer(layer.name)) {
         _addLayerOnMap(layer.name)
       }
     }
@@ -1890,7 +2247,7 @@ watch(
   () => {
     if (!map || !map.isStyleLoaded()) return
     for (const layer of layerStore.layers) {
-      if (map.getLayer(layerId(layer.name))) {
+      if (_hasRenderedLayer(layer.name)) {
         _addLayerOnMap(layer.name)
       }
     }
@@ -1920,7 +2277,7 @@ watch(
   () => {
     if (!map || !map.isStyleLoaded()) return
     for (const layer of layerStore.layers) {
-      if (map.getLayer(layerId(layer.name))) {
+      if (_hasRenderedLayer(layer.name)) {
         _addLayerOnMap(layer.name)
       }
     }
@@ -1947,12 +2304,17 @@ watch(
     if (!sel) {
       // Clear all features in the previously selected source.
       for (const layer of layerStore.layers) {
-        const sid = sourceId(layer.name)
-        const src = map.getSource(sid)
-        if (!src) continue
+        const sourceIds = [sourceId(layer.name)]
+        const sourcePrefix = `src-${layer.name}${VIRTUAL_GROUP_SEPARATOR}`
+        for (const id of Object.keys(map.getStyle()?.sources || {})) {
+          if (id.startsWith(sourcePrefix)) sourceIds.push(id)
+        }
         for (const feat of layerStore.features[layer.name]?.features || []) {
           if (feat._id != null) {
-            try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
+            for (const sid of sourceIds) {
+              if (!map.getSource(sid)) continue
+              try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
+            }
           }
         }
       }

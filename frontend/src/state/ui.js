@@ -22,6 +22,7 @@ const DEFAULT_PREFS = {
   // Map
   defaultZoom: 3,
   defaultPitch: 0,
+  tiltJoystickInverted: true,
   // Panels
   blurOnPanel: true,        // preferred default: ON — dims the map behind open panels
   autoCloseOthers: true,    // opening Layers closes Tools
@@ -82,6 +83,12 @@ export const useUiStore = defineStore('ui', () => {
   // Transient: set by Basemap.vue on pin click, cleared on Esc/×.
   // Shape: { layer: {...} (from get_features response), properties: {...} }
   const selectedFeature = ref(null)
+  const selectedZone = ref(null)
+  function selectZone(zone) {
+    selectedZone.value = zone || null
+    if (zone) selectedFeature.value = null
+  }
+  function clearSelectedZone() { selectedZone.value = null }
 
   // Recent maps the user opened. Array of { name, title, openedAt }.
   // Used by the switcher. Persisted to localStorage.
@@ -353,27 +360,69 @@ export const useUiStore = defineStore('ui', () => {
   function updateLasso(box) { lassoBox.value = box }
   function endLasso() { lassoBox.value = null }
 
-  // Zone drawing. v1: polygon only. 'off' = no tool active,
-  // 'polygon' = next click adds a vertex; 'polygon-finish' = the
-  // last click closes the ring. Cleared on commit / cancel.
+  // Canvas drawing / zones. Draw tools are map-first, not panel-first:
+  // a drawn area can be saved as a zone. Polygon is point-to-point;
+  // circle/rectangle use a start point + live pointer preview.
   const drawMode = ref('off')
   const draftVertices = ref([])
-  // Title the user is typing for the polygon being drawn. Read by
-  // Basemap.vue on dblclick (instead of `window.prompt`). Cleared on
-  // commit / cancel so a stale value never leaks into the next draw.
+  const draftPointer = ref(null)
+  const draftSnapIndex = ref(-1)
   const zoneDraftTitle = ref('')
-  function startDrawPolygon() {
-    drawMode.value = 'polygon'
+  const drawingColor = ref('#3B82F6')
+  const drawingStrokeColor = ref('#1E40AF')
+  const drawingFillOpacity = ref(0.22)
+  const drawingStrokeWidth = ref(2)
+  const drawingStrokeStyle = ref('solid')
+  const zoneEditMode = ref(false)
+  function setZoneEditMode(on) {
+    zoneEditMode.value = !!on
+    if (!zoneEditMode.value) clearSelectedZone()
+  }
+  function toggleZoneEditMode() {
+    setZoneEditMode(!zoneEditMode.value)
+  }
+  function startDrawTool(tool) {
+    if (!['polygon', 'circle', 'rectangle'].includes(tool)) return
+    drawMode.value = tool
     draftVertices.value = []
-    zoneDraftTitle.value = ''
+    draftPointer.value = null
+    draftSnapIndex.value = -1
+  }
+  function startDrawPolygon() {
+    startDrawTool('polygon')
   }
   function cancelDraw() {
     drawMode.value = 'off'
     draftVertices.value = []
-    zoneDraftTitle.value = ''
+    draftPointer.value = null
+    draftSnapIndex.value = -1
   }
   function pushDraftVertex(lngLat) {
     draftVertices.value = [...draftVertices.value, lngLat]
+  }
+  function setDraftPointer(lngLat, snapIndex = -1) {
+    draftPointer.value = lngLat || null
+    draftSnapIndex.value = Number.isInteger(snapIndex) ? snapIndex : -1
+  }
+  function undoDraftVertex() {
+    draftVertices.value = draftVertices.value.slice(0, -1)
+  }
+  function setDrawingColor(color) {
+    drawingColor.value = color || '#3B82F6'
+  }
+  function setDrawingStrokeColor(color) {
+    drawingStrokeColor.value = color || '#1E40AF'
+  }
+  function setDrawingFillOpacity(value) {
+    const n = Number(value)
+    drawingFillOpacity.value = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.22
+  }
+  function setDrawingStrokeWidth(value) {
+    const n = Number(value)
+    drawingStrokeWidth.value = Number.isFinite(n) ? Math.max(1, Math.min(8, n)) : 2
+  }
+  function setDrawingStrokeStyle(value) {
+    drawingStrokeStyle.value = ['solid', 'dashed', 'dotted'].includes(value) ? value : 'solid'
   }
 
   // In-app confirm modal — replaces window.confirm. Any component
@@ -427,12 +476,33 @@ export const useUiStore = defineStore('ui', () => {
     commitPreviewSkin,
     cancelPreviewSkin,
     selectedFeature,
+    selectedZone,
+    selectZone,
+    clearSelectedZone,
     drawMode,
     draftVertices,
+    draftPointer,
+    draftSnapIndex,
     zoneDraftTitle,
+    drawingColor,
+    drawingStrokeColor,
+    drawingFillOpacity,
+    drawingStrokeWidth,
+    drawingStrokeStyle,
+    zoneEditMode,
+    setZoneEditMode,
+    toggleZoneEditMode,
+    startDrawTool,
     startDrawPolygon,
     cancelDraw,
     pushDraftVertex,
+    setDraftPointer,
+    undoDraftVertex,
+    setDrawingColor,
+    setDrawingStrokeColor,
+    setDrawingFillOpacity,
+    setDrawingStrokeWidth,
+    setDrawingStrokeStyle,
     recent,
     rememberRecent,
     zoneTags,

@@ -21,12 +21,18 @@ import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
 
 const ui = useUiStore()
 const vertices = ref([])
+const pointer = ref(null)
+const previewVertices = computed(() => pointer.value && vertices.value.length
+  ? [...vertices.value, pointer.value]
+  : vertices.value
+)
 const total = computed(() => {
-  if (vertices.value.length < 2) return 0
-  if (ui.measureMode === 'line') return polylineLength(vertices.value)
+  const coords = previewVertices.value
+  if (coords.length < 2) return 0
+  if (ui.measureMode === 'line') return polylineLength(coords)
   // Polygon: close the ring for area.
-  if (vertices.value.length < 3) return 0
-  return polygonArea([...vertices.value, vertices.value[0]])
+  if (coords.length < 3) return 0
+  return polygonArea([...coords, coords[0]])
 })
 
 const showFinal = ref(false)
@@ -35,12 +41,19 @@ const finalShape = ref('line')
 
 function start() {
   vertices.value = []
+  pointer.value = null
   showFinal.value = false
 }
 
 function onMapClick(e) {
   if (!ui.measureMode) return
   vertices.value = [...vertices.value, [e.lngLat.lng, e.lngLat.lat]]
+  pointer.value = [e.lngLat.lng, e.lngLat.lat]
+}
+
+function onMapMove(e) {
+  if (!ui.measureMode || !vertices.value.length) return
+  pointer.value = [e.lngLat.lng, e.lngLat.lat]
 }
 
 function onMapDblClick(e) {
@@ -59,6 +72,7 @@ function finish() {
   showFinal.value = true
   ui.cancelMeasure()
   vertices.value = []
+  pointer.value = null
   // Auto-dismiss the result chip after 6 seconds.
   setTimeout(() => { showFinal.value = false }, 6000)
 }
@@ -66,6 +80,7 @@ function finish() {
 function cancel() {
   ui.cancelMeasure()
   vertices.value = []
+  pointer.value = null
   showFinal.value = false
 }
 
@@ -89,12 +104,14 @@ function bindMap() {
   const m = window.expeditionMap?.getMap?.()
   if (!m) return
   m.on('click', onMapClick)
+  m.on('mousemove', onMapMove)
   m.on('dblclick', onMapDblClick)
   _boundMap = m
 }
 function unbindMap() {
   if (!_boundMap) return
   _boundMap.off('click', onMapClick)
+  _boundMap.off('mousemove', onMapMove)
   _boundMap.off('dblclick', onMapDblClick)
   _boundMap = null
 }
@@ -121,22 +138,38 @@ watch(() => ui.measureMode, (m, prev) => {
 })
 
 // Render the draft as a source so MapLibre does the drawing.
-watch(vertices, (v) => _renderDraft(v), { deep: true })
+watch(previewVertices, (v) => _renderDraft(v), { deep: true })
 
 function _renderDraft(v) {
   const m = window.expeditionMap?.getMap?.()
   if (!m) return
   const sid = 'src-measure-draft'
+  const features = []
+  if (ui.measureMode === 'line' && v.length >= 2) {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: v },
+      properties: { kind: 'line' },
+    })
+  } else if (ui.measureMode === 'polygon') {
+    if (v.length >= 2) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: v },
+        properties: { kind: 'line' },
+      })
+    }
+    if (v.length >= 3) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[...v, v[0]]] },
+        properties: { kind: 'area' },
+      })
+    }
+  }
   const fc = {
     type: 'FeatureCollection',
-    features: v.length >= 2 ? [{
-      type: 'Feature',
-      geometry: {
-        type: ui.measureMode === 'line' ? 'LineString' : 'Polygon',
-        coordinates: ui.measureMode === 'polygon' ? [[...v, v[0]]] : v,
-      },
-      properties: {},
-    }] : [],
+    features,
   }
   if (m.getSource(sid)) {
     m.getSource(sid).setData(fc)
@@ -223,10 +256,10 @@ function fmtArea(m2) {
       <span class="mt__kind">{{ ui.measureMode === 'line' ? 'Distance' : 'Area' }}</span>
       <span class="mt__val">
         <template v-if="ui.measureMode === 'line'">
-          {{ vertices.length < 2 ? '—' : fmtLength(total) }}
+          {{ previewVertices.length < 2 ? '—' : fmtLength(total) }}
         </template>
         <template v-else>
-          {{ vertices.length < 3 ? '—' : fmtArea(total) }}
+          {{ previewVertices.length < 3 ? '—' : fmtArea(total) }}
         </template>
       </span>
       <span class="mt__hint">Click to add · double-click to finish · Esc to cancel</span>

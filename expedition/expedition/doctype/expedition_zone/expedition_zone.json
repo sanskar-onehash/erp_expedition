@@ -21,7 +21,8 @@
   "color",
   "fill_opacity",
   "stroke_color",
-  "stroke_width"
+  "stroke_width",
+  "stroke_style"
  ],
  "fields": [
   {
@@ -117,6 +118,13 @@
    "fieldtype": "Int",
    "label": "Stroke Width",
    "default": "2"
+  },
+  {
+   "fieldname": "stroke_style",
+   "fieldtype": "Select",
+   "label": "Stroke Style",
+   "options": "solid\ndashed\ndotted",
+   "default": "solid"
   }
  ],
  "is_submittable": 0,

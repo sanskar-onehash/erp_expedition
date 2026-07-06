@@ -70,6 +70,26 @@ export const useZonesStore = defineStore('zones', () => {
     }
   }
 
+  async function updateZone(mapName, name, fields) {
+    if (!mapName || !name) throw new Error('zone name required')
+    saving.value = true
+    error.value = null
+    try {
+      const updated = await call('expedition.api.zone.update_zone', { name, ...fields })
+      const list = byMap.value[mapName] || []
+      byMap.value = {
+        ...byMap.value,
+        [mapName]: list.map((z) => z.name === name ? { ...z, ...updated } : z),
+      }
+      return updated
+    } catch (e) {
+      error.value = e
+      throw e
+    } finally {
+      saving.value = false
+    }
+  }
+
   return {
     byMap,
     saving,
@@ -79,5 +99,6 @@ export const useZonesStore = defineStore('zones', () => {
     forActiveMap,
     createZone,
     deleteZone,
+    updateZone,
   }
 })

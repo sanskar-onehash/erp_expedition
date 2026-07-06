@@ -631,6 +631,210 @@ def _resolve_group_band(value: Any, rules: dict) -> tuple[str | None, dict | Non
     return "__unmatched", {"label": "Other"}
 
 
+def _group_filter_for_band(field: str, band: dict, kind: str) -> list[list]:
+    filters = []
+    if band.get("min") not in (None, ""):
+        filters.append([field, ">=", band.get("min")])
+    if band.get("max") not in (None, ""):
+        filters.append([field, "<", band.get("max")])
+    if not filters:
+        filters.append([field, "is", "set"])
+    return filters
+
+
+def _band_display_key(band: dict) -> str:
+    return str(band.get("label") or _group_display_value(band.get("key")))
+
+
+def _group_filters_for_key(
+    group_key: str | None,
+    group_by_field: str | None,
+    group_rules: dict,
+    multi_grouping: dict,
+) -> list[list]:
+    if not group_key:
+        return []
+    if multi_grouping:
+        parts = str(group_key).split(GROUP_PATH_SEPARATOR)
+        filters = []
+        levels = multi_grouping.get("levels") or []
+        for idx, level in enumerate(levels):
+            if idx >= len(parts):
+                break
+            field = level["field"]
+            value = parts[idx]
+            if level.get("mode") == "bands":
+                matched = None
+                for band in level.get("bands") or []:
+                    if _band_display_key(band) == value:
+                        matched = band
+                        break
+                if matched:
+                    filters.extend(_group_filter_for_band(field, matched, level.get("kind") or "number"))
+            elif value == "(blank)":
+                filters.append([field, "in", ["", None]])
+            else:
+                filters.append([field, "=", value])
+        return filters
+
+    if not group_by_field:
+        return []
+    if group_rules.get("mode") == "bands":
+        for band in group_rules.get("bands") or []:
+            if str(band.get("key")) == str(group_key):
+                return _group_filter_for_band(
+                    group_by_field,
+                    band,
+                    group_rules.get("kind") or "number",
+                )
+        if str(group_key) == "__unmatched":
+            return [["name", "=", "__expedition_no_match__"]]
+        return []
+    if str(group_key) == "(blank)":
+        return [[group_by_field, "in", ["", None]]]
+    return [[group_by_field, "=", group_key]]
+
+
+def _virtual_group_style(
+    key: str,
+    label: str,
+    layer_color: str | None,
+    layer_icon: str | None,
+    group_config: dict,
+) -> dict:
+    override = group_config.get(str(key)) if isinstance(group_config, dict) else None
+    return {
+        "color": (override or {}).get("color") or _auto_group_color(key),
+        "icon": (override or {}).get("icon") if override and "icon" in override else (layer_icon or ""),
+        "label": (override or {}).get("label") or label,
+    }
+
+
+def _virtual_groups_for_layer(
+    layer_doc,
+    base_filters: list,
+    group_config: dict,
+    group_rules: dict,
+    multi_grouping: dict,
+    group_by_field: str | None,
+    limit: int = 1000,
+) -> list[dict]:
+    if multi_grouping:
+        levels = multi_grouping.get("levels") or []
+        fields = [level["field"] for level in levels]
+        if not fields:
+            return []
+        rows = frappe.get_all(
+            layer_doc.source_doctype,
+            fields=fields,
+            filters=base_filters,
+            distinct=True,
+            order_by=", ".join(f"{field} asc" for field in fields),
+            limit_page_length=min(max(int(limit or 1000), 1), 5000),
+        )
+        groups = multi_grouping.get("groups") or {}
+        seen = set()
+        out = []
+        for row in rows:
+            values = [_resolve_group_level_value(row, level) for level in levels]
+            key = _group_path_key(values)
+            if key in seen:
+                continue
+            seen.add(key)
+            style = {"color": layer_doc.color or "", "icon": layer_doc.icon or ""}
+            label = " / ".join(values)
+            for idx in range(len(values)):
+                override = groups.get(_group_path_key(values[: idx + 1]))
+                if not isinstance(override, dict):
+                    continue
+                if override.get("color"):
+                    style["color"] = override["color"]
+                if "icon" in override:
+                    style["icon"] = override.get("icon") or ""
+                if override.get("label"):
+                    label = override["label"]
+            out.append({"key": key, "label": label, "style": style})
+        return out
+
+    if not group_by_field:
+        return []
+    if group_rules.get("mode") == "bands":
+        out = []
+        for band in group_rules.get("bands") or []:
+            key = str(band["key"])
+            label = str(band.get("label") or key)
+            out.append({
+                "key": key,
+                "label": label,
+                "style": {
+                    "color": band.get("color") or _auto_group_color(key),
+                    "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
+                },
+            })
+        return out
+
+    rows = frappe.get_all(
+        layer_doc.source_doctype,
+        fields=[group_by_field],
+        filters=base_filters,
+        distinct=True,
+        order_by=f"{group_by_field} asc",
+        limit_page_length=min(max(int(limit or 1000), 1), 5000),
+    )
+    out = []
+    seen = set()
+    for row in rows:
+        raw = row.get(group_by_field)
+        key = _group_display_value(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        style = _virtual_group_style(key, key, layer_doc.color, layer_doc.icon, group_config)
+        out.append({"key": key, "label": style["label"], "style": {"color": style["color"], "icon": style["icon"]}})
+    return out
+
+
+def _style_for_virtual_group_key(
+    group_key: str | None,
+    layer_doc,
+    group_config: dict,
+    group_rules: dict,
+    multi_grouping: dict,
+) -> dict:
+    if not group_key:
+        return {"color": layer_doc.color, "icon": layer_doc.icon}
+    if multi_grouping:
+        parts = str(group_key).split(GROUP_PATH_SEPARATOR)
+        groups = multi_grouping.get("groups") or {}
+        style = {"color": layer_doc.color or "", "icon": layer_doc.icon or ""}
+        for idx in range(len(parts)):
+            override = groups.get(_group_path_key(parts[: idx + 1]))
+            if not isinstance(override, dict):
+                continue
+            if override.get("color"):
+                style["color"] = override["color"]
+            if "icon" in override:
+                style["icon"] = override.get("icon") or ""
+        return style
+    if group_rules.get("mode") == "bands":
+        for band in group_rules.get("bands") or []:
+            if str(band.get("key")) != str(group_key):
+                continue
+            return {
+                "color": band.get("color") or _auto_group_color(group_key),
+                "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
+            }
+        return {"color": _auto_group_color(group_key), "icon": layer_doc.icon or ""}
+    style = _virtual_group_style(
+        str(group_key),
+        str(group_key),
+        layer_doc.color,
+        layer_doc.icon,
+        group_config,
+    )
+    return {"color": style["color"], "icon": style["icon"]}
+
+
 def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
     assert_icon_readable(icon)
     raw = _parse_group_config_raw(group_config_json)
@@ -652,9 +856,77 @@ def _coerce_popup_fields(raw: str | list | None) -> list[str]:
         parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, TypeError):
         return []
-    if not isinstance(parsed, list) or len(parsed) < 2:
+    if not isinstance(parsed, list):
         return []
     return [str(f) for f in parsed if isinstance(f, str) and f]
+
+
+def _source_field_labels(source_doctype: str) -> dict[str, str]:
+    return {
+        fieldname: meta.get("label") or fieldname
+        for fieldname, meta in _filter_field_map(source_doctype).items()
+    }
+
+
+def _source_assignment_fields(source_doctype: str) -> list[dict[str, str]]:
+    fields = [
+        {
+            "fieldname": "owner",
+            "label": "Owner",
+            "fieldtype": "Link",
+            "options": "User",
+        }
+    ]
+    for fieldname, meta in _filter_field_map(source_doctype).items():
+        if fieldname == "owner":
+            continue
+        if meta.get("fieldtype") == "Link" and meta.get("options") == "User":
+            fields.append(
+                {
+                    "fieldname": fieldname,
+                    "label": meta.get("label") or fieldname,
+                    "fieldtype": "Link",
+                    "options": "User",
+                }
+            )
+    return fields
+
+
+def _append_valid_source_fields(
+    fields: list[str],
+    source_doctype: str,
+    requested: list[str],
+) -> None:
+    field_map = _filter_field_map(source_doctype)
+    for raw in requested:
+        fieldname = str(raw or "").strip()
+        if not fieldname or fieldname in fields:
+            continue
+        if fieldname in field_map:
+            fields.append(fieldname)
+
+
+def _default_popup_fields(
+    source_doctype: str,
+    label_field: str | None = None,
+) -> list[str]:
+    field_map = _filter_field_map(source_doctype)
+    preferred = [
+        "status",
+        "workflow_state",
+        "owner",
+        "modified",
+        "creation",
+        "modified_by",
+        "docstatus",
+    ]
+    out = []
+    for fieldname in preferred:
+        if fieldname in field_map and fieldname != label_field:
+            out.append(fieldname)
+    if not out and label_field and label_field in field_map:
+        out.append(label_field)
+    return out[:6]
 
 
 def _full_row_context(
@@ -692,6 +964,7 @@ def _full_row_context(
 def get_features(
     layer: str,
     bounds: dict | None = None,
+    group_key: str | None = None,
     limit: int = 5000,
     offset: int = 0,
 ) -> dict:
@@ -701,6 +974,10 @@ def get_features(
     Args:
             layer: name of the Expedition Layer doc
             bounds: optional {south, west, north, east} viewport filter
+            group_key: optional virtual group key; when present, the
+                    layer's base filters are combined with the group's
+                    derived filter so the group behaves like a separate
+                    filtered layer.
             limit:  hard cap (default 5000 — clusters take care of the rest)
             offset: pagination offset
 
@@ -730,6 +1007,68 @@ def get_features(
     assert_source_read(layer_doc.source_doctype)
 
     filters = _coerce_filter(layer_doc.filter_json) or []
+    base_filters = list(filters)
+    group_config = _coerce_group_config(layer_doc.group_config_json)
+    group_rules = _coerce_grouping_rules(layer_doc.group_config_json)
+    multi_grouping = _coerce_multi_grouping(layer_doc.group_config_json)
+    group_by_field = (layer_doc.group_by_field or "").strip() or None
+    grouping_fields = []
+    if multi_grouping:
+        grouping_fields = [level["field"] for level in multi_grouping.get("levels") or []]
+    elif group_by_field:
+        grouping_fields = [group_by_field]
+
+    if (multi_grouping or group_by_field) and not group_key:
+        popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
+        default_popup_fields = (
+            []
+            if popup_fields or (layer_doc.popup_template or "").strip()
+            else _default_popup_fields(layer_doc.source_doctype, layer_doc.label_field)
+        )
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "total": 0,
+            "truncated": False,
+            "virtual_groups": _virtual_groups_for_layer(
+                layer_doc,
+                base_filters,
+                group_config,
+                group_rules,
+                multi_grouping,
+                group_by_field,
+            ),
+            "layer": {
+                "name": layer_doc.name,
+                "title": layer_doc.title,
+                "source_doctype": layer_doc.source_doctype,
+                "click_action": layer_doc.click_action or "popup",
+                "group_by_field": group_by_field,
+                "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
+                "popup_fields": popup_fields,
+                "default_popup_fields": default_popup_fields,
+                "field_labels": _source_field_labels(layer_doc.source_doctype),
+                "assignment_fields": _source_assignment_fields(layer_doc.source_doctype),
+                "style": {
+                    "color": layer_doc.color,
+                    "icon": layer_doc.icon,
+                    "size": layer_doc.size,
+                    "cluster": layer_doc.cluster,
+                    "heatmap": layer_doc.heatmap,
+                    "stroke_color": layer_doc.stroke_color,
+                    "stroke_width": layer_doc.stroke_width,
+                    "fill_opacity": layer_doc.fill_opacity,
+                    "heatmap_config": _heatmap_config_dict(layer_doc),
+                },
+            },
+        }
+
+    filters += _group_filters_for_key(
+        group_key,
+        group_by_field,
+        group_rules,
+        multi_grouping,
+    )
 
     # Apply viewport bounds as additional lat/lng WHERE clauses. This is
     # safe because the source lat/lng field types are validated at layer
@@ -759,9 +1098,24 @@ def get_features(
     limit = min(int(limit), 10000)
     offset = max(int(offset), 0)
 
+    popup_template = (layer_doc.popup_template or "").strip()
+    popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
+    default_popup_fields = (
+        []
+        if popup_fields or popup_template
+        else _default_popup_fields(layer_doc.source_doctype, layer_doc.label_field)
+    )
+    field_labels = _source_field_labels(layer_doc.source_doctype)
+    assignment_fields = _source_assignment_fields(layer_doc.source_doctype)
+
     fields = ["name", layer_doc.latitude_field, layer_doc.longitude_field]
     if layer_doc.label_field and layer_doc.label_field not in fields:
         fields.append(layer_doc.label_field)
+    _append_valid_source_fields(
+        fields,
+        layer_doc.source_doctype,
+        popup_fields or default_popup_fields,
+    )
     heatmap_config = _heatmap_config_dict(layer_doc)
     heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
     if heatmap_weight_field and heatmap_weight_field not in fields:
@@ -773,8 +1127,6 @@ def get_features(
     # those columns. We use doc.as_dict() semantics: pull the whole doc,
     # restricted by the same permission boundary, and let Jinja reference
     # any field the user can see.
-    popup_template = (layer_doc.popup_template or "").strip()
-
     rows: list[dict[str, Any]] = frappe.get_all(
         layer_doc.source_doctype,
         fields=fields,
@@ -787,16 +1139,6 @@ def get_features(
     total = frappe.db.count(layer_doc.source_doctype, filters=filters)
 
     features = []
-    group_config = _coerce_group_config(layer_doc.group_config_json)
-    group_rules = _coerce_grouping_rules(layer_doc.group_config_json)
-    multi_grouping = _coerce_multi_grouping(layer_doc.group_config_json)
-    group_by_field = (layer_doc.group_by_field or "").strip() or None
-    popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
-    grouping_fields = []
-    if multi_grouping:
-        grouping_fields = [level["field"] for level in multi_grouping.get("levels") or []]
-    elif group_by_field:
-        grouping_fields = [group_by_field]
 
     # Add grouping fields to fetched fields if not already present.
     if group_by_field and group_by_field not in fields:
@@ -909,8 +1251,10 @@ def get_features(
         # Compute default popup rows from popup_fields_json (used when
         # no popup_template is set). The client uses this to render the
         # table without an extra round-trip.
-        if popup_fields and not popup_template:
-            props["_popup_fields"] = popup_fields
+        if not popup_template:
+            display_fields = popup_fields or default_popup_fields
+            if display_fields:
+                props["_popup_fields"] = display_fields
 
         features.append(
             {
@@ -918,6 +1262,28 @@ def get_features(
                 "geometry": {"type": "Point", "coordinates": [lng, lat]},
                 "properties": props,
             }
+        )
+
+    response_style = {
+        "color": layer_doc.color,
+        "icon": layer_doc.icon,
+        "size": layer_doc.size,
+        "cluster": layer_doc.cluster,
+        "heatmap": layer_doc.heatmap,
+        "stroke_color": layer_doc.stroke_color,
+        "stroke_width": layer_doc.stroke_width,
+        "fill_opacity": layer_doc.fill_opacity,
+        "heatmap_config": heatmap_config,
+    }
+    if group_key:
+        response_style.update(
+            _style_for_virtual_group_key(
+                group_key,
+                layer_doc,
+                group_config,
+                group_rules,
+                multi_grouping,
+            )
         )
 
     return {
@@ -933,19 +1299,56 @@ def get_features(
             "group_by_field": group_by_field,
             "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
             "popup_fields": popup_fields,
-            "style": {
-                "color": layer_doc.color,
-                "icon": layer_doc.icon,
-                "size": layer_doc.size,
-                "cluster": layer_doc.cluster,
-                "heatmap": layer_doc.heatmap,
-                "stroke_color": layer_doc.stroke_color,
-                "stroke_width": layer_doc.stroke_width,
-                "fill_opacity": layer_doc.fill_opacity,
-                "heatmap_config": heatmap_config,
-            },
+            "default_popup_fields": default_popup_fields,
+            "field_labels": field_labels,
+            "assignment_fields": assignment_fields,
+            "style": response_style,
         },
     }
+
+
+@frappe.whitelist(allow_guest=True)
+def get_virtual_group_features(
+    layer: str,
+    group_keys: list | str,
+    bounds: dict | None = None,
+    limit: int = 5000,
+) -> dict:
+    """Fetch multiple virtual group layers in one HTTP request.
+
+    Each returned entry is still resolved through `get_features` with a
+    single `group_key`, so semantics match independent filtered layers:
+    parent filters + group filter + viewport bounds.
+    """
+    if isinstance(group_keys, str):
+        try:
+            group_keys = json.loads(group_keys)
+        except (TypeError, ValueError):
+            group_keys = [g for g in group_keys.split(",") if g]
+    if not isinstance(group_keys, list):
+        group_keys = []
+
+    clean_keys = []
+    seen = set()
+    for key in group_keys:
+        text = str(key)
+        if text in seen:
+            continue
+        seen.add(text)
+        clean_keys.append(text)
+        if len(clean_keys) >= 100:
+            break
+
+    groups = {}
+    for key in clean_keys:
+        groups[key] = get_features(
+            layer=layer,
+            bounds=bounds,
+            group_key=key,
+            limit=limit,
+            offset=0,
+        )
+    return {"groups": groups}
 
 
 def _empty_bounds() -> dict:

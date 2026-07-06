@@ -17,6 +17,10 @@ the canvas actually needs that aren't in the standard CRUD path:
 import frappe
 
 
+def _has_zone_stroke_style() -> bool:
+    return frappe.db.has_column("Expedition Zone", "stroke_style")
+
+
 @frappe.whitelist(allow_guest=True)
 def load_full(name: str) -> dict:
     """
@@ -95,24 +99,29 @@ def load_full(name: str) -> dict:
         ],
         order_by="sequence asc, modified asc",
     )
+    zone_fields = [
+        "name",
+        "title",
+        "zone_type",
+        "geometry",
+        "color",
+        "fill_opacity",
+        "stroke_color",
+        "stroke_width",
+        "tag",
+        "centroid_lat",
+        "centroid_lng",
+    ]
+    if _has_zone_stroke_style():
+        zone_fields.insert(8, "stroke_style")
     zones = frappe.get_all(
         "Expedition Zone",
         filters={"map": name},
-        fields=[
-            "name",
-            "title",
-            "zone_type",
-            "geometry",
-            "color",
-            "fill_opacity",
-            "stroke_color",
-            "stroke_width",
-            "tag",
-            "centroid_lat",
-            "centroid_lng",
-        ],
+        fields=zone_fields,
         order_by="modified asc",
     )
+    for zone in zones:
+        zone.setdefault("stroke_style", "solid")
 
     # Touch last_opened_at asynchronously (cheap DB write)
     frappe.enqueue(
@@ -414,19 +423,23 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         )
 
     # Clone zones.
+    zone_fields = [
+        "title",
+        "zone_type",
+        "geometry",
+        "color",
+        "fill_opacity",
+        "stroke_color",
+        "stroke_width",
+        "tag",
+    ]
+    has_stroke_style = _has_zone_stroke_style()
+    if has_stroke_style:
+        zone_fields.insert(7, "stroke_style")
     template_zones = frappe.get_all(
         "Expedition Zone",
         filters={"map": template_name},
-        fields=[
-            "title",
-            "zone_type",
-            "geometry",
-            "color",
-            "fill_opacity",
-            "stroke_color",
-            "stroke_width",
-            "tag",
-        ],
+        fields=zone_fields,
     )
     for tz in template_zones:
         new_zone = frappe.new_doc("Expedition Zone")
@@ -438,6 +451,8 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_zone.fill_opacity = tz.fill_opacity
         new_zone.stroke_color = tz.stroke_color
         new_zone.stroke_width = tz.stroke_width
+        if has_stroke_style:
+            new_zone.stroke_style = getattr(tz, "stroke_style", None) or "solid"
         new_zone.tag = tz.tag
         new_zone.insert(ignore_permissions=True)
 

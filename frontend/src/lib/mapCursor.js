@@ -27,7 +27,9 @@ const CURSORS = {
 export function mapCursorStyle(kind) {
   if (kind === 'default') return 'default'
   if (kind === 'pointer') return 'pointer'
+  if (kind === 'grabbing') return 'grabbing'
   if (kind === 'ns-resize') return 'ns-resize'
+  if (kind === 'text') return 'text'
   return CURSORS[kind] || CURSORS.crosshair
 }
 

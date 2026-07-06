@@ -1143,29 +1143,21 @@ async function save() {
         radius_field: form.value.radius_field,
         radius_meters: form.value.radius_meters,
         radius_opacity: form.value.radius_opacity,
+        filter_json: serializeFilterRows(form.value.filter_rows),
       }
-      const filterJson = serializeFilterRows(form.value.filter_rows)
       if (asMaster.value) {
-        // Save as a master mapping (map=NULL). Master is reusable across
-        // maps; per-map instances are created from it later.
-        const dto = await layerStore.addMaster({ ...basePayload, filter_json: filterJson })
-        // No need for a follow-up update — addMaster already passes filter_json.
-        // (If filter rows were added, they're already in the payload.)
+        const dto = await layerStore.addMaster({ ...basePayload })
         void dto
       } else {
-        // Save as a per-map instance. Requires an active map.
         if (!mapStore.activeMap?.map?.name) {
           error.value = 'No active map — open a map first.'
           saving.value = false
           return
         }
-        const dto = await layerStore.addLayer({
+        await layerStore.addLayer({
           ...basePayload,
           map_name: mapStore.activeMap.map.name,
         })
-        if (filterJson) {
-          await layerStore.updateLayer(dto.name, { filter_json: filterJson })
-        }
       }
     } else {
       const editFields = {
@@ -1805,7 +1797,7 @@ function close() {
           <span class="le__label">Click action</span>
           <select v-model="form.click_action" class="le__input">
             <option value="popup">Show popup</option>
-            <option value="redirect">Open DocType form</option>
+            <option value="open_form">Open DocType form</option>
             <option value="none">None (no click action)</option>
           </select>
         </label>

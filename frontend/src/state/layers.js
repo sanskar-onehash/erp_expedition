@@ -54,6 +54,9 @@ export const useLayersStore = defineStore('layers', () => {
       if (f && f.properties && f.properties._name != null && f.id == null) {
         f.id = f.properties._name
       }
+      if (f && f.properties && f.id != null && f.properties._id == null) {
+        f.properties._id = f.id
+      }
     }
     return fc
   }
@@ -177,19 +180,54 @@ export const useLayersStore = defineStore('layers', () => {
     }
   }
 
-  async function fetchFeatures(layerName, bounds) {
-    if (loading.value[layerName]) return
-    loading.value[layerName] = true
+  async function fetchFeatures(layerName, bounds, options = {}) {
+    const cacheKey = options.cacheKey || layerName
+    if (loading.value[cacheKey]) return
+    loading.value[cacheKey] = true
     useUiStore().beginFetch()
     try {
-      const fc = await call('expedition.api.layer.get_features', { layer: layerName, bounds })
+      const args = { layer: layerName, bounds }
+      if (options.groupKey != null) args.group_key = options.groupKey
+      const fc = await call('expedition.api.layer.get_features', args)
       _promoteIds(fc)
-      features.value[layerName] = fc
-      lastFetched.value[layerName] = Date.now()
+      features.value[cacheKey] = fc
+      lastFetched.value[cacheKey] = Date.now()
       if (bounds) lastBounds.value[layerName] = bounds
-      _emitFeaturesUpdated(layerName)
+      _emitFeaturesUpdated(cacheKey)
     } finally {
-      loading.value[layerName] = false
+      loading.value[cacheKey] = false
+      useUiStore().endFetch()
+    }
+  }
+
+  async function fetchVirtualGroupFeatures(layerName, bounds, groups) {
+    const items = Array.isArray(groups) ? groups : []
+    const pending = items.filter((item) => item?.groupKey != null && item?.cacheKey)
+    if (!pending.length) return
+    const batchKey = `${layerName}::groups`
+    if (loading.value[batchKey]) return
+    loading.value[batchKey] = true
+    for (const item of pending) loading.value[item.cacheKey] = true
+    useUiStore().beginFetch()
+    try {
+      const resp = await call('expedition.api.layer.get_virtual_group_features', {
+        layer: layerName,
+        bounds,
+        group_keys: pending.map((item) => item.groupKey),
+      })
+      const byGroup = resp?.groups || {}
+      for (const item of pending) {
+        const fc = byGroup[item.groupKey]
+        if (!fc) continue
+        _promoteIds(fc)
+        features.value[item.cacheKey] = fc
+        lastFetched.value[item.cacheKey] = Date.now()
+        _emitFeaturesUpdated(item.cacheKey)
+      }
+      if (bounds) lastBounds.value[layerName] = bounds
+    } finally {
+      for (const item of pending) loading.value[item.cacheKey] = false
+      loading.value[batchKey] = false
       useUiStore().endFetch()
     }
   }
@@ -265,6 +303,13 @@ export const useLayersStore = defineStore('layers', () => {
     delete features.value[layerName]
     delete loading.value[layerName]
     delete lastFetched.value[layerName]
+    const groupPrefix = `${layerName}__grp__`
+    for (const key of Object.keys(features.value)) {
+      if (!key.startsWith(groupPrefix)) continue
+      delete features.value[key]
+      delete loading.value[key]
+      delete lastFetched.value[key]
+    }
     _emitFeaturesUpdated(layerName)
   }
 
@@ -418,6 +463,7 @@ export const useLayersStore = defineStore('layers', () => {
     lastFetched,
     visibleLayers,
     fetchFeatures,
+    fetchVirtualGroupFeatures,
     refetchLayer,
     getLayerStyle,
     clearFeatures,

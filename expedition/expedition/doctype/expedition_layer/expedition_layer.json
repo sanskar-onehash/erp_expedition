@@ -365,7 +365,7 @@
    "fieldname": "click_action",
    "fieldtype": "Select",
    "label": "Click Action",
-   "options": "popup\nopen_form\nschedule_visit",
+   "options": "popup\nopen_form\nnone",
    "default": "popup",
    "description": "What happens when a user clicks a pin."
   },

@@ -56,6 +56,7 @@ const groups = computed(() => [
     items: [
       { kind: 'zoom' },
       { kind: 'pitch' },
+      { kind: 'switch', key: 'tiltJoystickInverted', label: 'Invert tilt joystick', help: 'Reverse horizontal and vertical joystick movement.' },
     ],
   },
   {
@@ -178,6 +179,7 @@ const PREVIEWABLE_KEYS = new Set([
   'showCompass', 'showScale', 'showMinimap',
   'coordUnits', 'distanceUnits', 'cursor',
   'toolbarSize',
+  'tiltJoystickInverted',
   'openRecentOnLaunch', 'showTemplatesOnEmpty',
 ])
 
@@ -287,6 +289,7 @@ function resetAll() {
     draft.value = {
       defaultZoom: 3,
       defaultPitch: 0,
+      tiltJoystickInverted: true,
       blurOnPanel: true,
       autoCloseOthers: true,
       showLegend: true,
@@ -436,6 +439,17 @@ function registerRef(key, kind, el) {
               <span class="us__row-val">{{ draft.defaultPitch }}°</span>
             </div>
             <p class="us__hint">Applies on the next map you open.</p>
+            <div class="us__row">
+              <label class="us__switch-label">
+                <input
+                  type="checkbox"
+                  :checked="draft.tiltJoystickInverted"
+                  @change="(e) => onSwitch('tiltJoystickInverted', e)"
+                />
+                <span class="us__row-title">Invert tilt joystick</span>
+              </label>
+              <span class="us__row-help">Reverse horizontal and vertical joystick movement.</span>
+            </div>
           </template>
 
           <!-- Other sections: walk the items and render the right control. -->

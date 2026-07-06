@@ -101,6 +101,13 @@ def _make_layer(popup_template=""):
     ).insert(ignore_permissions=True)
 
 
+def _make_layer_with_popup_fields(fields):
+    doc = _make_layer(popup_template="")
+    doc.popup_fields_json = frappe.as_json(fields)
+    doc.save(ignore_permissions=True)
+    return doc
+
+
 class TestPopupTemplate(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -183,3 +190,10 @@ class TestPopupTemplate(unittest.TestCase):
             self.assertIn(f"title={title}", html)
             self.assertIn("category=Customer", html)
             self.assertIn(f"city={city}", html)
+
+    def test_single_popup_field_is_fetched_for_default_popup(self):
+        layer = _make_layer_with_popup_fields(["city"])
+        result = layer_api.get_features(layer=layer.name, limit=10000)
+        titles = {f["properties"]["_label"]: f for f in result["features"]}
+        self.assertEqual(titles["AlphaTestPin"]["properties"]["city"], "Delhi")
+        self.assertEqual(titles["AlphaTestPin"]["properties"]["_popup_fields"], ["city"])

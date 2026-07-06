@@ -26,7 +26,7 @@ import BasemapPanel from './components/BasemapPanel.vue'
 import SearchBar from './components/SearchBar.vue'
 import Legend from './components/Legend.vue'
 import LayerPanel from './components/LayerPanel.vue'
-import ToolsPanel from './components/ToolsPanel.vue'
+import MapToolTray from './components/MapToolTray.vue'
 import CoordReadout from './components/CoordReadout.vue'
 import MeasureTool from './components/MeasureTool.vue'
 import ContextMenu from './components/ContextMenu.vue'
@@ -100,10 +100,6 @@ const trSearchButtons = computed(() => [
 const trSettingsButtons = computed(() => [
   { id: 'settings', label: 'Settings', glyph: GLYPHS.settings, active: ui.settingsOpen },
 ])
-// Center-right: tools button at 25% from the top of the viewport.
-const crButtons = computed(() => [
-  { id: 'tools', label: 'Tools', glyph: GLYPHS.tools, active: ui.rightPanel === 'tools' },
-])
 // Bottom-right: two standard FloatingToolbars. The fit tray holds
 // both fit modes (fit-all + fit-visible) as buttons stacked
 // vertically inside a single pill. Tilt-reset is its own tray
@@ -140,7 +136,6 @@ function resetTilt() {
 // effect; no state machine, no toggle-vs-action ambiguity.
 function onToolbarTrigger(id) {
   if (id === 'layers') ui.toggleLeftPanel('layers')
-  else if (id === 'tools') ui.toggleRightPanel('tools')
   else if (id === 'search') ui.toggleSearch()
   else if (id === 'settings') ui.toggleSettings()
   else if (id === 'fit-all') fitToData('all')
@@ -333,12 +328,7 @@ async function _fitAllBounds(m) {
       </div>
     </Transition>
 
-    <!-- Right-edge panel (ToolsPanel). Slides in from right. -->
-    <Transition name="tp-slide">
-      <div v-if="ui.rightPanel === 'tools'" class="expedition__right">
-        <ToolsPanel @close="ui.closeRightPanel()" />
-      </div>
-    </Transition>
+    <MapToolTray />
 
     <!-- Top-left toolbar: layers -->
     <div class="expedition__tl">
@@ -351,11 +341,6 @@ async function _fitAllBounds(m) {
     <div class="expedition__tr">
       <FloatingToolbar :buttons="trSearchButtons" @trigger="onToolbarTrigger" />
       <FloatingToolbar :buttons="trSettingsButtons" @trigger="onToolbarTrigger" />
-    </div>
-
-    <!-- Center-right: tools button at 25% from the top. -->
-    <div class="expedition__cr">
-      <FloatingToolbar :buttons="crButtons" @trigger="onToolbarTrigger" />
     </div>
 
     <!-- Bottom-right: two standard FloatingToolbars stacked

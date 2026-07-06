@@ -41,6 +41,11 @@ const showHistory = ref(true)
 // Aggregated stats: counts by year (active vs passive).
 const aggregate = ref(null)
 const aggregateLoading = ref(false)
+const actionError = ref('')
+const todoBusy = ref(false)
+const assignBusy = ref(false)
+const assignField = ref('')
+const assignUser = ref('')
 
 const feature = computed(() => ui.selectedFeature)
 const layer = computed(() => {
@@ -140,10 +145,15 @@ watch(feature, async (v) => {
     await nextTick()
     measure()
     recompute()
+    const firstAssignable = (v.layer?.assignment_fields || [])[0]
+    assignField.value = firstAssignable?.fieldname || ''
+    assignUser.value = v.properties?.[assignField.value] || window.expeditionSession?.user || ''
+    actionError.value = ''
     loadHistory()
   } else {
     screen.value = null
     history.value = []
+    actionError.value = ''
   }
 })
 
@@ -170,7 +180,7 @@ const subtitle = computed(() => {
 const propRows = computed(() => {
   const f = feature.value
   if (!f) return []
-  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_group_path', '_group_label', '_group_values', '_color', '_icon', '_icon_disabled', '_popup_fields'])
+  const skip = new Set(['_doctype', '_name', '_label', 'name', '_popup_html', '_layer_name', '_group_value', '_group_path', '_group_label', '_group_values', '_color', '_icon', '_icon_disabled', '_popup_fields', '_id', '_display_icon_image'])
   const rows = []
   for (const [k, v] of Object.entries(f.properties || {})) {
     if (skip.has(k)) continue
@@ -190,6 +200,27 @@ const propRows = computed(() => {
   }
   return rows
 })
+const fieldLabels = computed(() => layer.value.field_labels || {})
+const assignmentFields = computed(() => layer.value.assignment_fields || [])
+const selectedAssignment = computed(() =>
+  assignmentFields.value.find((f) => f.fieldname === assignField.value) || assignmentFields.value[0] || null
+)
+const currentAssignmentValue = computed(() => {
+  const fieldname = selectedAssignment.value?.fieldname
+  if (!fieldname) return ''
+  return feature.value?.properties?.[fieldname] || ''
+})
+
+function labelFor(fieldname) {
+  return fieldLabels.value[fieldname] || fieldname
+}
+
+function formatValue(value) {
+  if (value == null) return ''
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : String(value)
+  return String(value)
+}
 
 // Quick action: open the source DocType's form for this row.
 function openForm() {
@@ -231,6 +262,61 @@ async function scheduleVisit() {
       cancelLabel: '',
       destructive: false,
     })
+  }
+}
+
+async function createTodo() {
+  if (!sourceDoctype.value || !sourceName.value) return
+  todoBusy.value = true
+  actionError.value = ''
+  try {
+    await call('expedition.api.action.create_todo', {
+      source_doctype: sourceDoctype.value,
+      source_name: sourceName.value,
+      description: `Follow up on ${title.value}`,
+      allocated_to: window.expeditionSession?.user || '',
+    })
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    todoBusy.value = false
+  }
+}
+
+async function assignRecord() {
+  if (!sourceDoctype.value || !sourceName.value || !assignField.value || !assignUser.value) return
+  assignBusy.value = true
+  actionError.value = ''
+  try {
+    await call('expedition.api.action.assign', {
+      source_doctype: sourceDoctype.value,
+      source_name: sourceName.value,
+      fieldname: assignField.value,
+      user: assignUser.value,
+    })
+    if (feature.value?.properties) feature.value.properties[assignField.value] = assignUser.value
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    assignBusy.value = false
+  }
+}
+
+async function unassignRecord() {
+  if (!sourceDoctype.value || !sourceName.value || !assignField.value) return
+  assignBusy.value = true
+  actionError.value = ''
+  try {
+    await call('expedition.api.action.unassign', {
+      source_doctype: sourceDoctype.value,
+      source_name: sourceName.value,
+      fieldname: assignField.value,
+    })
+    if (feature.value?.properties) feature.value.properties[assignField.value] = ''
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    assignBusy.value = false
   }
 }
 
@@ -326,6 +412,10 @@ function formatDate(s) {
         </svg>
         <span>Visit</span>
       </button>
+      <button type="button" class="mp__action" :disabled="todoBusy" @click="createTodo"
+              title="Create a ToDo linked to this record">
+        <span>{{ todoBusy ? 'Adding…' : 'ToDo' }}</span>
+      </button>
     </div>
     <div class="mp__body">
       <!--
@@ -339,13 +429,34 @@ function formatDate(s) {
         <table v-if="propRows.length" class="mp__props">
           <tbody>
             <tr v-for="[k, v] in propRows" :key="k">
-              <th>{{ k }}</th>
-              <td>{{ v }}</td>
+              <th>{{ labelFor(k) }}</th>
+              <td>{{ formatValue(v) }}</td>
             </tr>
           </tbody>
         </table>
         <p v-else class="mp__empty">No additional properties.</p>
       </template>
+
+      <div v-if="sourceDoctype && sourceName && assignmentFields.length" class="mp__assign">
+        <div class="mp__assign-row">
+          <select v-model="assignField" class="mp__assign-input" aria-label="Assignment field">
+            <option v-for="field in assignmentFields" :key="field.fieldname" :value="field.fieldname">
+              {{ field.label || field.fieldname }}
+            </option>
+          </select>
+          <input v-model="assignUser" class="mp__assign-input" type="text" placeholder="user@example.com" />
+        </div>
+        <div class="mp__assign-row">
+          <span class="mp__assign-current">{{ currentAssignmentValue || 'Unassigned' }}</span>
+          <button type="button" class="mp__assign-btn" :disabled="assignBusy || !assignUser" @click="assignRecord">
+            {{ assignBusy ? 'Saving…' : 'Assign' }}
+          </button>
+          <button type="button" class="mp__assign-btn" :disabled="assignBusy || !currentAssignmentValue || assignField === 'owner'" @click="unassignRecord">
+            Clear
+          </button>
+        </div>
+        <p v-if="actionError" class="mp__action-error">{{ actionError }}</p>
+      </div>
 
       <!-- Visit history (Expedition Activity linked to the source doc). -->
       <div v-if="sourceDoctype && sourceName" class="mp__history">
@@ -484,7 +595,62 @@ function formatDate(s) {
   cursor: pointer;
 }
 .mp__action:hover { background: rgba(59, 130, 246, 0.22); color: #fff; }
+.mp__action:disabled { opacity: 0.55; cursor: default; }
 .mp__action svg { flex: none; }
+
+.mp__assign {
+  margin-top: 10px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+.mp__assign-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.mp__assign-row + .mp__assign-row { margin-top: 6px; }
+.mp__assign-input {
+  min-width: 0;
+  flex: 1;
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: #E6E8EC;
+  border-radius: 5px;
+  padding: 5px 7px;
+  font-size: 11px;
+  font-family: inherit;
+}
+.mp__assign-current {
+  flex: 1;
+  min-width: 0;
+  color: rgba(230, 232, 236, 0.65);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__assign-btn {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.30);
+  color: #A7F3D0;
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mp__assign-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.mp__action-error {
+  margin: 6px 0 0;
+  color: #FCA5A5;
+  font-size: 11px;
+}
 
 /* Visit history section. */
 .mp__history {

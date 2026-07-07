@@ -25,6 +25,7 @@ const error = ref('')
 const loading = ref(false)
 const focused = ref(false)
 const inputEl = ref(null)
+const metaDismissed = ref(false)
 
 // Sync with global ui.searchOpen so toolbar button opens us.
 watch(() => ui.searchOpen, (val) => {
@@ -51,7 +52,6 @@ const visibleLayers = computed(() =>
   (layers.layers || []).filter((l) => l.enabled !== false && l.enabled !== 0)
 )
 const activeSearch = computed(() => layers.activeSearch)
-const parsedChips = computed(() => activeSearch.value?.chips || [])
 
 function onKey(e) {
   // Ctrl/Cmd+K focuses search (handled globally elsewhere too).
@@ -80,6 +80,7 @@ async function run() {
   }
   loading.value = true
   try {
+    metaDismissed.value = false
     await layers.applySearch(raw)
     requestAnimationFrame(() => {
       window.dispatchEvent(new CustomEvent('expedition:fit-data', {
@@ -97,23 +98,14 @@ async function run() {
 function clear() {
   value.value = ''
   error.value = ''
+  metaDismissed.value = false
   layers.clearSearch()
 }
 
-function chipLabel(expression) {
-  if (!expression) return ''
-  if (expression.mode === 'text') return `"${expression.value}"`
-  const prefix = expression.mode === 'doctype_field' ? `${expression.doctype}:` : ''
-  const op = expression.operator || ':'
-  return `${prefix}${expression.field} ${op === ':' ? 'contains' : op} ${expression.value}`
+function closeMeta() {
+  metaDismissed.value = true
 }
 
-function chipClass(expression) {
-  return {
-    'sb__chip--text': expression?.mode === 'text',
-    'sb__chip--field': expression?.mode === 'field' || expression?.mode === 'doctype_field',
-  }
-}
 </script>
 
 <template>
@@ -140,25 +132,15 @@ function chipClass(expression) {
       <button type="button" class="sb__run" :disabled="loading" @click="run()">{{ loading ? '…' : 'go' }}</button>
       <button type="button" class="sb__close" @click="close()" aria-label="Close search">esc</button>
     </div>
+  </div>
+  <div v-if="open && (error || activeSearch) && !metaDismissed" class="sb__meta">
+    <button type="button" class="sb__meta-close" aria-label="Hide search details" @click="closeMeta">×</button>
     <p v-if="error" class="sb__error">{{ error }}</p>
     <p v-else-if="activeSearch" class="sb__hint">
       <span v-if="activeSearch.total === 0" class="sb__empty">No pins matched this search.</span>
-      <span v-else>{{ activeSearch.total }} pin{{ activeSearch.total === 1 ? '' : 's' }} visible.</span>
-      <span class="sb__summary">{{ activeSearch.summary }}</span>
+      <span v-else>{{ activeSearch.total }} pin{{ activeSearch.total === 1 ? '' : 's' }} visible</span>
     </p>
-    <p v-else class="sb__hint">
-      <span>Plain text searches every loaded field. Spaces combine filters with AND; use <code>OR</code> for alternatives.</span>
-    </p>
-    <div v-if="parsedChips.length" class="sb__chips" aria-label="Parsed search filters">
-      <span
-        v-for="(chip, idx) in parsedChips"
-        :key="idx + ':' + chip.raw"
-        class="sb__chip"
-        :class="chipClass(chip)"
-      >
-        {{ chipLabel(chip) }}
-      </span>
-    </div>
+    <p v-if="activeSearch?.summary" class="sb__summary">{{ activeSearch.summary }}</p>
   </div>
 </template>
 
@@ -227,46 +209,58 @@ function chipClass(expression) {
   cursor: default;
   opacity: 0.65;
 }
+.sb__meta {
+  position: fixed;
+  left: 50%;
+  bottom: 54px;
+  transform: translateX(-50%);
+  width: fit-content;
+  max-width: 92vw;
+  padding: 9px 34px 9px 11px;
+  background: rgba(11, 14, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  z-index: 1201;
+  text-align: center;
+}
 .sb__hint, .sb__error {
-  margin: 6px 4px 0;
+  margin: 0;
+  max-width: min(560px, calc(92vw - 52px));
   font-size: 11px;
-  color: rgba(230, 232, 236, 0.5);
+  line-height: 1.35;
+  color: rgba(246, 247, 249, 0.86);
 }
 .sb__summary {
-  margin-left: 4px;
+  margin: 5px 0 0;
+  max-width: min(560px, calc(92vw - 52px));
+  font-size: 10px;
+  line-height: 1.35;
+  color: rgba(230, 232, 236, 0.68);
+  text-align: center;
 }
 .sb__empty {
   color: #FCA5A5;
 }
 .sb__error { color: #FCA5A5; }
-.sb__hint code {
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 3px;
-  padding: 0 4px;
-  font-size: 10px;
+.sb__meta-close {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 247, 249, 0.78);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
 }
-.sb__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin: 7px 4px 0;
-}
-.sb__chip {
-  min-width: 0;
-  max-width: 100%;
-  padding: 3px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(230, 232, 236, 0.78);
-  font-size: 10px;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-.sb__chip--field {
-  border-color: rgba(59, 130, 246, 0.24);
-}
-.sb__chip--text {
-  border-color: rgba(16, 185, 129, 0.24);
+.sb__meta-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.95);
 }
 </style>

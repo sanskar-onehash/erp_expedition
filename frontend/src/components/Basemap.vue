@@ -252,6 +252,9 @@ let _zoneHandlersBound = false
 let _zoneDrag = null
 let _mapPointerStart = null
 let _mapWasDragged = false
+let _homeFitDone = false
+let _homeFitSeq = 0
+let _homeFitTimer = null
 
 // Tracks whether each visible layer has ever been fetched with the
 // current viewport. On first paint we deliberately pass `null` bounds
@@ -281,6 +284,12 @@ function _resetFirstFetch() {
   _layerFetchedOnce = new Set()
   _virtualGroupFetchKeys = {}
   _sourceClusterState = {}
+  _homeFitDone = false
+  _homeFitSeq += 1
+  if (_homeFitTimer) {
+    clearTimeout(_homeFitTimer)
+    _homeFitTimer = null
+  }
 }
 
 function _bindPointLayerHandlers(layerIdValue) {
@@ -1589,10 +1598,6 @@ async function onZoneDragEnd() {
   }
 }
 
-function _flyToInitialViewport() {
-  return _flyToHome()
-}
-
 function _flatCoords(geom) {
   if (!geom) return []
   if (geom.type === 'Point') return [geom.coordinates]
@@ -1601,62 +1606,150 @@ function _flatCoords(geom) {
   return []
 }
 
-/**
- * Frame the active map's data on first render and on map switch.
- * Always fits all enabled layers + zones — saved viewports are
- * ignored, so a fresh map opens framed around its data. The
- * "Fit to all" toolbar button covers the same case after first
- * render.
- */
-function _flyToHome() {
-  if (!map || !mapStore.activeMap) return
-  const allFeats = Object.values(layerStore.features || {}).flatMap(
-    (fc) => (fc && fc.features) || []
-  )
-  const activeMapName = mapStore.activeMap?.map?.name
-  if (activeMapName) {
-    const list = zoneStore.byMap?.[activeMapName] || []
-    for (const z of list) {
-      if (z && z.geometry) allFeats.push({ type: 'Feature', geometry: z.geometry })
-    }
+function _emptyEnvelope() {
+  return { west: Infinity, south: Infinity, east: -Infinity, north: -Infinity }
+}
+
+function _extendEnvelopeWithGeometry(env, geometry) {
+  for (const [lng, lat] of _flatCoords(geometry)) {
+    if (typeof lng !== 'number' || typeof lat !== 'number') continue
+    if (lng < env.west) env.west = lng
+    if (lng > env.east) env.east = lng
+    if (lat < env.south) env.south = lat
+    if (lat > env.north) env.north = lat
   }
-  let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity
-  for (const f of allFeats) {
-    for (const [lng, lat] of _flatCoords(f?.geometry)) {
-      if (typeof lng !== 'number' || typeof lat !== 'number') continue
-      if (lng < west) west = lng
-      if (lng > east) east = lng
-      if (lat < south) south = lat
-      if (lat > north) north = lat
-    }
-  }
-  // No features in the viewport-bounded cache yet (first render) —
-  // fall back to the per-layer *full* envelope from the bounds
-  // metadata cache. This is the same data the 'Fit to all' button
-  // uses, so first-render framing matches what the user gets on
-  // click. Triggered in parallel; the first response wins.
-  if (!isFinite(west) || !isFinite(east) || east - west < 0.001) {
-    for (const lyr of layerStore.visibleLayers || []) {
-      const b = layerStore.bounds?.[lyr.name]
-      if (!b || typeof b.south !== 'number' || b.count === 0) continue
-      if (b.west < west) west = b.west
-      if (b.east > east) east = b.east
-      if (b.south < south) south = b.south
-      if (b.north > north) north = b.north
-    }
-    // Kick off fetches for any layer that's still missing bounds
-    // so the next call has them — fire-and-forget.
-    for (const lyr of layerStore.visibleLayers || []) {
-      if (!layerStore.bounds?.[lyr.name]) {
-        layerStore.fetchBounds(lyr.name).catch(() => {})
-      }
-    }
-  }
-  if (!isFinite(west) || !isFinite(east) || east - west < 0.001) return
+  return env
+}
+
+function _extendEnvelopeWithBounds(env, b) {
+  if (!b || typeof b.south !== 'number' || b.count === 0) return env
+  if (b.west < env.west) env.west = b.west
+  if (b.east > env.east) env.east = b.east
+  if (b.south < env.south) env.south = b.south
+  if (b.north > env.north) env.north = b.north
+  return env
+}
+
+function _hasUsableEnvelope(env) {
+  return isFinite(env.west) && isFinite(env.east) && isFinite(env.south) && isFinite(env.north)
+}
+
+function _fitEnvelope(env) {
+  if (!map || !_hasUsableEnvelope(env)) return false
+  const lngPad = Math.max(0.001, (env.east - env.west) * 0.04)
+  const latPad = Math.max(0.001, (env.north - env.south) * 0.04)
+  const west = env.east === env.west ? env.west - lngPad : env.west
+  const east = env.east === env.west ? env.east + lngPad : env.east
+  const south = env.north === env.south ? env.south - latPad : env.south
+  const north = env.north === env.south ? env.north + latPad : env.north
   map.fitBounds(
     [[west, south], [east, north]],
     { padding: 64, duration: 1200, maxZoom: 12, essential: true }
   )
+  return true
+}
+
+function _pinFeatureEnvelope() {
+  const env = _emptyEnvelope()
+  const visible = new Set((layerStore.visibleLayers || []).map((lyr) => lyr.name))
+  for (const [layerName, fc] of Object.entries(layerStore.features || {})) {
+    if (!visible.has(parentLayerName(layerName))) continue
+    for (const f of (fc && fc.features) || []) {
+      _extendEnvelopeWithGeometry(env, f?.geometry)
+    }
+  }
+  return env
+}
+
+function _zoneEnvelope() {
+  const env = _emptyEnvelope()
+  const activeMapName = mapStore.activeMap?.map?.name
+  const list = (activeMapName && zoneStore.byMap?.[activeMapName]) || []
+  for (const z of list) {
+    if (z && z.geometry) _extendEnvelopeWithGeometry(env, z.geometry)
+  }
+  return env
+}
+
+function _cachedLayerBoundsEnvelope() {
+  const env = _emptyEnvelope()
+  for (const lyr of layerStore.visibleLayers || []) {
+    _extendEnvelopeWithBounds(env, layerStore.bounds?.[lyr.name])
+  }
+  return env
+}
+
+function _hasPendingHomeData() {
+  if (ui.fetchingFeatures > 0) return true
+  for (const lyr of layerStore.visibleLayers || []) {
+    if (layerStore.bounds?.[lyr.name] === null) return true
+    if (layerStore.loading?.[lyr.name]) return true
+  }
+  return false
+}
+
+function _scheduleHomeFitRetry(delay = 160) {
+  if (_homeFitDone || _homeFitTimer) return
+  const seq = _homeFitSeq
+  _homeFitTimer = setTimeout(() => {
+    _homeFitTimer = null
+    if (seq === _homeFitSeq && !_homeFitDone) _flyToHome()
+  }, delay)
+}
+
+/**
+ * Frame the active map's data on first render and on map switch.
+ * Pins are authoritative. Server layer bounds are the next-best
+ * metadata when pins are still loading. Zones are only a fallback
+ * when there are no pin rows and no layer bounds to frame.
+ */
+async function _flyToHome() {
+  if (!map || !mapStore.activeMap || _homeFitDone) return
+  const seq = _homeFitSeq
+
+  const pinEnv = _pinFeatureEnvelope()
+  if (_fitEnvelope(pinEnv)) {
+    _homeFitDone = true
+    return
+  }
+
+  const cachedBoundsEnv = _cachedLayerBoundsEnvelope()
+  if (_fitEnvelope(cachedBoundsEnv)) {
+    _homeFitDone = true
+    return
+  }
+
+  const layers = layerStore.visibleLayers || []
+  if (layers.length) {
+    const results = await Promise.all(
+      layers.map((lyr) => layerStore.fetchBounds(lyr.name).catch(() => null))
+    )
+    if (seq !== _homeFitSeq || _homeFitDone || !map) return
+
+    const latestPinEnv = _pinFeatureEnvelope()
+    if (_fitEnvelope(latestPinEnv)) {
+      _homeFitDone = true
+      return
+    }
+
+    const fetchedBoundsEnv = _emptyEnvelope()
+    for (const b of results) _extendEnvelopeWithBounds(fetchedBoundsEnv, b)
+    if (_fitEnvelope(fetchedBoundsEnv)) {
+      _homeFitDone = true
+      return
+    }
+  }
+
+  if (seq !== _homeFitSeq || _homeFitDone || !map) return
+  if (_hasPendingHomeData()) {
+    _scheduleHomeFitRetry()
+    return
+  }
+  if (_fitEnvelope(_zoneEnvelope())) _homeFitDone = true
+}
+
+function _flyToInitialViewport() {
+  _flyToHome()
 }
 
 function applySkin(skinId) {
@@ -1673,8 +1766,7 @@ function applySkin(skinId) {
 }
 
 onMounted(() => {
-  const startCenter = [78.9629, 20.5937]
-  const startZoom = 4
+  const startCenter = [0, 0]
   const initialSkin = getSkin(activeSkinId.value)
   // Floor the zoom-out to the largest size at which a single world
   // exactly fills the canvas, and disable world-copy wrap so the
@@ -1683,6 +1775,7 @@ onMounted(() => {
   // when the user makes the window narrower.
   const rect = mapEl.value.getBoundingClientRect()
   const minZoom = computeGlobeFitZoom(rect.width, rect.height)
+  const startZoom = minZoom
   map = new maplibregl.Map({
     container: mapEl.value,
     style: resolveStyle(initialSkin),
@@ -1723,8 +1816,8 @@ onMounted(() => {
   map.on('load', () => {
     _reAddAllLayers()
     _reAddZones()
-    _flyToInitialViewport()
     _fetchAllVisibleBounds()
+    _flyToInitialViewport()
   })
 
   // Right-click context menu. We use MapLibre's `contextmenu` event
@@ -1837,6 +1930,8 @@ onMounted(() => {
     if (!map) return
     if (!layerName) {
       _reAddAllLayers()
+      _fetchAllVisibleBounds()
+      _flyToHome()
       return
     }
     const tryAdd = () => {
@@ -1845,9 +1940,15 @@ onMounted(() => {
       if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
       return _hasRenderedLayer(layerName)
     }
-    if (tryAdd()) return
+    if (tryAdd()) {
+      _flyToHome()
+      return
+    }
     const onStyle = () => {
-      if (tryAdd()) map.off('styledata', onStyle)
+      if (tryAdd()) {
+        map.off('styledata', onStyle)
+        _flyToHome()
+      }
     }
     map.on('styledata', onStyle)
   })
@@ -2216,6 +2317,10 @@ function _clearDraft() {
 }
 
 onBeforeUnmount(() => {
+  if (_homeFitTimer) {
+    clearTimeout(_homeFitTimer)
+    _homeFitTimer = null
+  }
   if (unsubscribeFeatures) unsubscribeFeatures()
   if (unsubscribeZones) unsubscribeZones()
   if (unsubscribeZoneTags) unsubscribeZoneTags()
@@ -2339,6 +2444,7 @@ watch(
   () => {
     if (!map) return
     _resetFirstFetch()
+    _fetchAllVisibleBounds()
     _flyToInitialViewport()
   },
 )

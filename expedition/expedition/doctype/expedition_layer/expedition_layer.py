@@ -68,8 +68,11 @@ class ExpeditionLayer(Document):
                 fv = row.from_value or ""
                 tv = row.to_value or ""
                 value = [fv, tv] if fv or tv else ""
-            if op == "is":
-                label_op = str(row.operator or "").strip().lower()
+            label_op = str(row.operator or "").strip().lower()
+            if label_op == "is not set":
+                op = "is"
+                value = "not set"
+            elif op == "is":
                 value = "not set" if label_op == "is not set" else (value or "set")
             if field:
                 result.append([field, op, value])

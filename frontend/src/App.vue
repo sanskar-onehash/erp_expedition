@@ -120,6 +120,11 @@ const brFitButtons = computed(() => [
 const brTiltButtons = computed(() => [
   { id: 'tilt-reset', label: 'Reset tilt (top view)', glyph: GLYPHS.tiltReset },
 ])
+const toolbarButtonSizes = { xs: 22, s: 28, m: 32, lg: 40, xlg: 48 }
+const chromeStyle = computed(() => {
+  const size = toolbarButtonSizes[ui.prefs.toolbarSize || 'm'] || toolbarButtonSizes.m
+  return { '--exp-layer-panel-left': `${size + 28}px` }
+})
 
 // Reset-tilt: snap pitch and bearing back to a flat top-down view,
 // keeping the current center, zoom, and any active filters intact.
@@ -317,7 +322,7 @@ async function _fitAllBounds(m) {
 </script>
 
 <template>
-  <div class="expedition" :class="{ 'expedition--chrome-hidden': ui.chromeHidden }">
+  <div class="expedition" :class="{ 'expedition--chrome-hidden': ui.chromeHidden }" :style="chromeStyle">
     <Basemap class="expedition__basemap" />
     <LoadingOverlay />
 
@@ -462,8 +467,8 @@ async function _fitAllBounds(m) {
 /* Left-edge panel placement + slide-in transition. */
 .expedition__left {
   position: absolute;
-  top: 12px; left: 12px; bottom: 12px;
-  z-index: 15;
+  top: 12px; left: var(--exp-layer-panel-left, 60px); bottom: 12px;
+  z-index: 35;
   pointer-events: none; /* the panel itself turns events back on */
 }
 .expedition__left > * { pointer-events: auto; }

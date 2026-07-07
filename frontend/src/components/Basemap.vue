@@ -53,7 +53,6 @@ import {
 const SIZE_TO_RADIUS = { xs: 7, s: 9, m: 11, l: 14, xl: 18 }
 const ICON_IMAGE_SIZE = 36
 const CLUSTER_MAX_ZOOM = 12
-const CLUSTERED_HALO_MIN_ZOOM = CLUSTER_MAX_ZOOM + 1
 // Punchy Apple-red fallback so even unconfigured layers read as
 // primary data points.
 const FALLBACK_COLOR = '#FF3B30'
@@ -251,6 +250,8 @@ let _virtualGroupFetchKeys = {}
 let _sourceClusterState = {}
 let _zoneHandlersBound = false
 let _zoneDrag = null
+let _mapPointerStart = null
+let _mapWasDragged = false
 
 // Tracks whether each visible layer has ever been fetched with the
 // current viewport. On first paint we deliberately pass `null` bounds
@@ -297,6 +298,17 @@ function _hasRenderedLayer(layerName) {
   const sourcePrefix = `src-${layerName}${VIRTUAL_GROUP_SEPARATOR}`
   return (map.getStyle().layers || []).some((layer) => layer.id?.startsWith(layerPrefix))
     || Object.keys(map.getStyle().sources || {}).some((id) => id.startsWith(sourcePrefix))
+}
+
+function _hasInteractivePointAt(point) {
+  if (!map || !point) return false
+  const layers = [..._interactivePointLayers].filter((id) => map.getLayer(id))
+  if (!layers.length) return false
+  try {
+    return map.queryRenderedFeatures(point, { layers }).length > 0
+  } catch (_) {
+    return false
+  }
 }
 
 // Zone source/layer ids. All zones live in a single source so we
@@ -651,6 +663,29 @@ function haloStyle(color, layerName) {
   }
 }
 
+function haloCirclePaint(color, layerName) {
+  const halo = haloStyle(color, layerName)
+  return {
+    'circle-radius': [
+      'interpolate',
+      ['exponential', 2],
+      ['zoom'],
+      4, ['*', ['coalesce', ['to-number', ['get', '_halo_radius_meters']], 5000], 0.000102],
+      8, ['*', ['coalesce', ['to-number', ['get', '_halo_radius_meters']], 5000], 0.00163],
+      12, ['*', ['coalesce', ['to-number', ['get', '_halo_radius_meters']], 5000], 0.0262],
+      16, ['*', ['coalesce', ['to-number', ['get', '_halo_radius_meters']], 5000], 0.419],
+      20, ['*', ['coalesce', ['to-number', ['get', '_halo_radius_meters']], 5000], 6.71],
+    ],
+    'circle-color': halo.fill['fill-color'],
+    'circle-opacity': halo.fill['fill-opacity'],
+    'circle-stroke-color': halo.stroke['line-color'],
+    'circle-stroke-opacity': halo.stroke['line-opacity'],
+    'circle-stroke-width': halo.stroke['line-width'],
+    'circle-pitch-scale': 'map',
+    'circle-pitch-alignment': 'map',
+  }
+}
+
 function haloRadiusMeters(feature, layerName) {
   const field = ui.radiusField[layerName]
   const fallback = ui.radiusMeters[layerName] || 5000
@@ -740,11 +775,12 @@ function haloFeatureCollection(features, layerName) {
     features: (features || []).map((feature) => {
       const [lng, lat] = (feature.geometry && feature.geometry.coordinates) || []
       if (lng == null || lat == null) return null
+      const featureId = feature.id ?? feature._id ?? feature.properties?._id
       return {
         type: 'Feature',
-        id: feature._id,
+        id: featureId,
         geometry: haloPolygon(lng, lat, haloRadiusMeters(feature, layerName)),
-        properties: { ...(feature.properties || {}), _id: feature._id },
+        properties: { ...(feature.properties || {}), _id: featureId },
       }
     }).filter(Boolean),
   }
@@ -822,8 +858,21 @@ function _addLayerOnMap(layerName, renderContext = null) {
 
   const iconSpecs = new Map()
   const sourceFeatures = (fc.features || []).map((feature) => {
+    const [lng, lat] = (feature.geometry && feature.geometry.coordinates) || []
     const icon = featureDisplayIcon(feature, style.icon || layerDoc.icon)
-    if (!icon) return feature
+    const haloProps = {
+      _halo_radius_meters: haloRadiusMeters(feature, parentName),
+      _halo_lat: Number.isFinite(Number(lat)) ? Number(lat) : 0,
+    }
+    if (!icon) {
+      return {
+        ...feature,
+        properties: {
+          ...(feature.properties || {}),
+          ...haloProps,
+        },
+      }
+    }
     const iconColor = featureDisplayColor(feature, color)
     const spec = iconRenderSpec(icon, iconColor)
     if (!spec) return feature
@@ -832,6 +881,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
       ...feature,
       properties: {
         ...(feature.properties || {}),
+        ...haloProps,
         _display_icon_image: spec.imageId,
       },
     }
@@ -1028,59 +1078,34 @@ function _addLayerOnMap(layerName, renderContext = null) {
     if (map.getSource(esid)) map.removeSource(esid)
   }
 
-  // Halo / radius rendering (PR-8). Drawn between the pin body and
-  // the heatmap — it's part of the per-feature visual identity and
-  // should sit below heatmap density but above the pin (so a heatmap
-  // turn-off reveals pin-on-halo cleanly).
-  const haloSid = haloSourceId(renderName)
+  // Halo / radius rendering (PR-8). Uses the same clustered point
+  // source as the pins so halo visibility matches pin visibility in
+  // the same render pass, including mixed cluster/unclustered states.
   const haloId = haloLayerId(renderName)
   const haloStrokeId = haloStrokeLayerId(renderName)
+  const legacyHaloSid = haloSourceId(renderName)
+  if (map.getLayer(haloStrokeId)) map.removeLayer(haloStrokeId)
+  if (map.getLayer(haloId) && map.getStyle()?.layers?.find((layer) => layer.id === haloId)?.type !== 'circle') {
+    map.removeLayer(haloId)
+  }
+  if (map.getSource(legacyHaloSid)) map.removeSource(legacyHaloSid)
   const radiusOn = enabled && ui.isRadiusOn(parentName)
   if (radiusOn) {
-    const halo = haloStyle(color, parentName)
-    const haloFc = haloFeatureCollection(fc.features, parentName)
-    const haloSource = map.getSource(haloSid)
-    if (haloSource && haloSource.type === 'geojson') {
-      haloSource.setData(haloFc)
-    } else {
-      map.addSource(haloSid, { type: 'geojson', data: haloFc, promoteId: '_id' })
-    }
+    const haloPaint = haloCirclePaint(color, parentName)
     if (!map.getLayer(haloId)) {
-      const haloLayer = {
+      map.addLayer({
         id: haloId,
-        type: 'fill',
-        source: haloSid,
-        paint: halo.fill,
-      }
-      if (wantsCluster) haloLayer.minzoom = CLUSTERED_HALO_MIN_ZOOM
-      map.addLayer(haloLayer, shid)
+        type: 'circle',
+        source: sid,
+        filter: pointFilter(wantsCluster),
+        paint: haloPaint,
+      }, shid)
     } else {
-      if (wantsCluster) map.setLayerZoomRange(haloId, CLUSTERED_HALO_MIN_ZOOM, 24)
-      else map.setLayerZoomRange(haloId, 0, 24)
-      for (const [key, value] of Object.entries(halo.fill)) {
-        map.setPaintProperty(haloId, key, value)
-      }
-    }
-    if (!map.getLayer(haloStrokeId)) {
-      const haloStrokeLayer = {
-        id: haloStrokeId,
-        type: 'line',
-        source: haloSid,
-        paint: halo.stroke,
-      }
-      if (wantsCluster) haloStrokeLayer.minzoom = CLUSTERED_HALO_MIN_ZOOM
-      map.addLayer(haloStrokeLayer, shid)
-    } else {
-      if (wantsCluster) map.setLayerZoomRange(haloStrokeId, CLUSTERED_HALO_MIN_ZOOM, 24)
-      else map.setLayerZoomRange(haloStrokeId, 0, 24)
-      for (const [key, value] of Object.entries(halo.stroke)) {
-        map.setPaintProperty(haloStrokeId, key, value)
-      }
+      map.setFilter(haloId, pointFilter(wantsCluster))
+      for (const [key, value] of Object.entries(haloPaint)) map.setPaintProperty(haloId, key, value)
     }
   } else {
-    if (map.getLayer(haloStrokeId)) map.removeLayer(haloStrokeId)
     if (map.getLayer(haloId)) map.removeLayer(haloId)
-    if (map.getSource(haloSid)) map.removeSource(haloSid)
   }
 
   // Heatmap (PR-7). Adds a heatmap layer above the source and
@@ -1130,6 +1155,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
 function onPointClick(e) {
   const f = e.features && e.features[0]
   if (!f) return
+  e.preventDefault?.()
   // The clicked layer id is one of: lyr-<name>, lyr-<name>-ring,
   // lyr-<name>-shadow, lyr-<name>-clusters. Strip the prefix and
   // any of the suffixes to recover the layer name.
@@ -1738,6 +1764,8 @@ onMounted(() => {
   let gesture = null
   canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return
+    _mapPointerStart = { x: e.clientX, y: e.clientY }
+    _mapWasDragged = false
     if (e.altKey) {
       gesture = { kind: 'rotate', x: e.clientX, y: e.clientY, startBearing: map.getBearing() }
       e.preventDefault()
@@ -1753,6 +1781,11 @@ onMounted(() => {
     }
   })
   window.addEventListener('mousemove', (e) => {
+    if (_mapPointerStart) {
+      const dx = e.clientX - _mapPointerStart.x
+      const dy = e.clientY - _mapPointerStart.y
+      if ((dx * dx) + (dy * dy) > 16) _mapWasDragged = true
+    }
     if (!gesture) return
     const dx = e.clientX - gesture.x
     const dy = e.clientY - gesture.y
@@ -1906,7 +1939,14 @@ onMounted(() => {
 
   // ----- Canvas drawing / zones -----
   map.on('click', (e) => {
-    if (ui.drawMode === 'off') return
+    if (ui.drawMode === 'off') {
+      if (ui.selectedFeature && !_mapWasDragged && !_hasInteractivePointAt(e.point)) {
+        ui.selectedFeature = null
+      }
+      _mapPointerStart = null
+      _mapWasDragged = false
+      return
+    }
     e.preventDefault?.()
     _handleDrawClick(e)
   })
@@ -2079,7 +2119,7 @@ async function _finishDrawing() {
   if (!mapName) return
   try {
     const title = (ui.zoneDraftTitle || '').trim() || 'Zone'
-    await zoneStore.createZone(mapName, {
+    const created = await zoneStore.createZone(mapName, {
       title,
       zone_type: 'polygon',
       geometry,
@@ -2089,6 +2129,9 @@ async function _finishDrawing() {
       stroke_width: draftStrokeWidth(),
       stroke_style: draftStrokeStyle(),
     })
+    ui.setZoneEditMode(true)
+    ui.selectZone(created)
+    _reAddZones()
   } catch (err) {
     console.error('[expedition] zone create failed', err)
   } finally {

@@ -17,12 +17,17 @@ const tiltBearing = ref(0)
 const tiltPuck = ref({ x: 0, y: 0 })
 const tiltGesture = ref(null)
 const suppressEditAutoOpen = ref(false)
+const shapeOpen = ref(false)
+const selectedShape = ref('polygon')
 
-const tools = computed(() => [
+const shapeTools = [
+  { id: 'polygon', label: 'Polygon zone', glyph: 'M6 5l11 2 3 9-8 5-8-6 2-10z M6 5h0 M17 7h0 M20 16h0 M12 21h0 M4 15h0' },
+  { id: 'circle', label: 'Circle zone', glyph: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z M12 12h.01' },
+  { id: 'rectangle', label: 'Rectangle zone', glyph: 'M5 6h14v12H5z' },
+]
+
+const actionTools = computed(() => [
   { id: 'select', label: 'Select / pan', glyph: 'M5 4l10 16 2-7 6-2L5 4z' },
-  { id: 'polygon', label: 'Draw polygon zone', glyph: 'M6 5l11 2 3 9-8 5-8-6 2-10z M6 5h0 M17 7h0 M20 16h0 M12 21h0 M4 15h0' },
-  { id: 'circle', label: 'Draw circle zone', glyph: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16z M12 12h.01' },
-  { id: 'rectangle', label: 'Draw rectangle zone', glyph: 'M5 6h14v12H5z' },
   { id: 'measure-line', label: 'Measure distance', glyph: 'M4 19L19 4 M7 16l1 1 M10 13l1 1 M13 10l1 1 M16 7l1 1' },
   { id: 'measure-area', label: 'Measure area', glyph: 'M6 7l9-3 5 8-4 8-10-2-2-8z' },
 ])
@@ -65,6 +70,7 @@ function closeEditPanel() {
 }
 
 function closePopovers({ clearZone = true } = {}) {
+  shapeOpen.value = false
   styleOpen.value = false
   tiltOpen.value = false
   if (clearZone) closeEditPanel()
@@ -105,6 +111,21 @@ function trigger(id) {
   }
   ui.cancelMeasure()
   ui.startDrawTool(id)
+}
+
+const activeShape = computed(() => shapeTools.find((shape) => shape.id === selectedShape.value) || shapeTools[0])
+
+function startSelectedShape() {
+  shapeOpen.value = false
+  ui.cancelMeasure()
+  ui.startDrawTool(activeShape.value.id)
+}
+
+function selectShape(shape) {
+  selectedShape.value = shape.id
+  shapeOpen.value = false
+  ui.cancelMeasure()
+  ui.startDrawTool(shape.id)
 }
 
 function toggleZoneEditMode() {
@@ -224,7 +245,48 @@ function commitDrawingColor(event) {
   <div ref="tray" class="mtt chrome-hideable">
     <div class="mtt__group" role="toolbar" aria-label="Map drawing tools">
       <button
-        v-for="tool in tools"
+        type="button"
+        class="mtt__btn"
+        :class="{ 'mtt__btn--active': active('select') }"
+        title="Select / pan"
+        aria-label="Select / pan"
+        @click="trigger('select')"
+      >
+        <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
+          <path d="M5 4l10 16 2-7 6-2L5 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+
+      <div class="mtt__shape">
+        <button
+          type="button"
+          class="mtt__btn"
+          :class="{ 'mtt__btn--active': active(activeShape.id) }"
+          :title="'Draw ' + activeShape.label.toLowerCase()"
+          :aria-label="'Draw ' + activeShape.label.toLowerCase()"
+          @click="startSelectedShape"
+        >
+          <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
+            <path :d="activeShape.glyph" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="mtt__shape-more"
+          :class="{ 'mtt__shape-more--open': shapeOpen }"
+          title="Choose shape"
+          aria-label="Choose shape"
+          :aria-expanded="shapeOpen ? 'true' : 'false'"
+          @click="shapeOpen = !shapeOpen"
+        >
+          <svg viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M4.5 3L7.5 6L4.5 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <button
+        v-for="tool in actionTools.filter((item) => item.id !== 'select')"
         :key="tool.id"
         type="button"
         class="mtt__btn"
@@ -235,6 +297,23 @@ function commitDrawingColor(event) {
       >
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path :d="tool.glyph" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+
+    <div v-if="shapeOpen" class="mtt__pop mtt__pop--shapes">
+      <button
+        v-for="shape in shapeTools"
+        :key="shape.id"
+        type="button"
+        class="mtt__shape-option"
+        :class="{ 'mtt__shape-option--active': selectedShape === shape.id }"
+        :title="shape.label"
+        :aria-label="shape.label"
+        @click="selectShape(shape)"
+      >
+        <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
+          <path :d="shape.glyph" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
     </div>
@@ -256,22 +335,37 @@ function commitDrawingColor(event) {
           <path d="M5 6h14v12H5z M8 9h8v6H8z M4 4l3 3 M20 4l-3 3 M4 20l3-3 M20 20l-3-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <button type="button" class="mtt__btn" title="Tilt / rotate" aria-label="Tilt / rotate" @click="tiltOpen = !tiltOpen">
-        <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
-          <path d="M12 14a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M12 14v5 M8 19h8 M5 12h2 M17 12h2 M12 5V3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
-      <button type="button" class="mtt__btn" title="Undo vertex" aria-label="Undo vertex" :disabled="!ui.draftVertices.length" @click="ui.undoDraftVertex()">
+      <div class="mtt__tilt-wrap">
+        <button type="button" class="mtt__btn" title="Tilt / rotate" aria-label="Tilt / rotate" @click="tiltOpen = !tiltOpen">
+          <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
+            <path d="M12 14a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M12 14v5 M8 19h8 M5 12h2 M17 12h2 M12 5V3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <div v-if="tiltOpen" class="mtt__pop mtt__pop--tilt">
+          <div ref="tiltPad" class="mtt__tilt" @dblclick.prevent="resetTilt">
+            <span class="mtt__tilt-cross mtt__tilt-cross--h" />
+            <span class="mtt__tilt-cross mtt__tilt-cross--v" />
+            <span
+              class="mtt__puck"
+              :class="{ 'mtt__puck--dragging': tiltDrag }"
+              :style="puckStyle"
+              @pointerdown.prevent="startTilt"
+              @dblclick.stop.prevent="resetTilt"
+            />
+          </div>
+        </div>
+      </div>
+      <button v-if="ui.drawMode !== 'off'" type="button" class="mtt__btn" title="Undo vertex" aria-label="Undo vertex" :disabled="!ui.draftVertices.length" @click="ui.undoDraftVertex()">
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M9 7H4v5 M4 12a8 8 0 1 0 2.3-5.7L4 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <button type="button" class="mtt__btn" title="Finish drawing" aria-label="Finish drawing" :disabled="ui.drawMode === 'off'" @click="finishDrawing">
+      <button v-if="ui.drawMode !== 'off'" type="button" class="mtt__btn" title="Finish drawing" aria-label="Finish drawing" @click="finishDrawing">
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <button type="button" class="mtt__btn" title="Cancel tool" aria-label="Cancel tool" @click="clearDrawing">
+      <button v-if="ui.drawMode !== 'off'" type="button" class="mtt__btn" title="Cancel tool" aria-label="Cancel tool" @click="clearDrawing">
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
         </svg>
@@ -347,19 +441,6 @@ function commitDrawingColor(event) {
       </div>
     </div>
 
-    <div v-if="tiltOpen" class="mtt__pop mtt__pop--tilt">
-      <div ref="tiltPad" class="mtt__tilt" @dblclick.prevent="resetTilt">
-        <span class="mtt__tilt-cross mtt__tilt-cross--h" />
-        <span class="mtt__tilt-cross mtt__tilt-cross--v" />
-        <span
-          class="mtt__puck"
-          :class="{ 'mtt__puck--dragging': tiltDrag }"
-          :style="puckStyle"
-          @pointerdown.prevent="startTilt"
-          @dblclick.stop.prevent="resetTilt"
-        />
-      </div>
-    </div>
   </div>
 </template>
 
@@ -402,11 +483,47 @@ function commitDrawingColor(event) {
 .mtt__btn--active { background: rgba(59, 130, 246, 0.20); color: #93C5FD; }
 .mtt__btn:disabled { opacity: 0.35; cursor: default; }
 .mtt__icon { width: 17px; height: 17px; }
+.mtt__shape {
+  position: relative;
+  display: grid;
+  grid-template-rows: 32px 12px;
+}
+.mtt__shape > .mtt__btn {
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+.mtt__shape-more {
+  width: 32px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0 0 7px 7px;
+  color: rgba(230, 232, 236, 0.72);
+  cursor: pointer;
+}
+.mtt__shape-more:hover,
+.mtt__shape-more--open {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93C5FD;
+}
+.mtt__shape-more svg {
+  width: 10px;
+  height: 10px;
+}
 .mtt__swatch {
   width: 17px;
   height: 17px;
   border-radius: 5px;
   border: 2px solid rgba(255, 255, 255, 0.8);
+}
+.mtt__tilt-wrap {
+  position: relative;
+  width: 32px;
+  height: 32px;
 }
 .mtt__pop {
   position: absolute;
@@ -422,7 +539,40 @@ function commitDrawingColor(event) {
 }
 .mtt__pop--style { top: 252px; width: 156px; }
 .mtt__pop--edit { top: 252px; min-width: 220px; }
-.mtt__pop--tilt { top: 340px; min-width: auto; padding: 8px; }
+.mtt__pop--tilt {
+  top: 0;
+  left: 48px;
+  min-width: auto;
+  padding: 8px;
+}
+.mtt__pop--shapes {
+  top: 76px;
+  min-width: auto;
+  display: grid;
+  grid-template-columns: repeat(3, 32px);
+  gap: 6px;
+  padding: 6px;
+}
+.mtt__shape-option {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(230, 232, 236, 0.88);
+  cursor: pointer;
+}
+.mtt__shape-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.mtt__shape-option--active {
+  background: rgba(59, 130, 246, 0.20);
+  color: #93C5FD;
+}
 .mtt__swatches {
   display: grid;
   grid-template-columns: repeat(4, 20px);

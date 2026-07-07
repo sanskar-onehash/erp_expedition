@@ -92,6 +92,10 @@ function toggleLayer(layerName, event) {
   layerStore.updateLayer(layerName, { enabled: event.target.checked ? 1 : 0 })
 }
 function editLayer(layer) { ui.openLayerEditor(layer) }
+function createLayer() {
+  closePicker()
+  ui.openLayerEditor(null, { asMaster: false })
+}
 function toggleHeatmap(layerName) { ui.toggleHeatmap(layerName) }
 function toggleRadius(layerName) { ui.toggleRadius(layerName) }
 function setRadiusField(layerName, field) { ui.setRadiusField(layerName, field) }
@@ -309,6 +313,16 @@ defineExpose({})
           <button class="lp__section-toggle" type="button" @click="layersOpen = !layersOpen">
             <span>Layers</span>
             <span class="lp__chevron" :data-open="layersOpen">▾</span>
+          </button>
+          <button
+            v-if="canEdit"
+            type="button"
+            class="lp__create"
+            title="Create layer"
+            aria-label="Create layer"
+            @click="createLayer"
+          >
+            +
           </button>
         </div>
 
@@ -700,6 +714,26 @@ defineExpose({})
   cursor: pointer; font-weight: 500; border-radius: 6px;
 }
 .lp__section-toggle:hover { background: rgba(255, 255, 255, 0.04); color: rgba(230, 232, 236, 0.8); }
+.lp__create {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.26);
+  border-radius: 6px;
+  color: #DBEAFE;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+.lp__create:hover {
+  background: rgba(59, 130, 246, 0.26);
+  color: #fff;
+}
 .lp__chevron { font-size: 10px; transition: transform 150ms ease; opacity: 0.6; }
 .lp__chevron[data-open="true"] { transform: rotate(180deg); }
 

@@ -75,6 +75,8 @@ const error = ref('')
 const sourceDts = ref([])
 const sourceFields = ref([])          // local working list (filled from cache)
 const sourceFieldsLoading = ref(false)
+const sourcePickerOpen = ref(false)
+const fieldPickerOpen = ref('')
 const groupValues = ref([]) // distinct values for the group_by_field
 const advancedGroupingOpen = ref(false)
 const previewOriginalLayer = ref(null)
@@ -110,6 +112,16 @@ const iconSections = computed(() => [
 const allIconOptions = computed(() => iconStore.all)
 const selectedIcon = computed(() => iconStore.byKey.get(form.value.icon))
 const colorInputInvalid = computed(() => !!form.value.color && !isValidCssColor(form.value.color))
+const filteredSourceDts = computed(() => {
+  const q = String(form.value.source_doctype || '').trim().toLowerCase()
+  const items = q
+    ? sourceDts.value.filter((dt) =>
+      String(dt.name || '').toLowerCase().includes(q) ||
+      String(dt.module || '').toLowerCase().includes(q)
+    )
+    : sourceDts.value
+  return items.slice(0, 80)
+})
 
 watch(
   () => ui.editorOpen,
@@ -343,6 +355,10 @@ function onGroupIconMenuToggle(e) {
 }
 
 function onDocumentClick(e) {
+  if (!e.target?.closest?.('.le__link-field')) {
+    sourcePickerOpen.value = false
+    fieldPickerOpen.value = ''
+  }
   if (!e.target?.closest?.('.le__group-icon-menu')) closeGroupIconMenus()
   if (!e.target?.closest?.('.le__group-color-menu')) closeGroupColorMenus()
   if (!e.target?.closest?.('.le__band-date-menu') && !e.target?.closest?.('.le__date-trigger')) closeBandEdgePicker()
@@ -684,6 +700,9 @@ const numericFields = computed(() =>
     ['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)
   )
 )
+const coordinateFields = computed(() =>
+  sourceFields.value.filter((f) => f.fieldtype === 'Float')
+)
 const heatmapRampOptions = computed(() =>
   Object.entries(RAMP_PRESETS).map(([key, preset]) => ({ key, label: preset.label }))
 )
@@ -772,14 +791,35 @@ const _iconSpriteHref = (() => {
 function iconHref(id) { return _iconSpriteHref(id) }
 
 async function onSourceChange() {
-  form.value.latitude_field = 'latitude'
-  form.value.longitude_field = 'longitude'
+  const sourceDoctype = form.value.source_doctype?.trim?.() || ''
+  form.value.source_doctype = sourceDoctype
+  await _loadSourceFields(sourceDoctype)
+  const floatFields = coordinateFields.value
+  const byName = new Map(floatFields.map((f) => [f.fieldname, f]))
+  form.value.latitude_field = byName.has('latitude') ? 'latitude' : (floatFields[0]?.fieldname || '')
+  form.value.longitude_field = byName.has('longitude') ? 'longitude' : (floatFields.find((f) => f.fieldname !== form.value.latitude_field)?.fieldname || '')
   form.value.label_field = ''
   form.value.filter_rows = []
   form.value.group_by_field = ''
   form.value.group_config = {}
   groupValues.value = []
-  await _loadSourceFields(form.value.source_doctype)
+}
+
+async function chooseSourceDoctype(name) {
+  form.value.source_doctype = name || ''
+  sourcePickerOpen.value = false
+  await onSourceChange()
+}
+
+function fieldChoiceLabel(fieldname, fields = sourceFields.value) {
+  if (!fieldname) return 'None'
+  const field = fields.find((f) => f.fieldname === fieldname)
+  return field ? `${field.label} (${field.fieldname})` : fieldname
+}
+
+function chooseLayerField(kind, fieldname) {
+  form.value[kind] = fieldname || ''
+  fieldPickerOpen.value = ''
 }
 
 async function onGroupByChange() {
@@ -1245,12 +1285,12 @@ function close() {
       <header class="le__header">
         <div>
           <h3 class="le__title">
-            {{ isCreate ? (asMaster ? 'New master mapping' : 'Add layer') : (isMaster ? 'Edit master mapping' : 'Edit layer') }}
+            {{ isCreate ? (asMaster ? 'New reusable layer' : 'Add layer') : (isMaster ? 'Edit reusable layer' : 'Edit layer') }}
           </h3>
           <p class="le__subtitle">
             {{ isCreate
-              ? (asMaster ? 'Reusable across maps. Attach to a map to use.' : 'Add a layer to the current map.')
-              : (isMaster ? 'Attached instances do not auto-update when this master changes.' : 'Style, label, filter — all live.') }}
+              ? (asMaster ? 'Save a reusable layer template that can be attached to maps.' : 'Add a layer to the current map.')
+              : (isMaster ? 'Map layers created from this template are independent copies.' : 'Style, label, filter — all live.') }}
           </p>
         </div>
         <button class="le__close" type="button" @click="close" aria-label="Close">×</button>
@@ -1260,12 +1300,12 @@ function close() {
         <!-- Save-as-master toggle (create mode only) -->
         <label v-if="isCreate" class="le__check le__check--master">
           <input v-model="asMaster" type="checkbox" :true-value="true" :false-value="false" />
-          <span>Save as master mapping (reusable across maps)</span>
+          <span>Save as reusable layer template</span>
         </label>
 
         <!-- Master banner (edit master only) -->
         <div v-else-if="isMaster" class="le__master-banner">
-          This is a master mapping. Attached instances inherit display properties but are independent copies.
+          This is a reusable layer template. Map layers created from it are independent copies.
         </div>
 
         <!-- Title -->
@@ -1275,37 +1315,98 @@ function close() {
         </label>
 
         <!-- Source DocType (create only) -->
-        <label v-if="isCreate" class="le__field">
+        <label v-if="isCreate" class="le__field le__link-field">
           <span class="le__label">Source DocType</span>
-          <select v-model="form.source_doctype" class="le__input" @change="onSourceChange">
-            <option value="" disabled>Select a DocType…</option>
-            <option v-for="dt in sourceDts" :key="dt.name" :value="dt.name">
-              {{ dt.name }} <template v-if="dt.module">— {{ dt.module }}</template>
-            </option>
-          </select>
+          <input
+            v-model="form.source_doctype"
+            class="le__input"
+            type="text"
+            placeholder="Select a DocType…"
+            autocomplete="off"
+            @focus="sourcePickerOpen = true"
+            @input="sourcePickerOpen = true"
+            @keydown.enter.prevent="filteredSourceDts[0] && chooseSourceDoctype(filteredSourceDts[0].name)"
+            @blur="onSourceChange"
+          />
+          <div v-if="sourcePickerOpen" class="le__option-pop">
+            <button
+              v-for="dt in filteredSourceDts"
+              :key="dt.name"
+              type="button"
+              class="le__option"
+              @mousedown.prevent="chooseSourceDoctype(dt.name)"
+            >
+              <span>{{ dt.name }}</span>
+              <small>{{ dt.module }}</small>
+            </button>
+            <p v-if="!filteredSourceDts.length" class="le__option-empty">No matching DocTypes.</p>
+          </div>
         </label>
 
         <div v-if="isCreate" class="le__row">
-          <label class="le__field le__field--half">
+          <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lat field</span>
-            <input v-model="form.latitude_field" class="le__input" type="text" />
-          </label>
-          <label class="le__field le__field--half">
+            <button
+              type="button"
+              class="le__field-select"
+              :disabled="!form.source_doctype || sourceFieldsLoading"
+              @click="fieldPickerOpen = fieldPickerOpen === 'latitude_field' ? '' : 'latitude_field'"
+            >
+              <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.latitude_field, coordinateFields) }}</span>
+              <span class="le__chevron">⌄</span>
+            </button>
+            <div v-if="fieldPickerOpen === 'latitude_field'" class="le__option-pop">
+              <button v-for="f in coordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('latitude_field', f.fieldname)">
+                <span>{{ f.label }}</span>
+                <small>{{ f.fieldname }}</small>
+              </button>
+              <p v-if="!coordinateFields.length" class="le__option-empty">No Float fields found.</p>
+            </div>
+          </div>
+          <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lng field</span>
-            <input v-model="form.longitude_field" class="le__input" type="text" />
-          </label>
+            <button
+              type="button"
+              class="le__field-select"
+              :disabled="!form.source_doctype || sourceFieldsLoading"
+              @click="fieldPickerOpen = fieldPickerOpen === 'longitude_field' ? '' : 'longitude_field'"
+            >
+              <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.longitude_field, coordinateFields) }}</span>
+              <span class="le__chevron">⌄</span>
+            </button>
+            <div v-if="fieldPickerOpen === 'longitude_field'" class="le__option-pop">
+              <button v-for="f in coordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('longitude_field', f.fieldname)">
+                <span>{{ f.label }}</span>
+                <small>{{ f.fieldname }}</small>
+              </button>
+              <p v-if="!coordinateFields.length" class="le__option-empty">No Float fields found.</p>
+            </div>
+          </div>
         </div>
 
         <!-- Label field (uses source row's text) -->
-        <label class="le__field">
+        <div class="le__field le__link-field">
           <span class="le__label">Label field <span class="le__hint">(used as the pin popup title)</span></span>
-          <select v-model="form.label_field" class="le__input">
-            <option value="">— none —</option>
-            <option v-for="f in sourceFields" :key="f.fieldname" :value="f.fieldname">
-              {{ f.label }} ({{ f.fieldname }})
-            </option>
-          </select>
-        </label>
+          <button
+            type="button"
+            class="le__field-select"
+            :disabled="!form.source_doctype || sourceFieldsLoading"
+            @click="fieldPickerOpen = fieldPickerOpen === 'label_field' ? '' : 'label_field'"
+          >
+            <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.label_field) }}</span>
+            <span class="le__chevron">⌄</span>
+          </button>
+          <div v-if="fieldPickerOpen === 'label_field'" class="le__option-pop">
+            <button type="button" class="le__option" @mousedown.prevent="chooseLayerField('label_field', '')">
+              <span>None</span>
+              <small>Use default title</small>
+            </button>
+            <button v-for="f in sourceFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('label_field', f.fieldname)">
+              <span>{{ f.label }}</span>
+              <small>{{ f.fieldname }}</small>
+            </button>
+          </div>
+        </div>
 
         <!-- Color + Size -->
         <div class="le__row">
@@ -1982,6 +2083,7 @@ function close() {
   display: flex;
   flex-direction: column;
   animation: le-slide 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
 }
 @keyframes le-slide {
   from { transform: translateX(100%); }
@@ -2000,18 +2102,21 @@ function close() {
 }
 .le__close:hover { color: #E6E8EC; }
 .le__body {
-  flex: 1; overflow-y: auto; padding: 16px 20px;
+  flex: 1; overflow-x: hidden; overflow-y: auto; padding: 16px 20px;
   display: flex; flex-direction: column; gap: 14px;
 }
-.le__field { display: flex; flex-direction: column; gap: 6px; }
-.le__field--half { flex: 1; }
-.le__row { display: flex; gap: 12px; }
+.le__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.le__field--half { flex: 1 1 0; min-width: 0; }
+.le__row { display: flex; gap: 12px; min-width: 0; }
 .le__label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
   color: rgba(230, 232, 236, 0.6); font-weight: 500;
 }
 .le__hint { color: rgba(230, 232, 236, 0.4); text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
 .le__input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
@@ -2023,6 +2128,91 @@ function close() {
   transition: border-color 120ms ease;
 }
 .le__input:focus { border-color: #3B82F6; }
+.le__link-field { position: relative; }
+.le__field-select {
+  width: 100%;
+  min-height: 36px;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #E6E8EC;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.le__field-select span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.le__field-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.le__option-pop {
+  position: absolute;
+  z-index: 80;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 238px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 20, 24, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+  box-sizing: border-box;
+}
+.le__option {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.9);
+  text-align: left;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.le__option span,
+.le__option small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.le__option small {
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 10px;
+}
+.le__option:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+.le__option-empty {
+  margin: 0;
+  padding: 8px;
+  color: rgba(230, 232, 236, 0.55);
+  font-size: 11px;
+}
 .le__input--sm { padding: 6px 8px; font-size: 11px; }
 .le__input--value { flex: 1; min-width: 0; }
 .le__input--invalid {

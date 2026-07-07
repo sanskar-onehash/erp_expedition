@@ -235,6 +235,67 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
     return normalized
 
 
+def _filter_child_operator(op: str | None, value: Any = None) -> str:
+    op_key = _operator_key(op)
+    if op_key == "=":
+        return "equals"
+    if op_key == "!=":
+        return "not equals"
+    if op_key == ">":
+        return "greater than"
+    if op_key == ">=":
+        return "greater or equal"
+    if op_key == "<":
+        return "less than"
+    if op_key == "<=":
+        return "less or equal"
+    if op_key == "is":
+        return "is"
+    return op_key or "equals"
+
+
+def _sync_filter_child_table_from_json(doc, filter_json: str | dict | None) -> None:
+    """Keep the child table aligned with API-authored filter_json.
+
+    Expedition Layer.validate serializes the child table back into
+    filter_json. API saves that only set the hidden JSON field would
+    otherwise be overwritten by stale child rows.
+    """
+    _coerce_filter(filter_json)
+    parsed = json.loads(filter_json) if isinstance(filter_json, str) and filter_json else filter_json
+    rows = parsed if isinstance(parsed, list) else []
+    doc.set("filters", [])
+    if not rows:
+        doc.filter_json = ""
+        return
+
+    meta = frappe.get_meta(doc.source_doctype) if doc.source_doctype else None
+    serialized = []
+    for raw in rows:
+        if len(raw) == 2:
+            field, value = raw
+            op = "="
+        else:
+            field, op, value = raw
+        field_meta = meta.get_field(field) if meta else None
+        child = {
+            "fieldname": field,
+            "label": getattr(field_meta, "label", None) or field,
+            "fieldtype": getattr(field_meta, "fieldtype", None) or "",
+            "operator": _filter_child_operator(op, value),
+            "condition": "AND",
+        }
+        if _operator_key(op) == "between" and isinstance(value, (list, tuple)):
+            child["from_value"] = value[0] if len(value) > 0 else ""
+            child["to_value"] = value[1] if len(value) > 1 else ""
+            child["value"] = ""
+        else:
+            child["value"] = ", ".join(map(str, value)) if isinstance(value, list) else value
+        doc.append("filters", child)
+        serialized.append([field, op, value])
+    doc.filter_json = frappe.json.dumps(serialized)
+
+
 def _operator_key(op: str | None) -> str:
     key = str(op or "=").strip().lower()
     return {
@@ -1752,6 +1813,7 @@ def create(
             "radius_opacity": float(radius_opacity),
         }
     )
+    _sync_filter_child_table_from_json(doc, filter_json)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)
 
@@ -1813,6 +1875,9 @@ def update(layer_name: str, **fields) -> dict:
         if k in allowed:
             setattr(doc, k, v)
             changed = True
+    if "filter_json" in fields:
+        _sync_filter_child_table_from_json(doc, fields.get("filter_json"))
+        changed = True
     if changed:
         doc.save(ignore_permissions=True)
     return _layer_to_dto(doc)
@@ -2100,9 +2165,10 @@ def list_group_tree(source_doctype: str, fields: list | str, limit: int = 1000) 
 
 @frappe.whitelist()
 def list_source_doctypes() -> list[dict]:
-    """Return DocTypes the current user can read AND that have at least one
-    Float field. Used by the 'add layer' picker. Strict: server enforces
-    permission.
+    """Return readable DocTypes for the layer source picker.
+
+    Coordinate fields are chosen separately in the editor, so do not
+    pre-filter to DocTypes with literal latitude/longitude field names.
     """
     out = []
     for dt in frappe.get_all(
@@ -2115,15 +2181,6 @@ def list_source_doctypes() -> list[dict]:
         try:
             meta = frappe.get_meta(dt.name)
         except Exception:
-            continue
-        has_lat = any(
-            f.fieldname in ("latitude",) and f.fieldtype == "Float" for f in meta.fields
-        )
-        has_lng = any(
-            f.fieldname in ("longitude",) and f.fieldtype == "Float"
-            for f in meta.fields
-        )
-        if not (has_lat and has_lng):
             continue
         if not frappe.has_permission(dt.name, "read"):
             continue
@@ -2314,6 +2371,7 @@ def create_master(
             "radius_opacity": float(radius_opacity),
         }
     )
+    _sync_filter_child_table_from_json(doc, filter_json)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)
 
@@ -2464,5 +2522,6 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "sequence": int(last_seq),
         }
     )
+    _sync_filter_child_table_from_json(doc, master.filter_json)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)

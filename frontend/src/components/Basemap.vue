@@ -1240,6 +1240,11 @@ function _removeLayerFromMap(layerName) {
 
 function _fetchAllVisibleBounds() {
   if (!map || !layerStore.visibleLayers.length) return
+  // Search is a session-local filtered feature set. Viewport refetches
+  // would replace those filtered sources with whatever happens to be
+  // inside the new viewport, so preserve the search result until the
+  // user clears search.
+  if (layerStore.activeSearch) return
   for (const layer of layerStore.visibleLayers) {
     // First fetch per layer per map is unbounded (null) so the
     // server returns up to 5000 rows from the whole source table.

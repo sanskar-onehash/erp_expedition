@@ -10,7 +10,7 @@
  *
  * Phase 1 plan: ~/.claude-work/plans/quiet-canvas-quokka.md
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useMapStore } from './state/map.js'
 import { useUiStore } from './state/ui.js'
 import { useLayersStore } from './state/layers.js'
@@ -39,11 +39,16 @@ const layers = useLayersStore()
 const zoneStore = useZonesStore()
 const iconStore = useIconsStore()
 
+function onFitDataEvent(event) {
+  fitToData(event?.detail?.mode || 'all')
+}
+
 onMounted(async () => {
   await iconStore.loadIcons().catch((e) => {
     console.warn('[expedition] custom icons unavailable', e)
   })
   await mapStore.bootstrap()
+  window.addEventListener('expedition:fit-data', onFitDataEvent)
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
@@ -56,6 +61,10 @@ onMounted(async () => {
       ui.toggleSearch()
     }
   })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('expedition:fit-data', onFitDataEvent)
 })
 
 // Enabled-layer count for the layers toolbar badge.
@@ -199,7 +208,7 @@ function _intersectsBounds(feature, bounds) {
  * zones. Zones are wrapped in a minimal Feature shape so the
  * envelope helpers can treat them uniformly.
  */
-function _collectAllData() {
+function _collectAllData({ includeZones = true } = {}) {
   const out = []
   // layerStore.features is keyed by layer.name; each value is a
   // GeoJSON FeatureCollection ({ features: [...] }).
@@ -209,7 +218,7 @@ function _collectAllData() {
     if (fc && Array.isArray(fc.features)) out.push(...fc.features)
   }
   // Zones live in zoneStore.byMap keyed by map name.
-  const activeMapName = mapStore.activeMap?.map?.name
+  const activeMapName = includeZones ? mapStore.activeMap?.map?.name : null
   if (activeMapName) {
     const list = zoneStore.byMap?.[activeMapName] || []
     for (const z of list) {
@@ -219,24 +228,24 @@ function _collectAllData() {
   return out
 }
 
+function _fitEnvelope(m, env) {
+  if (!m || !env) return false
+  m.fitBounds([[env.minX, env.minY], [env.maxX, env.maxY]], {
+    padding: 60, duration: 800, maxZoom: 14,
+  })
+  return true
+}
+
 /**
  * Fit camera to data. The mode is decided by the toolbar button
  * the user clicked (fit-all vs fit-visible); no preference is
  * persisted — both modes are always available in the chrome.
- *   'all'    — every enabled layer's full lat/lng envelope (from
- *              the server's `get_layer_bounds` cache) plus zones,
- *              regardless of viewport.
+ *   'all'    — every currently rendered feature from enabled layers,
+ *              plus zones when search is not active. Falls back to
+ *              server bounds only when no rendered features are cached.
  *   'visible' (default) — only features inside the current viewport
- *              so the user zooms IN toward whatever is on screen,
- *              never teleports away. If no features are in the
- *              viewport, escalates to fit-all instead of zooming
- *              out to a globe view (the user always lands on data).
- *
- * Mode 'all' does NOT pull the full feature set across the wire —
- * it just reads the cached per-layer bounds envelope. The
- * feature-cache envelope would be wrong: features are bounds-
- * bounded by `_fetchAllVisibleBounds`, so the cache is only ever
- * as wide as the current viewport.
+ *              so the user zooms IN toward whatever is on screen.
+ *              If no features are in the viewport, it does nothing.
  */
 function fitToData(mode = 'visible') {
   const m = window.expeditionMap?.getMap?.()
@@ -248,20 +257,10 @@ function fitToData(mode = 'visible') {
   }
 
   // 'visible' — scan in-memory features, filter to viewport
-  const all = _collectAllData()
+  const all = _collectAllData({ includeZones: !layers.activeSearch })
   const candidates = all.filter((f) => _intersectsBounds(f, m.getBounds()))
   const env = _envelopeOf(candidates)
-  if (env) {
-    m.fitBounds([[env.minX, env.minY], [env.maxX, env.maxY]], {
-      padding: 60, duration: 800, maxZoom: 14,
-    })
-    return
-  }
-  // No features inside the current viewport — escalate to fit-all
-  // so the user always lands on data instead of zooming out to a
-  // globe view. _fitAllBounds handles its own saved-viewport /
-  // global-envelope fallbacks.
-  _fitAllBounds(m)
+  _fitEnvelope(m, env)
 }
 
 /**
@@ -272,6 +271,10 @@ function fitToData(mode = 'visible') {
  * viewport or a global envelope.
  */
 async function _fitAllBounds(m) {
+  const renderedEnv = _envelopeOf(_collectAllData({ includeZones: !layers.activeSearch }))
+  if (_fitEnvelope(m, renderedEnv)) return
+  if (layers.activeSearch) return
+
   const layerNames = (layers.visibleLayers || []).map((l) => l.name)
   // Fire all bounds fetches in parallel — they're served from
   // frappe.cache after the first call so most return instantly.

@@ -10,11 +10,18 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { call } from '../api/client.js'
 import { useUiStore } from './ui.js'
+import {
+  applyParsedMapSearchToFeatureCollection,
+  countParsedMapSearchMatches,
+  describeParsedMapSearch,
+  parseMapSearch,
+} from '../lib/mapSearch.js'
 
 export const useLayersStore = defineStore('layers', () => {
   const layers = ref([])            // array of {name, title, style, ...}
   const masters = ref([])           // Expedition Layer rows with map=NULL (master mappings)
   const features = ref({})          // layer.name -> GeoJSON FeatureCollection
+  const unfilteredFeatures = ref({}) // layer.name -> original GeoJSON while search is active
   const loading = ref({})           // layer.name -> bool
   const lastFetched = ref({})       // layer.name -> timestamp (for debugging + future cache busting)
   const lastBounds = ref({})        // layer.name -> {south, west, north, east} from the most recent fetch
@@ -29,6 +36,7 @@ export const useLayersStore = defineStore('layers', () => {
   // source_doctype doesn't re-hit the server. Invalidate via
   // `invalidateSourceFields(dt)` if the schema changes mid-session.
   const sourceFields = ref({})      // doctype -> [{fieldname, fieldtype, label}] | null = pending
+  const activeSearch = ref(null)    // { raw, parsed, summary, total, layerCounts }
 
   const visibleLayers = computed(() => layers.value.filter(l => l.enabled !== 0))
 
@@ -59,6 +67,34 @@ export const useLayersStore = defineStore('layers', () => {
       }
     }
     return fc
+  }
+
+  function _baseFeatures(layerName) {
+    return unfilteredFeatures.value[layerName] || features.value[layerName]
+  }
+
+  function _filteredFeatureCollection(layerName, fc) {
+    const parsed = activeSearch.value?.parsed
+    if (!parsed) return fc
+    const parentLayerName = String(layerName || '').split('__grp__')[0]
+    const layer = layers.value.find((l) => l.name === layerName || l.name === parentLayerName)
+    const fields = sourceFields.value[layer?.source_doctype] || []
+    return applyParsedMapSearchToFeatureCollection(fc, layer, fields, parsed, _searchContext(parentLayerName))
+  }
+
+  function _searchContext(layerName) {
+    return {
+      textMatchesByQuery: activeSearch.value?.textMatches?.[layerName] || {},
+    }
+  }
+
+  function _setFeatures(layerName, fc) {
+    if (activeSearch.value?.parsed) {
+      unfilteredFeatures.value = { ...unfilteredFeatures.value, [layerName]: fc }
+      features.value[layerName] = _filteredFeatureCollection(layerName, fc)
+    } else {
+      features.value[layerName] = fc
+    }
   }
 
   function _replaceLayer(dto) {
@@ -166,7 +202,7 @@ export const useLayersStore = defineStore('layers', () => {
       }
       return { ...feature, properties: props }
     })
-    features.value[layerName] = { ...fc, features: nextFeatures }
+    _setFeatures(layerName, { ...fc, features: nextFeatures })
     _emitFeaturesUpdated(layerName)
   }
 
@@ -188,9 +224,13 @@ export const useLayersStore = defineStore('layers', () => {
     try {
       const args = { layer: layerName, bounds }
       if (options.groupKey != null) args.group_key = options.groupKey
+      if (Array.isArray(options.extraFields) && options.extraFields.length) {
+        args.extra_fields = options.extraFields
+      }
       const fc = await call('expedition.api.layer.get_features', args)
+      if (activeSearch.value?.parsed && !options.allowDuringSearch) return
       _promoteIds(fc)
-      features.value[cacheKey] = fc
+      _setFeatures(cacheKey, fc)
       lastFetched.value[cacheKey] = Date.now()
       if (bounds) lastBounds.value[layerName] = bounds
       _emitFeaturesUpdated(cacheKey)
@@ -216,11 +256,12 @@ export const useLayersStore = defineStore('layers', () => {
         group_keys: pending.map((item) => item.groupKey),
       })
       const byGroup = resp?.groups || {}
+      if (activeSearch.value?.parsed) return
       for (const item of pending) {
         const fc = byGroup[item.groupKey]
         if (!fc) continue
         _promoteIds(fc)
-        features.value[item.cacheKey] = fc
+        _setFeatures(item.cacheKey, fc)
         lastFetched.value[item.cacheKey] = Date.now()
         _emitFeaturesUpdated(item.cacheKey)
       }
@@ -299,14 +340,177 @@ export const useLayersStore = defineStore('layers', () => {
     sourceFields.value = next
   }
 
+  async function _ensureSearchMetadata(targetLayers) {
+    const doctypes = [...new Set((targetLayers || [])
+      .map((layer) => layer?.source_doctype)
+      .filter(Boolean))]
+    await Promise.all(doctypes.map((doctype) => getSourceFields(doctype).catch(() => [])))
+  }
+
+  function _searchCounts(parsed, targetLayers) {
+    const layerCounts = {}
+    let total = 0
+    for (const layer of targetLayers || []) {
+      const fc = _baseFeatures(layer.name)
+      const fields = sourceFields.value[layer.source_doctype] || []
+      const count = countParsedMapSearchMatches(fc, layer, fields, parsed, _searchContext(layer.name))
+      layerCounts[layer.name] = count
+      total += count
+    }
+    return { layerCounts, total }
+  }
+
+  function _structuredSearchFields(parsed, layer = null) {
+    const fields = []
+    for (const expression of parsed?.expressions || []) {
+      if (expression?.mode === 'field' || expression?.mode === 'doctype_field') {
+        if (expression.mode === 'doctype_field' && layer?.source_doctype) {
+          const queryDoctype = String(expression.doctype || '').trim().toLowerCase()
+          const layerDoctype = String(layer.source_doctype || '').trim().toLowerCase()
+          if (queryDoctype !== layerDoctype) continue
+        }
+        fields.push(expression.field)
+      }
+    }
+    return fields
+  }
+
+  function _textSearchValues(parsed) {
+    return (parsed?.expressions || [])
+      .filter((expression) => expression?.mode === 'text')
+      .map((expression) => String(expression.value || '').trim())
+      .filter(Boolean)
+      .filter((value, idx, arr) => arr.indexOf(value) === idx)
+  }
+
+  function _featureCollectionHasField(fc, fields, wantedField) {
+    if (!wantedField) return true
+    if (!fc || !Array.isArray(fc.features)) return false
+    const fieldname = _resolveFieldname(fields, wantedField) || wantedField
+    return fc.features.some((feature) =>
+      Object.prototype.hasOwnProperty.call(feature?.properties || {}, fieldname)
+    )
+  }
+
+  function _resolveFieldname(fields, wantedField) {
+    const wanted = String(wantedField || '').trim().toLowerCase()
+    if (!wanted) return ''
+    const meta = (fields || []).find((field) =>
+      String(field?.fieldname || '').toLowerCase() === wanted
+      || String(field?.label || '').toLowerCase() === wanted
+    )
+    return meta?.fieldname || wantedField
+  }
+
+  async function _refreshLayersMissingSearchFields(parsed, targetLayers) {
+    const missing = []
+    const hasTextSearch = _textSearchValues(parsed).length > 0
+    for (const layer of targetLayers || []) {
+      const searchFields = _structuredSearchFields(parsed, layer)
+      const fields = sourceFields.value[layer.source_doctype] || []
+      const fc = _baseFeatures(layer.name)
+      const extraFields = searchFields
+        .map((field) => _resolveFieldname(fields, field))
+        .filter(Boolean)
+        .filter((field, idx, arr) => arr.indexOf(field) === idx)
+      const needsRefresh = searchFields.some((field) => !_featureCollectionHasField(fc, fields, field))
+      if (hasTextSearch || needsRefresh) missing.push({ layerName: layer.name, extraFields })
+    }
+    await Promise.all(missing.map((item) =>
+      fetchFeatures(item.layerName, null, {
+        allowDuringSearch: true,
+        extraFields: item.extraFields,
+      })
+    ))
+  }
+
+  async function _fetchTextSearchMatches(parsed, targetLayers) {
+    const textValues = _textSearchValues(parsed)
+    if (!textValues.length) return {}
+    const out = {}
+    await Promise.all((targetLayers || []).flatMap((layer) =>
+      textValues.map(async (text) => {
+        try {
+          const resp = await call('expedition.api.layer.get_text_search_matches', {
+            layer: layer.name,
+            text,
+          })
+          const names = Array.isArray(resp?.names) ? resp.names : []
+          out[layer.name] = {
+            ...(out[layer.name] || {}),
+            [text]: new Set(names.map(String)),
+          }
+        } catch (e) {
+          out[layer.name] = {
+            ...(out[layer.name] || {}),
+            [text]: new Set(),
+          }
+        }
+      })
+    ))
+    return out
+  }
+
+  async function applySearch(raw) {
+    const parsed = parseMapSearch(raw)
+    if (!parsed) {
+      clearSearch()
+      return null
+    }
+    if (activeSearch.value) clearSearch()
+    const targetLayers = visibleLayers.value
+    await _ensureSearchMetadata(targetLayers)
+    await _refreshLayersMissingSearchFields(parsed, targetLayers)
+    const textMatches = await _fetchTextSearchMatches(parsed, targetLayers)
+    const nextUnfiltered = { ...unfilteredFeatures.value }
+    for (const layer of targetLayers) {
+      if (!nextUnfiltered[layer.name] && features.value[layer.name]) {
+        nextUnfiltered[layer.name] = features.value[layer.name]
+      }
+    }
+    unfilteredFeatures.value = nextUnfiltered
+
+    activeSearch.value = {
+      raw: parsed.raw,
+      parsed,
+      summary: describeParsedMapSearch(parsed),
+      chips: parsed.expressions,
+      textMatches,
+      layerCounts: {},
+      total: 0,
+    }
+    const counts = _searchCounts(parsed, targetLayers)
+    activeSearch.value = { ...activeSearch.value, ...counts }
+    for (const layer of targetLayers) {
+      const base = _baseFeatures(layer.name)
+      if (!base) continue
+      features.value[layer.name] = _filteredFeatureCollection(layer.name, base)
+      _emitFeaturesUpdated(layer.name)
+    }
+    return activeSearch.value
+  }
+
+  function clearSearch() {
+    if (!activeSearch.value && !Object.keys(unfilteredFeatures.value).length) return
+    const restore = unfilteredFeatures.value
+    activeSearch.value = null
+    unfilteredFeatures.value = {}
+    for (const [layerName, fc] of Object.entries(restore)) {
+      features.value[layerName] = fc
+      _emitFeaturesUpdated(layerName)
+    }
+  }
+
   function clearFeatures(layerName) {
     delete features.value[layerName]
+    delete unfilteredFeatures.value[layerName]
     delete loading.value[layerName]
     delete lastFetched.value[layerName]
     const groupPrefix = `${layerName}__grp__`
     for (const key of Object.keys(features.value)) {
       if (!key.startsWith(groupPrefix)) continue
       delete features.value[key]
+      delete unfilteredFeatures.value[key]
       delete loading.value[key]
       delete lastFetched.value[key]
     }
@@ -459,9 +663,13 @@ export const useLayersStore = defineStore('layers', () => {
     layers,
     masters,
     features,
+    unfilteredFeatures,
     loading,
     lastFetched,
     visibleLayers,
+    activeSearch,
+    applySearch,
+    clearSearch,
     fetchFeatures,
     fetchVirtualGroupFeatures,
     refetchLayer,

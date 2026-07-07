@@ -370,6 +370,46 @@ def _select_filter_options(field_meta: dict) -> list:
     return _select_options(field_meta.get("options"))
 
 
+def _parse_extra_feature_fields(raw: list | str | None, source_doctype: str) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = [part.strip() for part in raw.split(",") if part.strip()]
+    else:
+        parsed = raw
+    if not isinstance(parsed, list):
+        return []
+
+    field_map = _filter_field_map(source_doctype)
+    out: list[str] = []
+    seen = set()
+    for item in parsed:
+        field = str(item or "").strip()
+        if not field or field not in field_map or field in seen:
+            continue
+        seen.add(field)
+        out.append(field)
+    return out
+
+
+def _searchable_text_fields(source_doctype: str) -> list[str]:
+    fields = []
+    for fieldname, meta in _filter_field_map(source_doctype).items():
+        fieldtype = meta.get("fieldtype")
+        if fieldtype != "Password":
+            fields.append(fieldname)
+    return fields
+
+
+def _value_contains_text(value: Any, needle: str) -> bool:
+    if value is None:
+        return False
+    return needle in str(value).lower()
+
+
 def _parse_multi_value(value: Any) -> list:
     if value is None:
         return []
@@ -1022,10 +1062,60 @@ def _full_row_context(
 
 
 @frappe.whitelist(allow_guest=True)
+def get_text_search_matches(
+    layer: str,
+    text: str,
+    bounds: dict | None = None,
+    limit: int = 10000,
+) -> dict:
+    """Return source row names whose searchable fields contain text."""
+    query = str(text or "").strip().lower()
+    if not query:
+        return {"names": [], "truncated": False}
+
+    layer_doc = frappe.get_doc("Expedition Layer", layer)
+    if not layer_doc.enabled:
+        return {"names": [], "truncated": False}
+
+    assert_source_read(layer_doc.source_doctype)
+    filters = _coerce_filter(layer_doc.filter_json) or []
+    if bounds:
+        south = float(bounds.get("south"))
+        west = float(bounds.get("west"))
+        north = float(bounds.get("north"))
+        east = float(bounds.get("east"))
+        filters += [
+            [layer_doc.latitude_field, ">=", south],
+            [layer_doc.latitude_field, "<=", north],
+            [layer_doc.longitude_field, ">=", west],
+            [layer_doc.longitude_field, "<=", east],
+            [layer_doc.latitude_field, "is", "set"],
+            [layer_doc.longitude_field, "is", "set"],
+        ]
+
+    or_filters = [
+        [field, "like", f"%{query}%"]
+        for field in _searchable_text_fields(layer_doc.source_doctype)
+    ]
+    limit = min(max(int(limit or 10000), 1), 10000)
+    rows = frappe.get_all(
+        layer_doc.source_doctype,
+        fields=["name"],
+        filters=filters,
+        or_filters=or_filters,
+        limit=limit + 1,
+        order_by=f"{layer_doc.latitude_field} asc",
+    )
+    names = [row.get("name") for row in rows[:limit]]
+    return {"names": [name for name in names if name], "truncated": len(rows) > limit}
+
+
+@frappe.whitelist(allow_guest=True)
 def get_features(
     layer: str,
     bounds: dict | None = None,
     group_key: str | None = None,
+    extra_fields: list | str | None = None,
     limit: int = 5000,
     offset: int = 0,
 ) -> dict:
@@ -1039,6 +1129,8 @@ def get_features(
                     layer's base filters are combined with the group's
                     derived filter so the group behaves like a separate
                     filtered layer.
+            extra_fields: optional source fields to include in feature
+                    properties for session-local client search.
             limit:  hard cap (default 5000 — clusters take care of the rest)
             offset: pagination offset
 
@@ -1177,6 +1269,11 @@ def get_features(
         layer_doc.source_doctype,
         popup_fields or default_popup_fields,
     )
+    requested_extra_fields = _parse_extra_feature_fields(
+        extra_fields,
+        layer_doc.source_doctype,
+    )
+    _append_valid_source_fields(fields, layer_doc.source_doctype, requested_extra_fields)
     heatmap_config = _heatmap_config_dict(layer_doc)
     heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
     if heatmap_weight_field and heatmap_weight_field not in fields:

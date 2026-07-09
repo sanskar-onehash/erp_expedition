@@ -33,8 +33,11 @@ def _assert_doc_write(source_doctype: str, source_name: str) -> None:
 def _validate_assignment_field(source_doctype: str, fieldname: str) -> None:
     if not fieldname:
         frappe.throw("Assignment field is required", frappe.ValidationError)
-    if fieldname == "owner":
-        return
+    if fieldname in {"owner", "modified_by"}:
+        frappe.throw(
+            f"Field '{fieldname}' is a standard audit field and cannot be used for custom assignment",
+            frappe.ValidationError,
+        )
     meta = frappe.get_meta(source_doctype)
     df = meta.get_field(fieldname)
     if not df:
@@ -56,6 +59,29 @@ def _validate_user(user: str | None) -> str:
     if not frappe.db.exists("User", selected):
         frappe.throw(f"Unknown User {selected}", frappe.DoesNotExistError)
     return selected
+
+
+@frappe.whitelist()
+def search_users(txt: str | None = "", limit: int | str = 8) -> list[dict]:
+    """Return enabled users for popup assignment autocomplete."""
+    from frappe.desk.search import search_link
+
+    page_length = max(1, min(int(limit or 8), 20))
+    rows = search_link(
+        doctype="User",
+        txt=txt or "",
+        filters={"enabled": 1, "name": ["not in", ["Guest"]]},
+        page_length=page_length,
+    )
+    return [
+        {
+            "value": row.get("value"),
+            "label": row.get("label") or row.get("value"),
+            "description": row.get("description") or "",
+        }
+        for row in rows
+        if row.get("value") and row.get("value") != "Guest"
+    ]
 
 
 @frappe.whitelist()
@@ -87,6 +113,34 @@ def create_todo(
 
 
 @frappe.whitelist()
+def assign_to(
+    source_doctype: str,
+    source_name: str,
+    user: str,
+    description: str | None = None,
+    priority: str | None = "Medium",
+    date: str | None = None,
+) -> dict:
+    """Use Frappe's standard Assign To flow for a source document."""
+    _assert_doc_read(source_doctype, source_name)
+    selected_user = _validate_user(user)
+
+    from frappe.desk.form.assign_to import add as add_assignment
+
+    args = {
+        "doctype": source_doctype,
+        "name": source_name,
+        "assign_to": [selected_user],
+        "description": description or f"Assignment for {source_doctype} {source_name}",
+        "priority": priority or "Medium",
+    }
+    if date:
+        args["date"] = date
+    add_assignment(args)
+    return {"source_doctype": source_doctype, "source_name": source_name, "user": selected_user}
+
+
+@frappe.whitelist()
 def assign(
     source_doctype: str,
     source_name: str,
@@ -98,12 +152,9 @@ def assign(
     _validate_assignment_field(source_doctype, fieldname)
     selected_user = _validate_user(user)
 
-    if fieldname == "owner":
-        frappe.db.set_value(source_doctype, source_name, "owner", selected_user)
-    else:
-        doc = frappe.get_doc(source_doctype, source_name)
-        doc.set(fieldname, selected_user)
-        doc.save(ignore_permissions=False)
+    doc = frappe.get_doc(source_doctype, source_name)
+    doc.set(fieldname, selected_user)
+    doc.save(ignore_permissions=False)
     return {"source_doctype": source_doctype, "source_name": source_name, "fieldname": fieldname, "value": selected_user}
 
 
@@ -117,8 +168,6 @@ def unassign(
     _assert_doc_write(source_doctype, source_name)
     _validate_assignment_field(source_doctype, fieldname)
 
-    if fieldname == "owner":
-        frappe.throw("Owner cannot be cleared", frappe.ValidationError)
     doc = frappe.get_doc(source_doctype, source_name)
     doc.set(fieldname, None)
     doc.save(ignore_permissions=False)

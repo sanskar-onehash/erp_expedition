@@ -970,16 +970,10 @@ def _source_field_labels(source_doctype: str) -> dict[str, str]:
 
 
 def _source_assignment_fields(source_doctype: str) -> list[dict[str, str]]:
-    fields = [
-        {
-            "fieldname": "owner",
-            "label": "Owner",
-            "fieldtype": "Link",
-            "options": "User",
-        }
-    ]
+    fields = []
+    standard_user_fields = {"owner", "modified_by"}
     for fieldname, meta in _filter_field_map(source_doctype).items():
-        if fieldname == "owner":
+        if fieldname in standard_user_fields:
             continue
         if meta.get("fieldtype") == "Link" and meta.get("options") == "User":
             fields.append(

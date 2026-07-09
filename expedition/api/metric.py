@@ -10,7 +10,7 @@ from typing import Any
 import frappe
 
 from expedition.api.layer import _coerce_filter
-from expedition.api.permission import assert_source_read
+from expedition.api.permission import assert_map_read, assert_source_read
 
 
 AGGREGATES = {"count", "sum", "avg", "min", "max"}
@@ -221,8 +221,7 @@ def summarize_zone(
     if not frappe.db.exists("Expedition Zone", zone_name):
         frappe.throw(f"Unknown Expedition Zone {zone_name}", frappe.DoesNotExistError)
     zone = frappe.get_doc("Expedition Zone", zone_name)
-    if not frappe.has_permission("Expedition Map", "read", doc=zone.map):
-        frappe.throw("Not permitted to read this map", frappe.PermissionError)
+    assert_map_read(zone.map)
     geometry = _as_dict(zone.geometry)
     if not geometry:
         return {"zone": zone_name, "layers": [], "metrics": []}

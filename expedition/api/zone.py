@@ -19,6 +19,7 @@ import json
 
 import frappe
 from frappe.model.document import Document
+from expedition.api.permission import assert_map_write
 
 
 def _has_zone_stroke_style() -> bool:
@@ -27,13 +28,7 @@ def _has_zone_stroke_style() -> bool:
 
 def _assert_map_write(map_name: str) -> None:
     """Require write on Expedition Map <map_name>."""
-    if not frappe.db.exists("Expedition Map", map_name):
-        frappe.throw(f"Unknown Expedition Map {map_name}", frappe.DoesNotExistError)
-    if not frappe.has_permission("Expedition Map", "write", doc=map_name):
-        frappe.throw(
-            f"Not permitted to edit Expedition Map {map_name}",
-            frappe.PermissionError,
-        )
+    assert_map_write(map_name)
 
 
 def _coerce_geometry(geom) -> dict:

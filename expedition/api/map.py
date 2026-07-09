@@ -15,6 +15,108 @@ the canvas actually needs that aren't in the standard CRUD path:
 """
 
 import frappe
+import frappe.share
+from expedition.api.permission import (
+    assert_map_read,
+    assert_map_share,
+    assert_map_write,
+    map_permission,
+)
+
+
+BASE_MAP_FIELDS = [
+    "name",
+    "title",
+    "basemap_style",
+    "last_opened_at",
+    "modified",
+    "owner",
+    "owner_user",
+    "is_public",
+]
+
+
+def _has_map_field(fieldname: str) -> bool:
+    return frappe.db.has_column("Expedition Map", fieldname)
+
+
+def _map_fields() -> list[str]:
+    fields = list(BASE_MAP_FIELDS)
+    if _has_map_field("public_access"):
+        fields.append("public_access")
+    return fields
+
+
+def _current_user() -> str:
+    return frappe.session.user
+
+
+def _normalize_viewport(viewport):
+    if viewport in (None, ""):
+        return None
+    if isinstance(viewport, str):
+        return frappe.parse_json(viewport)
+    return viewport
+
+
+def _map_access(row) -> str:
+    user = _current_user()
+    if row.get("owner_user") == user or row.get("owner") == user:
+        return "owner"
+    if row.get("is_public"):
+        return "public"
+    return "shared"
+
+
+def _dedupe_maps(rows: list[dict]) -> list[dict]:
+    seen = set()
+    out = []
+    for row in rows:
+        if row["name"] in seen:
+            continue
+        seen.add(row["name"])
+        row["access"] = _map_access(row)
+        out.append(row)
+    return out
+
+
+def _owned_maps(user: str) -> list[dict]:
+    fields = _map_fields()
+    by_owner_user = frappe.get_all(
+        "Expedition Map",
+        filters={"owner_user": user},
+        fields=fields,
+        order_by="modified desc",
+        limit=50,
+    )
+    by_doc_owner = frappe.get_all(
+        "Expedition Map",
+        filters={"owner": user},
+        fields=fields,
+        order_by="modified desc",
+        limit=50,
+    )
+    return _dedupe_maps(by_owner_user + by_doc_owner)
+
+
+def _normalize_public_access(value: str | None) -> str:
+    return "Writable" if value == "Writable" else "Read Only"
+
+
+def _parse_access_overrides(raw) -> list[dict]:
+    try:
+        rows = frappe.parse_json(raw) if raw else []
+    except Exception:
+        rows = []
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        user = str(row.get("user") or "").strip()
+        access = str(row.get("access") or "").lower()
+        if user and access in {"read", "write"}:
+            out.append({"user": user, "access": access})
+    return out
 
 
 def _has_zone_stroke_style() -> bool:
@@ -31,29 +133,7 @@ def load_full(name: str) -> dict:
     guests so the page works without a login. Non-public maps require
     the standard Expedition Map read permission.
     """
-    map_doc_meta = frappe.get_meta("Expedition Map")
-    is_guest = frappe.session.user == "Guest"
-    if is_guest:
-        # Guest path: only public/template maps are visible.
-        if not frappe.db.get_value(
-            "Expedition Map", name, ["is_public", "is_template"]
-        ):
-            frappe.throw(
-                f"Not permitted to read Expedition Map {name}",
-                frappe.PermissionError,
-            )
-        is_public, is_template = frappe.db.get_value(
-            "Expedition Map", name, ["is_public", "is_template"]
-        )
-        if not (is_public or is_template):
-            frappe.throw(
-                f"Not permitted to read Expedition Map {name}",
-                frappe.PermissionError,
-            )
-    elif not frappe.has_permission("Expedition Map", "read", doc=name):
-        frappe.throw(
-            f"Not permitted to read Expedition Map {name}", frappe.PermissionError
-        )
+    assert_map_read(name)
 
     map_doc = frappe.get_doc("Expedition Map", name)
 
@@ -135,6 +215,10 @@ def load_full(name: str) -> dict:
         "map": map_doc.as_dict(),
         "layers": layers,
         "zones": zones,
+        "permissions": {
+            "write": 1 if map_permission(name, "write") else 0,
+            "share": 1 if map_permission(name, "share") else 0,
+        },
     }
 
 
@@ -144,43 +228,249 @@ def list_for_user(include_public: int = 1, search: str | None = None) -> list[di
     List Expedition Maps the current user can read.
     Used by the canvas's "Open Map" picker.
     """
-    or_filters = {}
-    if include_public:
-        # Standard get_all won't combine owner + public in one call.
-        # We do two queries and merge.
-        own = frappe.get_all(
+    user = _current_user()
+    if user == "Guest":
+        if not include_public:
+            return []
+        merged = frappe.get_all(
             "Expedition Map",
-            filters={"owner_user": frappe.session.user},
-            fields=["name", "title", "basemap_style", "last_opened_at", "modified"],
+            filters={"is_public": 1},
+            fields=_map_fields(),
             order_by="modified desc",
             limit=50,
+        )
+        if search:
+            merged = [m for m in merged if search.lower() in (m["title"] or "").lower()]
+        return _dedupe_maps(merged)
+
+    if include_public:
+        # Standard get_all won't combine owner + shared + public in one
+        # call. We do small bounded queries and merge client-side.
+        own = _owned_maps(user)
+        shared_names = [
+            row.share_name
+            for row in frappe.get_all(
+                "DocShare",
+                filters={
+                    "share_doctype": "Expedition Map",
+                    "user": user,
+                    "read": 1,
+                },
+                fields=["share_name"],
+                limit=50,
+            )
+        ]
+        shared = (
+            frappe.get_all(
+                "Expedition Map",
+                filters={"name": ["in", shared_names]},
+                fields=_map_fields(),
+                order_by="modified desc",
+                limit=50,
+            )
+            if shared_names
+            else []
         )
         public = frappe.get_all(
             "Expedition Map",
             filters={"is_public": 1},
-            fields=["name", "title", "basemap_style", "last_opened_at", "modified"],
+            fields=_map_fields(),
             order_by="modified desc",
             limit=50,
         )
-        seen = set()
-        merged = []
-        for m in own + public:
-            if m["name"] in seen:
-                continue
-            seen.add(m["name"])
-            merged.append(m)
+        merged = _dedupe_maps(own + shared + public)
     else:
-        merged = frappe.get_all(
-            "Expedition Map",
-            filters={"owner_user": frappe.session.user},
-            fields=["name", "title", "basemap_style", "last_opened_at", "modified"],
-            order_by="modified desc",
-            limit=50,
+        owned = _owned_maps(user)
+        shared_names = [
+            row.share_name
+            for row in frappe.get_all(
+                "DocShare",
+                filters={
+                    "share_doctype": "Expedition Map",
+                    "user": user,
+                    "read": 1,
+                },
+                fields=["share_name"],
+                limit=50,
+            )
+        ]
+        shared = (
+            frappe.get_all(
+                "Expedition Map",
+                filters={"name": ["in", shared_names]},
+                fields=_map_fields(),
+                order_by="modified desc",
+                limit=50,
+            )
+            if shared_names
+            else []
         )
+        merged = _dedupe_maps(owned + shared)
 
     if search:
         merged = [m for m in merged if search.lower() in (m["title"] or "").lower()]
     return merged
+
+
+@frappe.whitelist()
+def create_blank_map(
+    title: str,
+    basemap_style: str = "ofm-liberty",
+    viewport: dict | str | None = None,
+    is_public: int = 0,
+    public_access: str = "Read Only",
+) -> dict:
+    """Create a private blank map owned by the current user."""
+    if not frappe.has_permission("Expedition Map", "create"):
+        frappe.throw("Not permitted to create maps", frappe.PermissionError)
+    title = (title or "").strip()
+    if not title:
+        frappe.throw("Map name is required", frappe.ValidationError)
+
+    doc = frappe.new_doc("Expedition Map")
+    doc.title = title
+    doc.owner_user = _current_user()
+    doc.is_public = 1 if int(is_public or 0) else 0
+    if _has_map_field("public_access"):
+        doc.public_access = _normalize_public_access(public_access)
+    doc.basemap_style = basemap_style or "ofm-liberty"
+    normalized_viewport = _normalize_viewport(viewport)
+    if normalized_viewport is not None:
+        doc.viewport = frappe.json.dumps(normalized_viewport)
+    doc.insert()
+    return doc.as_dict()
+
+
+@frappe.whitelist()
+def update_map(
+    name: str,
+    title: str | None = None,
+    viewport: dict | str | None = None,
+    basemap_style: str | None = None,
+    is_public: int | None = None,
+    public_access: str | None = None,
+) -> dict:
+    """Persist editable map metadata and camera state."""
+    assert_map_write(name)
+    doc = frappe.get_doc("Expedition Map", name)
+    if title is not None:
+        title = title.strip()
+        if not title:
+            frappe.throw("Map name is required", frappe.ValidationError)
+        doc.title = title
+    if viewport is not None:
+        doc.viewport = frappe.json.dumps(_normalize_viewport(viewport))
+    if basemap_style:
+        doc.basemap_style = basemap_style
+    if is_public is not None:
+        doc.is_public = 1 if int(is_public or 0) else 0
+    if public_access is not None and _has_map_field("public_access"):
+        doc.public_access = _normalize_public_access(public_access)
+    doc.save()
+    return doc.as_dict()
+
+
+@frappe.whitelist()
+def get_shared_users(name: str) -> list[dict]:
+    """Return explicit user shares for a map."""
+    assert_map_share(name)
+    override_by_user = {
+        row["user"]: row["access"]
+        for row in _parse_access_overrides(
+            frappe.db.get_value("Expedition Map", name, "access_overrides_json")
+            if _has_map_field("access_overrides_json")
+            else ""
+        )
+    }
+    rows = frappe.get_all(
+        "DocShare",
+        filters={"share_doctype": "Expedition Map", "share_name": name, "read": 1},
+        fields=["user", "write", "share"],
+        order_by="user asc",
+    )
+    by_user = {}
+    for row in rows:
+        by_user[row.user] = {
+            "user": row.user,
+            "read": 1,
+            "write": 1 if int(row.write or 0) else 0,
+            "share": 1 if int(row.share or 0) else 0,
+            "access": "write" if int(row.write or 0) else "read",
+        }
+    for user, access in override_by_user.items():
+        by_user[user] = {
+            "user": user,
+            "read": 1,
+            "write": 1 if access == "write" else 0,
+            "share": by_user.get(user, {}).get("share", 0),
+            "access": access,
+        }
+    return sorted(by_user.values(), key=lambda row: row["user"])
+
+
+@frappe.whitelist()
+def share_map(name: str, users: list | str | None = None) -> list[dict]:
+    """Replace explicit shares for a map with the provided users."""
+    assert_map_share(name)
+    parsed = frappe.parse_json(users) if isinstance(users, str) else users
+    next_shares = {}
+    for item in parsed or []:
+        if isinstance(item, dict):
+            user = str(item.get("user") or item.get("value") or "").strip()
+            access = str(item.get("access") or "").lower()
+            if access not in {"read", "write"}:
+                access = "write" if int(item.get("write") or 0) else "read"
+            share = 1 if int(item.get("share") or 0) else 0
+            read = 1 if int(item.get("read", 1) or 0) else 0
+        else:
+            user = str(item or "").strip()
+            access = "read"
+            share = 0
+            read = 1
+        if user and user != _current_user() and read:
+            next_shares[user] = {"access": access, "share": share}
+
+    existing = frappe.get_all(
+        "DocShare",
+        filters={"share_doctype": "Expedition Map", "share_name": name, "read": 1},
+        fields=["name", "user", "write", "share"],
+    )
+    for row in existing:
+        if row.user not in next_shares:
+            frappe.delete_doc("DocShare", row.name, ignore_permissions=True)
+
+    existing_users = {row.user for row in existing}
+    for row in existing:
+        if row.user in next_shares:
+            write_value = 1 if next_shares[row.user]["access"] == "write" else 0
+            if int(row.write or 0) != write_value:
+                frappe.db.set_value("DocShare", row.name, "write", write_value)
+            share_value = 1 if next_shares[row.user]["share"] else 0
+            if int(row.share or 0) != share_value:
+                frappe.db.set_value("DocShare", row.name, "share", share_value)
+
+    for user, share_row in next_shares.items():
+        if user in existing_users:
+            continue
+        if not frappe.db.exists("User", user):
+            frappe.throw(f"Unknown user: {user}", frappe.ValidationError)
+        frappe.share.add(
+            "Expedition Map",
+            name,
+            user,
+            read=1,
+            write=1 if share_row["access"] == "write" else 0,
+            share=1 if share_row["share"] else 0,
+            notify=0,
+        )
+    doc = frappe.get_doc("Expedition Map", name)
+    if _has_map_field("access_overrides_json"):
+        doc.access_overrides_json = frappe.json.dumps(
+            [{"user": user, "access": row["access"]} for user, row in sorted(next_shares.items())]
+        )
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return get_shared_users(name)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -204,11 +494,7 @@ def update_basemap_style(name: str, basemap_style: str) -> dict:
     Persist the chosen basemap skin to the Expedition Map doc so the
     user's skin choice survives a reload. Permission-gated on the map.
     """
-    if not frappe.has_permission("Expedition Map", "write", doc=name):
-        frappe.throw(
-            f"Not permitted to update Expedition Map {name}",
-            frappe.PermissionError,
-        )
+    assert_map_write(name)
     if basemap_style not in (
         "light",
         "dark",
@@ -255,8 +541,7 @@ def save_map_card(
     if existing_name:
         # Update existing: update viewport, filters, summary, basemap_style.
         doc = frappe.get_doc("Expedition Map", existing_name)
-        if not frappe.has_permission("Expedition Map", "write", doc=existing_name):
-            frappe.throw("Not permitted to update this map", frappe.PermissionError)
+        assert_map_write(existing_name)
         if viewport is not None:
             doc.viewport = frappe.json.dumps(viewport)
         if filters_json is not None:

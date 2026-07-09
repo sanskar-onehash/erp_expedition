@@ -1,16 +1,8 @@
 <script setup>
 /**
- * LayerPanel — left-edge slide-in panel. PR-2 of the quiet-canvas plan.
+ * LayerPanel — left-edge map workspace panel.
  *
- * Single section: Layers. Contains the active layers + an inline
- * search/select picker at the top to attach more layers from the
- * user's master mappings. Zones live in ToolsPanel (PR-3). Skin picker
- * lives in BasemapPanel (PR-1).
- *
- * Header: map title + layer count + close. No save button — layer
- * config and zones are auto-saved on every edit; the "map card" save
- * flow (title/camera/skin) was removed because it duplicated live
- * persistence and confused users.
+ * Saved map controls live above the existing active layer controls.
  *
  * Width: 300px. Max height: 100vh minus 24px top/bottom. Translucent,
  * same glass as the rest of the chrome.
@@ -20,6 +12,7 @@ import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { ICON_PATHS } from '../api/icons.js'
+import { call } from '../api/client.js'
 import FilterBuilder from './FilterBuilder.vue'
 import { filterCount, parseFilterRows, serializeFilterRows, summarizeFilterRows } from '../lib/filters.js'
 
@@ -30,12 +23,33 @@ const emit = defineEmits(['close'])
 
 const activeMapName = computed(() => mapStore.activeMap?.map?.name)
 const templates = computed(() => mapStore.templates || [])
+const maps = computed(() => mapStore.recent || [])
 const activeLayers = computed(() => layerStore.layers || [])
 const masters = computed(() => layerStore.masters || [])
 const panelRoot = ref(null)
 
 const layersOpen = ref(true)
+const mapsOpen = ref(true)
 const templatesOpen = ref(true)
+const shareOpen = ref(false)
+const createOpen = ref(false)
+const mapQuery = ref('')
+const mapTitleDraft = ref('')
+const newMapTitle = ref('')
+const newMapPublic = ref(false)
+const shareUsers = ref([])
+const userQuery = ref('')
+const shareDraftUser = ref(null)
+const shareDraftCanRead = ref(true)
+const shareDraftCanWrite = ref(false)
+const shareDraftCanShare = ref(false)
+const userOptions = ref([])
+const userSearchOpen = ref(false)
+const userSearchLoading = ref(false)
+const userPickerRoot = ref(null)
+const mapSaving = ref(false)
+const mapError = ref('')
+let userSearchTimer = null
 
 // Inline add-layer picker state.
 const pickerQuery = ref('')
@@ -73,9 +87,35 @@ const pickerGroups = computed(() => {
 })
 
 const canEdit = computed(() => {
-  const owner = mapStore.activeMap?.map?.owner
+  if (mapStore.activeMap?.permissions?.write) return true
+  const owner = mapStore.activeMap?.map?.owner_user || mapStore.activeMap?.map?.owner
   const me = window.expeditionSession?.user
   return !owner || owner === me || me === 'Administrator'
+})
+const canShare = computed(() => {
+  if (mapStore.activeMap?.permissions?.share) return true
+  const owner = mapStore.activeMap?.map?.owner_user || mapStore.activeMap?.map?.owner
+  const me = window.expeditionSession?.user
+  return !owner || owner === me || me === 'Administrator'
+})
+const activeMap = computed(() => mapStore.activeMap?.map || null)
+const activeAccess = computed(() => {
+  if (!activeMap.value) return 'private'
+  if (activeMap.value.is_public) return 'public'
+  const owner = activeMap.value.owner_user || activeMap.value.owner
+  const me = window.expeditionSession?.user
+  return owner && owner !== me && me !== 'Administrator' ? 'shared' : 'private'
+})
+const activeSubtitle = computed(() => {
+  const layerLabel = activeLayers.value.length === 1 ? '1 layer' : `${activeLayers.value.length} layers`
+  return `${activeAccess.value} · ${layerLabel}`
+})
+const filteredMaps = computed(() => {
+  const q = mapQuery.value.trim().toLowerCase()
+  return maps.value.filter((m) => {
+    if (!q) return true
+    return (m.title || '').toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q)
+  })
 })
 
 const _iconSpriteHref = (() => {
@@ -87,6 +127,198 @@ function iconPath(id) { return ICON_PATHS[id] || '' }
 
 function openMap(name) {
   if (name && name !== activeMapName.value) mapStore.switchMap(name)
+}
+function accessLabel(row) {
+  if (row?.is_public || row?.access === 'public') {
+    return row?.public_access === 'Writable' ? 'Public writable' : 'Public'
+  }
+  if (row?.access === 'shared') return 'Shared'
+  return 'Private'
+}
+function accessKind(row) {
+  if (row?.is_public || row?.access === 'public') return 'public'
+  if (row?.access === 'shared') return 'shared'
+  return 'private'
+}
+async function createBlankMap() {
+  const title = newMapTitle.value.trim()
+  if (!title) {
+    mapError.value = 'Name the map first.'
+    return
+  }
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    await mapStore.createBlankMap({
+      title,
+      basemap_style: ui.currentSkinId,
+      is_public: newMapPublic.value ? 1 : 0,
+      public_access: 'Read Only',
+    })
+    newMapTitle.value = ''
+    newMapPublic.value = false
+    createOpen.value = false
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+async function saveActiveMap() {
+  if (!activeMap.value) return
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    await mapStore.updateActiveMap({
+      title: mapTitleDraft.value.trim() || activeMap.value.title,
+      basemap_style: ui.currentSkinId,
+      is_public: activeMap.value.is_public ? 1 : 0,
+      public_access: activeMap.value.public_access || 'Read Only',
+    })
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+async function setPublic(on) {
+  if (!activeMap.value || !canShare.value) return
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    const dto = await mapStore.updateActiveMap({
+      is_public: on ? 1 : 0,
+      public_access: 'Read Only',
+    })
+    mapStore.activeMap.map.is_public = dto.is_public
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+async function setEveryoneRead(on) {
+  if (!activeMap.value || !canShare.value) return
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    const dto = await mapStore.updateActiveMap({
+      is_public: on ? 1 : 0,
+      public_access: on ? (activeMap.value.public_access || 'Read Only') : 'Read Only',
+    })
+    mapStore.activeMap.map.is_public = dto.is_public
+    mapStore.activeMap.map.public_access = dto.public_access || 'Read Only'
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+async function setEveryoneWrite(on) {
+  if (!activeMap.value || !canShare.value) return
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    const dto = await mapStore.updateActiveMap({
+      is_public: 1,
+      public_access: on ? 'Writable' : 'Read Only',
+    })
+    mapStore.activeMap.map.is_public = dto.is_public
+    mapStore.activeMap.map.public_access = dto.public_access || 'Read Only'
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+async function saveShares() {
+  mapSaving.value = true
+  mapError.value = ''
+  try {
+    await mapStore.shareActiveMap(shareUsers.value.map((row) => ({
+      user: row.user,
+      access: row.canWrite ? 'write' : 'read',
+      read: row.canRead ? 1 : 0,
+      share: row.canShare ? 1 : 0,
+    })))
+  } catch (e) {
+    mapError.value = String(e.message || e)
+  } finally {
+    mapSaving.value = false
+  }
+}
+function normalizeSharedUsers(rows = []) {
+  shareUsers.value = (rows || []).map((row) => ({
+    user: row.user || row.value,
+    label: row.label || row.user || row.value,
+    canRead: row.read == null ? true : !!Number(row.read),
+    canWrite: !!Number(row.write || 0) || row.access === 'write',
+    canShare: !!Number(row.share || 0),
+  })).filter((row) => row.user)
+}
+function scheduleUserSearch() {
+  userSearchOpen.value = true
+  if (userSearchTimer) window.clearTimeout(userSearchTimer)
+  userSearchTimer = window.setTimeout(() => searchUsers(userQuery.value), 160)
+}
+async function searchUsers(txt = '') {
+  userSearchLoading.value = true
+  try {
+    const selected = shareDraftUser.value?.value
+    const existing = new Set(shareUsers.value.map((row) => row.user))
+    userOptions.value = (await call('expedition.api.action.search_users', {
+      txt,
+      limit: 8,
+    }) || []).filter((row) => row.value && (!existing.has(row.value) || row.value === selected))
+    userSearchOpen.value = true
+  } catch (e) {
+    console.warn('[expedition] user search failed', e)
+    userOptions.value = []
+  } finally {
+    userSearchLoading.value = false
+  }
+}
+function addSharedUser(user) {
+  if (!user?.value) return
+  shareDraftUser.value = user
+  userQuery.value = user.label || user.value
+  userOptions.value = []
+  userSearchOpen.value = false
+}
+function upsertSharedUser() {
+  const user = shareDraftUser.value
+  if (!user?.value || !shareDraftCanRead.value) return
+  const next = {
+    user: user.value,
+    label: user.label || user.value,
+    canRead: true,
+    canWrite: !!shareDraftCanWrite.value,
+    canShare: !!shareDraftCanShare.value,
+  }
+  const exists = shareUsers.value.some((row) => row.user === next.user)
+  shareUsers.value = exists
+    ? shareUsers.value.map((row) => (row.user === next.user ? next : row))
+    : [...shareUsers.value, next]
+  shareDraftUser.value = null
+  shareDraftCanRead.value = true
+  shareDraftCanWrite.value = false
+  shareDraftCanShare.value = false
+  userQuery.value = ''
+}
+function removeSharedUser(user) {
+  shareUsers.value = shareUsers.value.filter((row) => row.user !== user)
+}
+function updateShareFlag(user, key, value) {
+  shareUsers.value = shareUsers.value.map((row) =>
+    row.user === user ? { ...row, [key]: !!value } : row
+  ).filter((row) => row.canRead)
+}
+function editShareRow(row) {
+  shareDraftUser.value = { value: row.user, label: row.label || row.user }
+  userQuery.value = row.label || row.user
+  shareDraftCanRead.value = !!row.canRead
+  shareDraftCanWrite.value = !!row.canWrite
+  shareDraftCanShare.value = !!row.canShare
 }
 function toggleLayer(layerName, event) {
   layerStore.updateLayer(layerName, { enabled: event.target.checked ? 1 : 0 })
@@ -219,6 +451,9 @@ function onDocumentMouseDown(event) {
   const target = event.target
   if (event.target?.closest?.('.fb__floating-menu')) return
   if (target?.closest?.('.expedition__tl')) return
+  if (userSearchOpen.value && userPickerRoot.value && !userPickerRoot.value.contains(target)) {
+    userSearchOpen.value = false
+  }
   if (containsTarget(panelRoot.value, target)) return
   if (quickFilterFor.value && containsTarget(quickFilterPopupRoot.value, target)) return
 
@@ -235,6 +470,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
+  if (userSearchTimer) window.clearTimeout(userSearchTimer)
 })
 async function onPick(master) {
   await attachMaster(master)
@@ -256,25 +492,172 @@ onMounted(() => {
       console.error('[expedition] loadMasters failed', e)
     )
   }
+  if (mapStore.recent.length === 0) {
+    mapStore.refreshMaps().catch((e) =>
+      console.error('[expedition] refreshMaps failed', e)
+    )
+  }
 })
 watch(activeMapName, () => {
   if (layerStore.masters.length === 0) layerStore.loadMasters()
+  mapTitleDraft.value = mapStore.activeMap?.map?.title || ''
+  normalizeSharedUsers(mapStore.sharedUsers || [])
 })
+watch(
+  () => mapStore.activeMap?.map?.title,
+  (title) => { mapTitleDraft.value = title || '' },
+  { immediate: true }
+)
+watch(
+  () => mapStore.sharedUsers,
+  (rows) => { normalizeSharedUsers(rows || []) },
+  { deep: true, immediate: true }
+)
 
 defineExpose({})
 </script>
 
 <template>
-  <aside ref="panelRoot" class="lp" role="region" aria-label="Layers">
+  <aside ref="panelRoot" class="lp" role="region" aria-label="Map workspace">
     <header class="lp__header">
       <div class="lp__title-wrap">
-        <div class="lp__title">{{ mapStore.activeMap?.map?.title || 'Expedition' }}</div>
-        <div class="lp__subtitle">{{ activeLayers.length }} layers</div>
+        <div class="lp__title">{{ activeMap?.title || 'Untitled map' }}</div>
+        <div class="lp__subtitle">{{ activeSubtitle }}</div>
       </div>
-      <button class="lp__close" type="button" aria-label="Close layers" @click="$emit('close')">×</button>
+      <button
+        v-if="canEdit"
+        class="lp__save"
+        type="button"
+        :disabled="mapSaving"
+        title="Save map"
+        @click="saveActiveMap"
+      >
+        {{ mapSaving ? 'Saving' : 'Save' }}
+      </button>
+      <button class="lp__close" type="button" aria-label="Close map workspace" @click="$emit('close')">×</button>
     </header>
 
     <div class="lp__body">
+      <section class="lp__section lp__section--map">
+        <div class="lp__map-card">
+          <input
+            v-model="mapTitleDraft"
+            class="lp__map-title-input"
+            type="text"
+            :readonly="!canEdit"
+            aria-label="Map name"
+            @keydown.enter.prevent="saveActiveMap"
+          />
+          <div class="lp__map-actions">
+            <button type="button" class="lp__action lp__action--primary" @click="createOpen = !createOpen">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span>New</span>
+            </button>
+            <button v-if="canShare" type="button" class="lp__action" @click="shareOpen = !shareOpen">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12h8M16 8l4 4-4 4M4 4h8v16H4z" /></svg>
+              <span>Share</span>
+            </button>
+          </div>
+
+          <div v-if="createOpen" class="lp__subpanel">
+            <input
+              v-model="newMapTitle"
+              class="lp__picker-input"
+              type="text"
+              placeholder="Blank map name"
+              aria-label="Blank map name"
+              @keydown.enter.prevent="createBlankMap"
+            />
+            <label class="lp__check-row">
+              <input v-model="newMapPublic" type="checkbox" />
+              <span>Public</span>
+            </label>
+            <button type="button" class="lp__wide-primary" :disabled="mapSaving" @click="createBlankMap">
+              Create blank map
+            </button>
+          </div>
+
+          <div v-if="shareOpen && canShare" class="lp__subpanel">
+            <div class="lp__share-title">Share {{ activeMap?.title || 'this map' }} with</div>
+            <div class="lp__share-grid">
+              <div class="lp__share-head">User</div>
+              <div class="lp__share-head">Read</div>
+              <div class="lp__share-head">Write</div>
+              <div class="lp__share-head">Share</div>
+              <div class="lp__share-head"></div>
+
+              <div class="lp__share-person lp__share-person--everyone">Everyone</div>
+              <label class="lp__share-check"><input :checked="!!activeMap?.is_public" type="checkbox" @change="(e) => setEveryoneRead(e.target.checked)" /></label>
+              <label class="lp__share-check"><input :checked="activeMap?.is_public && activeMap?.public_access === 'Writable'" type="checkbox" @change="(e) => setEveryoneWrite(e.target.checked)" /></label>
+              <label class="lp__share-check"><input type="checkbox" disabled /></label>
+              <div></div>
+
+              <div ref="userPickerRoot" class="lp__user-picker">
+                <input
+                  v-model="userQuery"
+                  class="lp__share-input"
+                  type="text"
+                  placeholder="Begin typing for results."
+                  aria-label="Share with user"
+                  autocomplete="off"
+                  @focus="searchUsers(userQuery)"
+                  @input="scheduleUserSearch"
+                  @keydown.escape="userSearchOpen = false"
+                />
+                <div v-if="userSearchOpen" class="lp__user-pop">
+                  <button v-for="user in userOptions" :key="user.value" type="button" class="lp__user-option" @mousedown.prevent="addSharedUser(user)">
+                    <span class="lp__user-main">{{ user.label || user.value }}</span>
+                    <span v-if="user.description" class="lp__user-meta">{{ user.description }}</span>
+                  </button>
+                  <p v-if="!userOptions.length" class="lp__empty lp__empty--tight">
+                    {{ userSearchLoading ? 'Searching…' : 'No users found.' }}
+                  </p>
+                </div>
+              </div>
+              <label class="lp__share-check"><input v-model="shareDraftCanRead" type="checkbox" /></label>
+              <label class="lp__share-check"><input v-model="shareDraftCanWrite" type="checkbox" /></label>
+              <label class="lp__share-check"><input v-model="shareDraftCanShare" type="checkbox" /></label>
+              <button type="button" class="lp__add-share" :disabled="!shareDraftUser || !shareDraftCanRead" @click="upsertSharedUser">Add</button>
+
+              <template v-for="user in shareUsers" :key="user.user">
+                <button type="button" class="lp__share-person" @click="editShareRow(user)">{{ user.label || user.user }}</button>
+                <label class="lp__share-check"><input :checked="user.canRead" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canRead', e.target.checked)" /></label>
+                <label class="lp__share-check"><input :checked="user.canWrite" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canWrite', e.target.checked)" /></label>
+                <label class="lp__share-check"><input :checked="user.canShare" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canShare', e.target.checked)" /></label>
+                <button type="button" class="lp__remove-user" aria-label="Remove user" @click="removeSharedUser(user.user)">×</button>
+              </template>
+            </div>
+            <button type="button" class="lp__wide-primary" :disabled="mapSaving" @click="saveShares">
+              Update shares
+            </button>
+          </div>
+          <p v-if="mapError" class="lp__error">{{ mapError }}</p>
+        </div>
+      </section>
+
+      <section class="lp__section">
+        <button class="lp__section-toggle" type="button" @click="mapsOpen = !mapsOpen">
+          <span>Maps</span>
+          <span class="lp__chevron" :data-open="mapsOpen">▾</span>
+        </button>
+        <div v-if="mapsOpen" class="lp__maps-body">
+          <input v-model="mapQuery" type="text" class="lp__picker-input" placeholder="Search maps…" aria-label="Search maps" />
+          <ul v-if="filteredMaps.length" class="lp__list lp__map-list">
+            <li v-for="m in filteredMaps" :key="'m-' + m.name" class="lp__item lp__item--map">
+              <button type="button" class="lp__row lp__row--map" :class="{ 'lp__row--active': m.name === activeMapName }" @click="openMap(m.name)">
+                <span class="lp__map-swatch" :data-kind="basemapSwatchFor(m.basemap_style)" />
+                <span class="lp__row-main">
+                  <span class="lp__row-title">{{ m.title || m.name }}</span>
+                  <span class="lp__row-meta">{{ accessLabel(m) }}</span>
+                </span>
+                <span class="lp__access-dot" :data-kind="accessKind(m)" />
+              </button>
+            </li>
+          </ul>
+          <p v-else class="lp__empty">No maps found.</p>
+        </div>
+      </section>
+
       <!-- Templates — self-hides when there are no templates. Kept as
            a future-proof section: when public templates exist (or the
            user clones one), they surface here without panel rework. -->
@@ -527,6 +910,21 @@ defineExpose({})
 .lp__title-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .lp__title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lp__subtitle { font-size: 10px; color: rgba(230, 232, 236, 0.5); text-transform: uppercase; letter-spacing: 0.08em; }
+.lp__save {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.36);
+  background: rgba(59, 130, 246, 0.18);
+  color: #DBEAFE;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+}
+.lp__save:hover { background: rgba(59, 130, 246, 0.28); color: #fff; }
+.lp__save:disabled { opacity: 0.6; cursor: wait; }
 .lp__close {
   background: transparent; border: 0; color: rgba(230, 232, 236, 0.7);
   font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 5px;
@@ -636,7 +1034,274 @@ defineExpose({})
 }
 
 .lp__body { padding: 6px 0; overflow-x: hidden; overflow-y: auto; flex: 1; min-width: 0; }
-.lp__section { padding: 6px 8px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.lp__section { padding: 5px 8px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.lp__section--map { padding-top: 6px; }
+.lp__map-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.lp__map-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 6px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.26);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 8px;
+}
+.lp__map-title-input:focus { box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.62); }
+.lp__map-title-input[readonly] { color: rgba(230, 232, 236, 0.82); }
+.lp__map-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+.lp__action {
+  height: 26px;
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(230, 232, 236, 0.88);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lp__action:hover { background: rgba(255, 255, 255, 0.075); color: #fff; }
+.lp__action--primary {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.32);
+  color: #DBEAFE;
+}
+.lp__action svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lp__subpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 0;
+  background: transparent;
+  border: 0;
+}
+.lp__check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(230, 232, 236, 0.82);
+  font-size: 11px;
+}
+.lp__check-row input { accent-color: #3B82F6; }
+.lp__wide-primary {
+  width: 100%;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  background: #2563EB;
+  color: #fff;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.lp__wide-primary:hover { background: #3B82F6; }
+.lp__wide-primary:disabled { opacity: 0.62; cursor: wait; }
+.lp__segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.lp__segment-btn {
+  height: 23px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.64);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lp__segment-btn--on {
+  background: rgba(59, 130, 246, 0.22);
+  color: #DBEAFE;
+}
+.lp__maps-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 0;
+}
+.lp__map-list {
+  max-height: 178px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.lp__user-picker { position: relative; }
+.lp__user-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 35;
+  max-height: 146px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(11, 14, 20, 0.97);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+}
+.lp__user-option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 0;
+  background: transparent;
+  color: #E6E8EC;
+  padding: 6px 8px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.lp__user-option:hover { background: rgba(59, 130, 246, 0.14); }
+.lp__user-main,
+.lp__user-meta,
+.lp__share-user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp__user-main { font-size: 11px; }
+.lp__user-meta { font-size: 10px; color: rgba(230, 232, 236, 0.48); }
+.lp__share-title {
+  font-size: 10px;
+  color: rgba(230, 232, 236, 0.55);
+  padding: 2px 0 0;
+}
+.lp__share-grid {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) 34px 38px 38px 32px;
+  align-items: center;
+  gap: 4px;
+}
+.lp__share-head {
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 9.5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.lp__share-head:first-child { text-align: left; }
+.lp__share-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+}
+.lp__share-check input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: #3B82F6;
+}
+.lp__share-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  color: #E6E8EC;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+.lp__share-input:focus { border-color: rgba(59, 130, 246, 0.6); }
+.lp__add-share {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 130, 246, 0.34);
+  background: rgba(59, 130, 246, 0.18);
+  color: #DBEAFE;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lp__add-share:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+.lp__share-person {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+  font-size: 11px;
+  color: rgba(230, 232, 236, 0.88);
+  cursor: pointer;
+}
+.lp__share-person--everyone {
+  cursor: default;
+  font-weight: 600;
+  color: #E6E8EC;
+}
+.lp__share-person:hover:not(.lp__share-person--everyone) { color: #fff; }
+.lp__remove-user {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.46);
+  cursor: pointer;
+  font-size: 14px;
+}
+.lp__remove-user:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.lp__error {
+  margin: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
+  font-size: 11px;
+}
 
 /* Inline add-layer picker. The popover is in-flow (not absolute)
    so it doesn't compete with the panel's own scrollbar. The
@@ -747,6 +1412,14 @@ defineExpose({})
 }
 .lp__item:hover .lp__row { background: rgba(255, 255, 255, 0.05); }
 .lp__row--active { background: rgba(59, 130, 246, 0.10); box-shadow: inset 2px 0 0 #3B82F6; }
+.lp__row--map {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
 .lp__row--layer { cursor: default; }
 .lp__row--layer input[type="checkbox"] {
   width: 14px; height: 14px; margin: 0; flex: none; accent-color: #3B82F6;
@@ -875,6 +1548,22 @@ defineExpose({})
     linear-gradient(135deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0) 60%),
     linear-gradient(135deg, #3B5530 0%, #1E2A20 100%);
 }
+.lp__access-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+  background: rgba(230, 232, 236, 0.42);
+  box-shadow: 0 0 0 3px rgba(230, 232, 236, 0.05);
+}
+.lp__access-dot[data-kind="public"] {
+  background: #22C55E;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+.lp__access-dot[data-kind="shared"] {
+  background: #F59E0B;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+}
 
 .lp__swatch {
   width: 12px; height: 12px; border-radius: 3px; flex: none;
@@ -884,6 +1573,7 @@ defineExpose({})
 .lp__swatch-icon { width: 10px; height: 10px; fill: rgba(255, 255, 255, 0.92); }
 .lp__label { font-size: 12px; color: #E6E8EC; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .lp__empty { padding: 10px; font-size: 11px; color: rgba(230, 232, 236, 0.6); margin: 0; }
+.lp__empty--tight { padding: 7px 8px; }
 .lp__group { margin-bottom: 8px; }
 .lp__group:last-child { margin-bottom: 0; }
 .lp__group-label { font-size: 10px; color: rgba(230, 232, 236, 0.4); padding: 0 8px 4px; text-transform: lowercase; letter-spacing: 0.02em; }
@@ -895,6 +1585,10 @@ defineExpose({})
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 4px;
+  padding: 1px 0;
+}
+.lp__item--map {
+  display: block;
   padding: 1px 0;
 }
 </style>

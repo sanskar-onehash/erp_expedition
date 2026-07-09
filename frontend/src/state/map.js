@@ -29,13 +29,22 @@ export const useMapStore = defineStore('map', () => {
   const activeMap = ref(null)
   const templates = ref([])
   const recent = ref([])
+  const sharedUsers = ref([])
+
+  async function refreshMaps(search = '') {
+    recent.value = await call('expedition.api.map.list_for_user', {
+      include_public: 1,
+      search,
+    })
+    return recent.value
+  }
 
   async function bootstrap() {
     // Try the user's "recent" list first; if anything goes wrong (e.g.
     // a guest visitor where list_for_user returns 403) fall through to
     // the public templates so the canvas never lands empty.
     try {
-      recent.value = await call('expedition.api.map.list_for_user', { include_public: 1 })
+      await refreshMaps()
     } catch (e) {
       console.warn('[expedition] list_for_user unavailable; using templates', e)
       recent.value = []
@@ -97,6 +106,9 @@ export const useMapStore = defineStore('map', () => {
     // Refresh server-computed insights for this map. Fire-and-forget —
     // never block the canvas on insight fetch.
     insights.loadActiveFor(payload?.map?.name || name)
+    loadSharedUsers(payload?.map?.name || name).catch(() => {
+      sharedUsers.value = []
+    })
   }
 
   /** Clone a template map into the user's account. Switches to the clone. */
@@ -109,5 +121,78 @@ export const useMapStore = defineStore('map', () => {
     return dto
   }
 
-  return { activeMap, templates, recent, bootstrap, switchMap, cloneTemplate }
+  function currentViewport() {
+    const m = window.expeditionMap?.getMap?.()
+    if (!m) return null
+    const center = m.getCenter?.()
+    return {
+      center: center ? [center.lng, center.lat] : undefined,
+      zoom: m.getZoom?.(),
+      bearing: m.getBearing?.(),
+      pitch: m.getPitch?.(),
+    }
+  }
+
+  async function createBlankMap({ title, basemap_style, is_public = 0, public_access = 'Read Only' } = {}) {
+    const dto = await call('expedition.api.map.create_blank_map', {
+      title,
+      basemap_style,
+      is_public,
+      public_access,
+      viewport: currentViewport(),
+    })
+    await refreshMaps()
+    await switchMap(dto.name)
+    return dto
+  }
+
+  async function updateActiveMap(fields = {}) {
+    const name = activeMap.value?.map?.name
+    if (!name) throw new Error('No active map')
+    const dto = await call('expedition.api.map.update_map', {
+      name,
+      ...fields,
+      viewport: fields.viewport === undefined ? currentViewport() : fields.viewport,
+    })
+    activeMap.value = {
+      ...activeMap.value,
+      map: {
+        ...activeMap.value.map,
+        ...dto,
+      },
+    }
+    await refreshMaps()
+    return dto
+  }
+
+  async function loadSharedUsers(name = activeMap.value?.map?.name) {
+    if (!name) {
+      sharedUsers.value = []
+      return sharedUsers.value
+    }
+    sharedUsers.value = await call('expedition.api.map.get_shared_users', { name })
+    return sharedUsers.value
+  }
+
+  async function shareActiveMap(users) {
+    const name = activeMap.value?.map?.name
+    if (!name) throw new Error('No active map')
+    sharedUsers.value = await call('expedition.api.map.share_map', { name, users })
+    return sharedUsers.value
+  }
+
+  return {
+    activeMap,
+    templates,
+    recent,
+    sharedUsers,
+    bootstrap,
+    refreshMaps,
+    switchMap,
+    cloneTemplate,
+    createBlankMap,
+    updateActiveMap,
+    loadSharedUsers,
+    shareActiveMap,
+  }
 })

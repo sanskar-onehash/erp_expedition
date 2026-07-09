@@ -29,7 +29,7 @@ from typing import Any
 import frappe
 
 from expedition.api.icon import assert_icon_readable
-from expedition.api.permission import assert_source_read
+from expedition.api.permission import assert_map_read, assert_map_write, assert_source_read
 
 
 LAYOUT_FIELD_TYPES = {
@@ -1655,8 +1655,7 @@ def list_for_map(map_name: str) -> list[dict]:
     """
     if not frappe.has_permission("Expedition Layer", "read"):
         frappe.throw("Not permitted", frappe.PermissionError)
-    if not frappe.has_permission("Expedition Map", "read", doc=map_name):
-        frappe.throw("Not permitted to read this map", frappe.PermissionError)
+    assert_map_read(map_name)
 
     rows = frappe.get_all(
         "Expedition Layer",
@@ -1852,8 +1851,7 @@ def create(
     """
     if not frappe.has_permission("Expedition Layer", "create"):
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
-    if not frappe.has_permission("Expedition Map", "read", doc=map_name):
-        frappe.throw("Not permitted to read this map", frappe.PermissionError)
+    assert_map_write(map_name)
     assert_source_read(source_doctype)
     _assert_icons_readable(icon, group_config_json)
 
@@ -1917,10 +1915,11 @@ def update(layer_name: str, **fields) -> dict:
     latitude_field, longitude_field, filter_json, icon, heatmap,
     stroke_color, stroke_width, fill_opacity, sequence.
     """
-    if not frappe.has_permission("Expedition Layer", "write", doc=layer_name):
-        frappe.throw("Not permitted to update this layer", frappe.PermissionError)
-
     doc = frappe.get_doc("Expedition Layer", layer_name)
+    if doc.map:
+        assert_map_write(doc.map)
+    elif not frappe.has_permission("Expedition Layer", "write", doc=layer_name):
+        frappe.throw("Not permitted to update this layer", frappe.PermissionError)
     _assert_icons_readable(fields.get("icon"), fields.get("group_config_json"))
 
     allowed = {
@@ -1977,7 +1976,10 @@ def update(layer_name: str, **fields) -> dict:
 @frappe.whitelist()
 def delete(layer_name: str) -> dict:
     """Delete an Expedition Layer."""
-    if not frappe.has_permission("Expedition Layer", "delete", doc=layer_name):
+    map_name = frappe.db.get_value("Expedition Layer", layer_name, "map")
+    if map_name:
+        assert_map_write(map_name)
+    elif not frappe.has_permission("Expedition Layer", "delete", doc=layer_name):
         frappe.throw("Not permitted to delete this layer", frappe.PermissionError)
     frappe.delete_doc("Expedition Layer", layer_name, ignore_permissions=True)
     return {"deleted": layer_name}
@@ -1990,8 +1992,7 @@ def reorder(map_name: str, layer_names: list[str]) -> dict:
     """
     if not frappe.has_permission("Expedition Layer", "write"):
         frappe.throw("Not permitted", frappe.PermissionError)
-    if not frappe.has_permission("Expedition Map", "read", doc=map_name):
-        frappe.throw("Not permitted", frappe.PermissionError)
+    assert_map_write(map_name)
     seq = 1
     for n in layer_names:
         if not n:
@@ -2539,8 +2540,7 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
     """
     if not frappe.has_permission("Expedition Layer", "create"):
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
-    if not frappe.has_permission("Expedition Map", "write", doc=map_name):
-        frappe.throw("Not permitted to edit this map", frappe.PermissionError)
+    assert_map_write(map_name)
 
     master = frappe.get_doc("Expedition Layer", master_name)
     if master.map:

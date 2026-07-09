@@ -39,13 +39,16 @@ class ExpeditionMap(Document):
     def validate(self):
         # JSON fields must be valid JSON.
         # so we sanity-check parseability here so the API endpoints don't have to.
-        for field in ("filters_json", "summary_json", "viewport"):
+        for field in ("filters_json", "summary_json", "viewport", "access_overrides_json"):
             value = self.get(field)
             if value and isinstance(value, str):
                 try:
                     frappe.parse_json(value)
                 except Exception:
                     frappe.throw(f"{field} is not valid JSON")
+
+        if self.get("public_access") not in (None, "", "Read Only", "Writable"):
+            frappe.throw("public_access must be Read Only or Writable")
 
         if not self.owner_user and self.is_new():
             self.owner_user = frappe.session.user

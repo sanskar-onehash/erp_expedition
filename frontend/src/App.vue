@@ -96,9 +96,10 @@ const GLYPHS = {
   eyeOff: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l16 16',
 }
 
-// Top-left: just layers now (search moved to top-right).
+// Top-left: map workspace. The badge still shows enabled layers because
+// that is the most useful at-rest status for the active map.
 const tlButtons = computed(() => [
-  { id: 'layers', label: 'Layers', glyph: GLYPHS.layers, badge: enabledLayerCount.value || '' },
+  { id: 'layers', label: 'Map', glyph: GLYPHS.layers, badge: enabledLayerCount.value || '' },
 ])
 // Top-right split into two separate toolbars (different visual
 // groups) so a user can distinguish at a glance: search is on the
@@ -264,14 +265,14 @@ function fitToData(mode = 'visible') {
 }
 
 /**
- * Union every visible layer's cached bounds + the active map's
- * zones, then fit. Fires bounds fetches in parallel for any layer
+ * Fit enabled layer data first. Zones are only a fallback when there
+ * are no rendered/cached layer bounds. Fires bounds fetches in parallel for any layer
  * that isn't cached yet — the union waits for the slowest. On
  * total failure (no perms, network), falls back to the saved
  * viewport or a global envelope.
  */
 async function _fitAllBounds(m) {
-  const renderedEnv = _envelopeOf(_collectAllData({ includeZones: !layers.activeSearch }))
+  const renderedEnv = _envelopeOf(_collectAllData({ includeZones: false }))
   if (_fitEnvelope(m, renderedEnv)) return
   if (layers.activeSearch) return
 
@@ -292,7 +293,14 @@ async function _fitAllBounds(m) {
     if (b.west < west) west = b.west
     if (b.east > east) east = b.east
   }
-  // Union in zones (typically few rows, in-memory is fine).
+  if (isFinite(south)) {
+    m.fitBounds([[west, south], [east, north]], {
+      padding: 60, duration: 800, maxZoom: 14,
+    })
+    return
+  }
+
+  // Fall back to zones only when no layer data is available.
   const zones = []
   const activeMapName = mapStore.activeMap?.map?.name
   if (activeMapName) {
@@ -302,18 +310,8 @@ async function _fitAllBounds(m) {
     }
   }
   const zEnv = _envelopeOf(zones)
-  if (zEnv) {
-    if (zEnv.minY < south) south = zEnv.minY
-    if (zEnv.maxY > north) north = zEnv.maxY
-    if (zEnv.minX < west) west = zEnv.minX
-    if (zEnv.maxX > east) east = zEnv.maxX
-  }
-  if (isFinite(south)) {
-    m.fitBounds([[west, south], [east, north]], {
-      padding: 60, duration: 800, maxZoom: 14,
-    })
-    return
-  }
+  if (_fitEnvelope(m, zEnv)) return
+
   // No bounds in scope — fall back to saved viewport, then global.
   const v = mapStore.activeMap?.map?.viewport
   if (v?.center) {
@@ -329,7 +327,7 @@ async function _fitAllBounds(m) {
     <Basemap class="expedition__basemap" />
     <LoadingOverlay />
 
-    <!-- Left-edge panel (LayerPanel). Slides in from left. -->
+    <!-- Left-edge map workspace panel. Slides in from left. -->
     <Transition name="lp-slide">
       <div v-if="ui.leftPanel === 'layers'" class="expedition__left">
         <LayerPanel @close="ui.closeLeftPanel()" />

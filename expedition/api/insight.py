@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import frappe
 from frappe.utils import add_days, now_datetime
+from expedition.api.permission import assert_map_read
 
 
 INSIGHT_TTL_DAYS = 7
@@ -148,14 +149,7 @@ def get_active_for_map(map_name: str) -> list[dict]:
     private maps require read on the Expedition Map doc."""
     if not map_name or not frappe.db.exists("Expedition Map", map_name):
         frappe.throw(f"Unknown Expedition Map {map_name}", frappe.DoesNotExistError)
-    map_doc = frappe.get_doc("Expedition Map", map_name)
-    if not map_doc.is_public and not frappe.has_permission(
-        "Expedition Map", "read", doc=map_name
-    ):
-        frappe.throw(
-            f"Not permitted to read Expedition Map {map_name}",
-            frappe.PermissionError,
-        )
+    assert_map_read(map_name)
     return frappe.get_all(
         "Expedition Insight",
         filters={"map": map_name, "is_active": 1},

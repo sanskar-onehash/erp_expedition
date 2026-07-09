@@ -22,6 +22,8 @@
   "tab_sharing",
   "shared_section",
   "is_public",
+  "public_access",
+  "access_overrides_json",
   "owner_user",
   "owner_section",
 
@@ -108,6 +110,22 @@
    "label": "Public",
    "default": "0",
    "description": "If true, any logged-in user with the Expedition Map role can view."
+  },
+  {
+   "fieldname": "public_access",
+   "fieldtype": "Select",
+   "label": "Public Access",
+   "options": "Read Only\nWritable",
+   "default": "Read Only",
+   "depends_on": "eval:doc.is_public",
+   "description": "Default access for all users when this map is public."
+  },
+  {
+   "fieldname": "access_overrides_json",
+   "fieldtype": "Code",
+   "label": "Access Overrides",
+   "hidden": 1,
+   "description": "Serialized per-user access overrides managed by the Expedition canvas."
   },
   {
    "fieldname": "owner_user",

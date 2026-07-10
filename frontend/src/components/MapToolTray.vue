@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { useZonesStore } from '../state/zones.js'
@@ -8,6 +8,7 @@ import { shortcutLabel } from '../lib/keymaps.js'
 const ui = useUiStore()
 const mapStore = useMapStore()
 const zoneStore = useZonesStore()
+const layout = inject('expeditionLayout', null)
 const tray = ref(null)
 const styleOpen = ref(false)
 const editOpen = ref(false)
@@ -263,6 +264,32 @@ const puckStyle = computed(() => {
   }
 })
 
+const layoutCustomizing = computed(() => !!layout?.customizing?.value)
+function registerLayout(id) {
+  return (el) => layout?.registerLayoutItem?.(id, el)
+}
+function layoutStyle(id) {
+  return layout?.itemStyle?.(id) || {}
+}
+function layoutClasses(id) {
+  return {
+    'expedition__layout-item--dragging': layout?.dragId?.value === id,
+  }
+}
+function onLayoutPointerDown(id, event) {
+  layout?.onPointerDown?.(id, event)
+}
+function layoutLabel(id) {
+  return layout?.labels?.[id] || ''
+}
+function popoverStyle(id, dx = 48, dy = 0) {
+  const style = layoutStyle(id)
+  return {
+    left: `calc(${style.left || '12px'} + ${dx}px)`,
+    top: `calc(${style.top || '12px'} + ${dy}px)`,
+  }
+}
+
 function setEditColor(field, color) {
   edit.value = { ...edit.value, [field]: color }
 }
@@ -275,7 +302,15 @@ function commitDrawingColor(event) {
 
 <template>
   <div ref="tray" class="mtt chrome-hideable">
-    <div class="mtt__group" role="toolbar" aria-label="Map drawing tools">
+    <div
+      :ref="registerLayout('toolsPrimary')"
+      class="mtt__layout expedition__layout-item"
+      :class="layoutClasses('toolsPrimary')"
+      :style="layoutStyle('toolsPrimary')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('toolsPrimary', e)"
+    >
+      <div v-if="layoutCustomizing" class="expedition__layout-handle">{{ layoutLabel('toolsPrimary') }}</div>
+      <div class="mtt__group" role="toolbar" aria-label="Map drawing tools">
       <button
         type="button"
         class="mtt__btn"
@@ -336,8 +371,9 @@ function commitDrawingColor(event) {
         <span class="mtt__key" aria-hidden="true">{{ tool.shortcut }}</span>
       </button>
     </div>
+    </div>
 
-    <div v-if="shapeOpen" class="mtt__pop mtt__pop--shapes">
+    <div v-if="shapeOpen" class="mtt__pop mtt__pop--shapes" :style="popoverStyle('toolsPrimary', 48, 44)">
       <button
         v-for="shape in shapeTools"
         :key="shape.id"
@@ -354,7 +390,15 @@ function commitDrawingColor(event) {
       </button>
     </div>
 
-    <div class="mtt__group">
+    <div
+      :ref="registerLayout('toolsStyle')"
+      class="mtt__layout expedition__layout-item"
+      :class="layoutClasses('toolsStyle')"
+      :style="layoutStyle('toolsStyle')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('toolsStyle', e)"
+    >
+      <div v-if="layoutCustomizing" class="expedition__layout-handle">{{ layoutLabel('toolsStyle') }}</div>
+      <div class="mtt__group">
       <button type="button" class="mtt__btn" title="Drawing color" aria-label="Drawing color" @click="styleOpen = !styleOpen">
         <span class="mtt__swatch" :style="{ background: ui.drawingColor }" />
         <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('drawing-color') }}</span>
@@ -413,8 +457,9 @@ function commitDrawingColor(event) {
         <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('cancel-tool') }}</span>
       </button>
     </div>
+    </div>
 
-    <div v-if="styleOpen" class="mtt__pop mtt__pop--style">
+    <div v-if="styleOpen" class="mtt__pop mtt__pop--style" :style="popoverStyle('toolsStyle', 48, 0)">
       <div class="mtt__swatches">
         <button v-for="color in presets" :key="color" type="button" class="mtt__preset" :style="{ background: color }" @click="applyPreset(color)" />
       </div>
@@ -430,7 +475,7 @@ function commitDrawingColor(event) {
       </div>
     </div>
 
-    <div v-if="editOpen && selectedZone" class="mtt__pop mtt__pop--edit">
+    <div v-if="editOpen && selectedZone" class="mtt__pop mtt__pop--edit" :style="popoverStyle('toolsStyle', 48, 0)">
       <label class="mtt__field">
         <span>Name</span>
         <input v-model="edit.title" type="text" placeholder="Zone name" />
@@ -488,14 +533,10 @@ function commitDrawingColor(event) {
 
 <style scoped>
 .mtt {
-  position: absolute;
-  left: 12px;
-  top: 76px;
-  z-index: 24;
+  display: contents;
+}
+.mtt__layout {
   pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 .mtt__group {
   pointer-events: auto;
@@ -592,7 +633,7 @@ function commitDrawingColor(event) {
 }
 .mtt__pop {
   position: absolute;
-  left: 48px;
+  z-index: 46;
   pointer-events: auto;
   min-width: 156px;
   background: rgba(11, 14, 20, 0.88);
@@ -602,8 +643,8 @@ function commitDrawingColor(event) {
   backdrop-filter: blur(20px) saturate(160%);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
-.mtt__pop--style { top: 252px; width: 156px; }
-.mtt__pop--edit { top: 252px; min-width: 220px; }
+.mtt__pop--style { width: 156px; }
+.mtt__pop--edit { min-width: 220px; }
 .mtt__pop--tilt {
   top: 0;
   left: 48px;
@@ -611,7 +652,6 @@ function commitDrawingColor(event) {
   padding: 8px;
 }
 .mtt__pop--shapes {
-  top: 76px;
   min-width: auto;
   display: grid;
   grid-template-columns: repeat(3, 32px);

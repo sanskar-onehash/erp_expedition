@@ -13,6 +13,21 @@ const BLUR_LS_KEY = 'expedition.blurOnPanel'
 const PREFS_LS_KEY = 'expedition.prefs'
 const RECENT_MAX = 5
 const VALID_CURSOR_VALUES = new Set(['default', 'pointer', 'dot', 'circle', 'cross', 'crosshair'])
+const CHROME_LAYOUT_VERSION = 3
+const DEFAULT_CHROME_LAYOUT = {
+  map: { col: 0, row: 0, anchorX: 'start', anchorY: 'start' },
+  toolsPrimary: { col: 0, row: 5, anchorX: 'start', anchorY: 'start' },
+  toolsStyle: { col: 0, row: 24, anchorX: 'start', anchorY: 'start' },
+  search: { col: 4, row: 0, anchorX: 'end', anchorY: 'start' },
+  settings: { col: 0, row: 0, anchorX: 'end', anchorY: 'start' },
+  fit: { col: 0, row: 10, anchorX: 'end', anchorY: 'end' },
+  tilt: { col: 0, row: 5, anchorX: 'end', anchorY: 'end' },
+  layout: { col: 8, row: 0, anchorX: 'end', anchorY: 'end' },
+  visibility: { col: 4, row: 0, anchorX: 'end', anchorY: 'end' },
+  basemap: { col: 0, row: 0, anchorX: 'end', anchorY: 'end' },
+  coords: { col: 0, row: 0, anchorX: 'start', anchorY: 'end' },
+  legend: { col: 0, row: 0, anchorX: 'center', anchorY: 'end' },
+}
 
 // User-level preferences. Every key is a real personalization
 // setting — not a per-map state. Persisted to localStorage. `blurOnPanel`
@@ -42,9 +57,15 @@ const DEFAULT_PREFS = {
   // UI scale: 'xs' | 's' | 'm' (default) | 'lg' | 'xlg'.
   // Drives the size of floating toolbar buttons and similar chrome.
   toolbarSize: 'm',
+  chromeLayoutVersion: CHROME_LAYOUT_VERSION,
+  chromeLayout: DEFAULT_CHROME_LAYOUT,
   // Startup
   openRecentOnLaunch: true,
   showTemplatesOnEmpty: true,
+}
+
+function cloneDefaultPrefs() {
+  return JSON.parse(JSON.stringify(DEFAULT_PREFS))
 }
 
 function readLs(key, fallback) {
@@ -69,6 +90,7 @@ function writeLs(key, value) {
 
 export const useUiStore = defineStore('ui', () => {
   const commandKOpen = ref(false)
+  const layoutCustomizing = ref(false)
   const leftRailOpen = ref(true)
   const bottomDrawerOpen = ref(true)
   // Basemap style: a key into SKINS (e.g. 'ofm-liberty'). The legacy
@@ -264,7 +286,12 @@ export const useUiStore = defineStore('ui', () => {
 
   // User-level preferences (settings panel). Mirror blurOnPanel on
   // read so the two stay in sync. Persisted to localStorage.
-  const prefs = ref({ ...DEFAULT_PREFS, ...readLs(PREFS_LS_KEY, {}) })
+  const prefs = ref({ ...cloneDefaultPrefs(), ...readLs(PREFS_LS_KEY, {}) })
+  if (prefs.value.chromeLayoutVersion !== CHROME_LAYOUT_VERSION) {
+    prefs.value.chromeLayout = cloneDefaultPrefs().chromeLayout
+    prefs.value.chromeLayoutVersion = CHROME_LAYOUT_VERSION
+  }
+  prefs.value.chromeLayout = normalizeChromeLayout(prefs.value.chromeLayout)
   if (prefs.value.cursor === 'grab' || !VALID_CURSOR_VALUES.has(prefs.value.cursor)) {
     prefs.value = { ...prefs.value, cursor: 'crosshair' }
   }
@@ -272,11 +299,51 @@ export const useUiStore = defineStore('ui', () => {
   function setPref(key, value) {
     if (!(key in DEFAULT_PREFS)) return
     if (key === 'cursor' && !VALID_CURSOR_VALUES.has(value)) value = DEFAULT_PREFS.cursor
+    if (key === 'chromeLayout') value = normalizeChromeLayout(value)
+    if (key === 'chromeLayoutVersion') value = CHROME_LAYOUT_VERSION
     prefs.value = { ...prefs.value, [key]: value }
   }
   function resetSettings() {
-    prefs.value = { ...DEFAULT_PREFS }
+    prefs.value = cloneDefaultPrefs()
     blurOnPanel.value = DEFAULT_PREFS.blurOnPanel
+  }
+  function normalizeChromeLayout(layout) {
+    const next = {}
+    for (const [key, fallback] of Object.entries(DEFAULT_CHROME_LAYOUT)) {
+      const item = layout?.[key] || {}
+      next[key] = {
+        col: clampGridInt(item.col, fallback.col, -200, 200),
+        row: clampGridInt(item.row, fallback.row, -120, 120),
+        anchorX: ['start', 'center', 'end'].includes(item.anchorX) ? item.anchorX : fallback.anchorX,
+        anchorY: ['start', 'center', 'end'].includes(item.anchorY) ? item.anchorY : fallback.anchorY,
+      }
+    }
+    return next
+  }
+  function clampGridInt(value, fallback, min, max) {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return fallback
+    return Math.max(min, Math.min(max, Math.round(n)))
+  }
+  function setChromeLayoutItem(key, patch = {}) {
+    if (!(key in DEFAULT_CHROME_LAYOUT)) return
+    const current = prefs.value.chromeLayout?.[key] || DEFAULT_CHROME_LAYOUT[key]
+    const merged = normalizeChromeLayout({ ...prefs.value.chromeLayout, [key]: { ...current, ...patch } })
+    prefs.value = { ...prefs.value, chromeLayout: merged }
+  }
+  function resetChromeLayout() {
+    prefs.value = {
+      ...prefs.value,
+      chromeLayoutVersion: CHROME_LAYOUT_VERSION,
+      chromeLayout: normalizeChromeLayout(DEFAULT_CHROME_LAYOUT),
+    }
+  }
+  function setLayoutCustomizing(on) {
+    layoutCustomizing.value = !!on
+    if (layoutCustomizing.value) chromeHidden.value = false
+  }
+  function toggleLayoutCustomizing() {
+    setLayoutCustomizing(!layoutCustomizing.value)
   }
 
   // Map blur on panel open. Default ON (preferred default) — when a
@@ -308,6 +375,7 @@ export const useUiStore = defineStore('ui', () => {
   const chromeSnapshot = ref(null)
   function hideChrome() {
     if (chromeHidden.value) return
+    layoutCustomizing.value = false
     chromeSnapshot.value = {
       leftPanel: leftPanel.value,
       rightPanel: rightPanel.value,
@@ -493,6 +561,11 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     commandKOpen,
+    layoutCustomizing,
+    setLayoutCustomizing,
+    toggleLayoutCustomizing,
+    setChromeLayoutItem,
+    resetChromeLayout,
     leftRailOpen,
     bottomDrawerOpen,
     basemapSkins,

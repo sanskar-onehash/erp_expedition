@@ -10,7 +10,7 @@
  *
  * Phase 1 plan: ~/.claude-work/plans/quiet-canvas-quokka.md
  */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, provide } from 'vue'
 import { useMapStore } from './state/map.js'
 import { useUiStore } from './state/ui.js'
 import { useLayersStore } from './state/layers.js'
@@ -39,6 +39,35 @@ const ui = useUiStore()
 const layers = useLayersStore()
 const zoneStore = useZonesStore()
 const iconStore = useIconsStore()
+const chromeRoot = ref(null)
+const layoutItemEls = {}
+const layoutViewport = ref({ width: 0, height: 0 })
+const layoutItemSizes = ref({})
+const layoutDrag = ref(null)
+let _layoutResizeObserver = null
+let _layoutMeasureFrame = 0
+
+const LAYOUT_COLS = 24
+const LAYOUT_ROWS = 12
+const LAYOUT_GAP = 12
+const LAYOUT_MARGIN = 12
+const LAYOUT_STEP = 12
+const LAYOUT_ANCHOR = { start: 0, center: 0.5, end: 1 }
+const LAYOUT_LABELS = {
+  map: 'Map panel',
+  toolsPrimary: 'Draw and measure',
+  toolsStyle: 'Style and zone tools',
+  search: 'Search',
+  settings: 'Settings',
+  fit: 'Fit controls',
+  tilt: 'Reset tilt',
+  layout: 'Layout',
+  visibility: 'Hide UI',
+  basemap: 'Basemap',
+  coords: 'Coordinates',
+  legend: 'Legend',
+}
+const layoutDragId = computed(() => layoutDrag.value?.id || null)
 
 function onFitDataEvent(event) {
   fitToData(event?.detail?.mode || 'all')
@@ -54,6 +83,7 @@ function runShortcut(id) {
   else if (id === 'search') onToolbarTrigger('search')
   else if (id === 'settings') ui.toggleSettingsTab('map')
   else if (id === 'hide-ui') ui.toggleChrome()
+  else if (id === 'layout') ui.toggleLayoutCustomizing()
   else if (id === 'fit-all') onToolbarTrigger('fit-all')
   else if (id === 'fit-visible') onToolbarTrigger('fit-visible')
   else if (id === 'tilt-reset') onToolbarTrigger('tilt-reset')
@@ -91,6 +121,7 @@ function onGlobalKeydown(e) {
   if (e.key === '?') id = 'shortcuts'
   else if (key === 'm') id = 'layers'
   else if (key === 'h') id = 'hide-ui'
+  else if (key === 'l') id = 'layout'
   else if (key === 'b') id = 'basemap'
   else if (key === 'f') id = e.shiftKey ? 'fit-all' : 'fit-visible'
   else if (e.key === '0') id = 'tilt-reset'
@@ -122,6 +153,10 @@ function onWindowBlur() {
 }
 
 onMounted(async () => {
+  updateLayoutViewport()
+  window.addEventListener('resize', updateLayoutViewport)
+  _layoutResizeObserver = new ResizeObserver(scheduleMeasuredLayout)
+  if (chromeRoot.value) _layoutResizeObserver.observe(chromeRoot.value)
   await iconStore.loadIcons().catch((e) => {
     console.warn('[expedition] custom icons unavailable', e)
   })
@@ -133,6 +168,11 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateLayoutViewport)
+  window.removeEventListener('pointermove', onLayoutPointerMove)
+  window.removeEventListener('pointerup', onLayoutPointerUp)
+  if (_layoutMeasureFrame) window.cancelAnimationFrame(_layoutMeasureFrame)
+  _layoutResizeObserver?.disconnect?.()
   window.removeEventListener('expedition:fit-data', onFitDataEvent)
   document.removeEventListener('keydown', onGlobalKeydown, true)
   document.removeEventListener('keyup', onGlobalKeyup, true)
@@ -166,6 +206,7 @@ const GLYPHS = {
   // glyph but with a strikethrough line so the active/inactive states
   // read as the same icon, just struck through.
   eyeOff: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l16 16',
+  layout: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
 }
 
 // Top-left: map workspace. The badge still shows enabled layers because
@@ -206,6 +247,203 @@ const toolbarButtonSizes = { xs: 22, s: 28, m: 32, lg: 40, xlg: 48 }
 const chromeStyle = computed(() => {
   const size = toolbarButtonSizes[ui.prefs.toolbarSize || 'm'] || toolbarButtonSizes.m
   return { '--exp-layer-panel-left': `${size + 28}px` }
+})
+
+function updateLayoutViewport() {
+  const rect = chromeRoot.value?.getBoundingClientRect?.()
+  const next = {
+    width: rect?.width || window.innerWidth || 0,
+    height: rect?.height || window.innerHeight || 0,
+  }
+  if (next.width !== layoutViewport.value.width || next.height !== layoutViewport.value.height) {
+    layoutViewport.value = next
+  }
+  scheduleMeasuredLayout()
+}
+
+function registerLayoutItem(id, el) {
+  if (el) {
+    if (layoutItemEls[id] === el) return
+    layoutItemEls[id] = el
+    if (_layoutResizeObserver) _layoutResizeObserver.observe(el)
+  } else {
+    delete layoutItemEls[id]
+  }
+  scheduleMeasuredLayout()
+}
+
+function scheduleMeasuredLayout() {
+  if (_layoutMeasureFrame) return
+  _layoutMeasureFrame = window.requestAnimationFrame(() => {
+    _layoutMeasureFrame = 0
+    updateMeasuredLayout()
+  })
+}
+
+function updateMeasuredLayout() {
+  const next = {}
+  for (const [id, el] of Object.entries(layoutItemEls)) {
+    const rect = el?.getBoundingClientRect?.()
+    if (!rect) continue
+    next[id] = { width: rect.width || 0, height: rect.height || 0 }
+  }
+  if (sameLayoutSizes(layoutItemSizes.value, next)) return
+  layoutItemSizes.value = next
+}
+
+function sameLayoutSizes(a, b) {
+  const aKeys = Object.keys(a || {})
+  const bKeys = Object.keys(b || {})
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    const av = a[key] || {}
+    const bv = b[key] || {}
+    if (Math.round(av.width) !== Math.round(bv.width)) return false
+    if (Math.round(av.height) !== Math.round(bv.height)) return false
+  }
+  return true
+}
+
+function cellPoint(col, row) {
+  return {
+    x: LAYOUT_MARGIN + col * LAYOUT_STEP,
+    y: LAYOUT_MARGIN + row * LAYOUT_STEP,
+  }
+}
+
+function anchorWeight(value) {
+  return LAYOUT_ANCHOR[value] ?? 0
+}
+
+function clampLayoutPx(id, x, y, anchorX, anchorY) {
+  const size = layoutItemSizes.value[id] || { width: 0, height: 0 }
+  const rawLeft = x - size.width * anchorWeight(anchorX)
+  const rawTop = y - size.height * anchorWeight(anchorY)
+  const maxLeft = Math.max(LAYOUT_MARGIN, layoutViewport.value.width - LAYOUT_MARGIN - size.width)
+  const maxTop = Math.max(LAYOUT_MARGIN, layoutViewport.value.height - LAYOUT_MARGIN - size.height)
+  return {
+    left: Math.max(LAYOUT_MARGIN, Math.min(maxLeft, rawLeft)),
+    top: Math.max(LAYOUT_MARGIN, Math.min(maxTop, rawTop)),
+  }
+}
+
+function layoutItemStyle(id) {
+  const item = ui.prefs.chromeLayout?.[id]
+  const active = layoutDrag.value?.id === id ? layoutDrag.value.preview : null
+  const anchorX = active?.anchorX || item?.anchorX || 'start'
+  const anchorY = active?.anchorY || item?.anchorY || 'start'
+  const point = active || layoutPointFor(item?.col ?? 0, item?.row ?? 0, anchorX, anchorY)
+  return {
+    left: `${point.x}px`,
+    top: `${point.y}px`,
+    transform: `translate(${-anchorWeight(anchorX) * 100}%, ${-anchorWeight(anchorY) * 100}%)`,
+  }
+}
+
+function layoutPointFor(col, row, anchorX, anchorY) {
+  const fromLeft = LAYOUT_MARGIN + col * LAYOUT_STEP
+  const fromTop = LAYOUT_MARGIN + row * LAYOUT_STEP
+  return {
+    x: anchorX === 'end'
+      ? layoutViewport.value.width - fromLeft
+      : anchorX === 'center'
+        ? (layoutViewport.value.width / 2) + col * LAYOUT_STEP
+        : fromLeft,
+    y: anchorY === 'end'
+      ? layoutViewport.value.height - fromTop
+      : anchorY === 'center'
+        ? (layoutViewport.value.height / 2) + row * LAYOUT_STEP
+        : fromTop,
+  }
+}
+
+function layerPanelStyle() {
+  const anchor = layoutItemStyle('map')
+  const size = layoutItemSizes.value.map || { width: 40, height: 40 }
+  const panelW = 300
+  const leftPx = Number.parseFloat(anchor.left) || LAYOUT_MARGIN
+  const topPx = Number.parseFloat(anchor.top) || LAYOUT_MARGIN
+  const opensRight = leftPx + size.width + LAYOUT_GAP + panelW <= layoutViewport.value.width - LAYOUT_MARGIN
+  const left = opensRight
+    ? leftPx + size.width + LAYOUT_GAP
+    : Math.max(LAYOUT_MARGIN, leftPx - panelW - LAYOUT_GAP)
+  const top = Math.max(LAYOUT_MARGIN, Math.min(layoutViewport.value.height - 160, topPx))
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    bottom: `${LAYOUT_MARGIN}px`,
+  }
+}
+
+function layoutAnchorFor(col, row) {
+  const maxCol = Math.max(0, Math.round((layoutViewport.value.width - (LAYOUT_MARGIN * 2)) / LAYOUT_STEP))
+  const maxRow = Math.max(0, Math.round((layoutViewport.value.height - (LAYOUT_MARGIN * 2)) / LAYOUT_STEP))
+  return {
+    anchorX: col <= maxCol * 0.33 ? 'start' : col >= maxCol * 0.67 ? 'end' : 'center',
+    anchorY: row <= maxRow * 0.33 ? 'start' : row >= maxRow * 0.67 ? 'end' : 'center',
+  }
+}
+
+function gridCellFromPointer(event) {
+  const rect = chromeRoot.value?.getBoundingClientRect?.()
+  const localX = (event.clientX - (rect?.left || 0)) - LAYOUT_MARGIN
+  const localY = (event.clientY - (rect?.top || 0)) - LAYOUT_MARGIN
+  const rawCol = Math.max(0, Math.round(localX / LAYOUT_STEP))
+  const rawRow = Math.max(0, Math.round(localY / LAYOUT_STEP))
+  const maxCol = Math.max(0, Math.round((layoutViewport.value.width - (LAYOUT_MARGIN * 2)) / LAYOUT_STEP))
+  const maxRow = Math.max(0, Math.round((layoutViewport.value.height - (LAYOUT_MARGIN * 2)) / LAYOUT_STEP))
+  const screenCol = Math.min(maxCol, rawCol)
+  const screenRow = Math.min(maxRow, rawRow)
+  const anchor = layoutAnchorFor(screenCol, screenRow)
+  return {
+    col: anchor.anchorX === 'end' ? maxCol - screenCol : anchor.anchorX === 'center' ? screenCol - Math.round(maxCol / 2) : screenCol,
+    row: anchor.anchorY === 'end' ? maxRow - screenRow : anchor.anchorY === 'center' ? screenRow - Math.round(maxRow / 2) : screenRow,
+    ...anchor,
+  }
+}
+
+function previewForCell(cell) {
+  const point = layoutPointFor(cell.col, cell.row, cell.anchorX, cell.anchorY)
+  return { ...cell, x: point.x, y: point.y }
+}
+
+function onLayoutPointerDown(id, event) {
+  if (!ui.layoutCustomizing || event.button !== 0) return
+  if (id === 'layout' && event.target?.closest?.('button')) return
+  event.preventDefault()
+  event.stopPropagation()
+  const cell = gridCellFromPointer(event)
+  layoutDrag.value = { id, preview: previewForCell(cell) }
+  window.addEventListener('pointermove', onLayoutPointerMove)
+  window.addEventListener('pointerup', onLayoutPointerUp, { once: true })
+}
+
+function onLayoutPointerMove(event) {
+  if (!layoutDrag.value) return
+  event.preventDefault()
+  const cell = gridCellFromPointer(event)
+  layoutDrag.value = {
+    ...layoutDrag.value,
+    preview: previewForCell(cell),
+  }
+}
+
+function onLayoutPointerUp(event) {
+  window.removeEventListener('pointermove', onLayoutPointerMove)
+  const drag = layoutDrag.value
+  layoutDrag.value = null
+  if (!drag) return
+  const cell = gridCellFromPointer(event)
+  ui.setChromeLayoutItem(drag.id, cell)
+}
+
+provide('expeditionLayout', {
+  registerLayoutItem,
+  itemStyle: layoutItemStyle,
+  onPointerDown: onLayoutPointerDown,
+  labels: LAYOUT_LABELS,
+  customizing: computed(() => ui.layoutCustomizing),
+  dragId: layoutDragId,
 })
 
 // Reset-tilt: snap pitch and bearing back to a flat top-down view,
@@ -396,9 +634,11 @@ async function _fitAllBounds(m) {
 
 <template>
   <div
+    ref="chromeRoot"
     class="expedition"
     :class="{
       'expedition--chrome-hidden': ui.chromeHidden,
+      'expedition--layout-editing': ui.layoutCustomizing,
       'expedition--shortcut-hover': ui.shortcutAltDown,
       'expedition--shortcut-all': ui.shortcutHintsAll,
     }"
@@ -409,7 +649,7 @@ async function _fitAllBounds(m) {
 
     <!-- Left-edge map workspace panel. Slides in from left. -->
     <Transition name="lp-slide">
-      <div v-if="ui.leftPanel === 'layers'" class="expedition__left">
+      <div v-if="ui.leftPanel === 'layers'" class="expedition__left" :style="layerPanelStyle()">
         <LayerPanel @close="ui.closeLeftPanel()" />
       </div>
     </Transition>
@@ -417,15 +657,38 @@ async function _fitAllBounds(m) {
     <MapToolTray />
 
     <!-- Top-left toolbar: layers -->
-    <div class="expedition__tl">
+    <div
+      :ref="(el) => registerLayoutItem('map', el)"
+      class="expedition__tl expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'map' }"
+      :style="layoutItemStyle('map')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('map', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.map }}</div>
       <FloatingToolbar :buttons="tlButtons" @trigger="onToolbarTrigger" />
     </div>
 
     <!-- Top-right toolbars: search (separate group, on the left) +
          settings (separate group, pinned to the corner). A gap
          between them keeps the groups visually distinct. -->
-    <div class="expedition__tr">
+    <div
+      :ref="(el) => registerLayoutItem('search', el)"
+      class="expedition__tr expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'search' }"
+      :style="layoutItemStyle('search')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('search', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.search }}</div>
       <FloatingToolbar :buttons="trSearchButtons" @trigger="onToolbarTrigger" />
+    </div>
+    <div
+      :ref="(el) => registerLayoutItem('settings', el)"
+      class="expedition__tr expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'settings' }"
+      :style="layoutItemStyle('settings')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('settings', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.settings }}</div>
       <FloatingToolbar :buttons="trSettingsButtons" @trigger="onToolbarTrigger" />
     </div>
 
@@ -437,17 +700,71 @@ async function _fitAllBounds(m) {
          holds the eye-toggle on the LEFT and the basemap (Liberty)
          panel on the right. In chrome-hidden mode the eye pill is
          the only chrome element that stays mounted (dimmed). -->
-    <div class="expedition__br">
-      <div class="expedition__br-stack">
+    <div
+      :ref="(el) => registerLayoutItem('fit', el)"
+      class="expedition__br expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'fit' }"
+      :style="layoutItemStyle('fit')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('fit', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.fit }}</div>
         <FloatingToolbar :buttons="brFitButtons" @trigger="onToolbarTrigger" />
+    </div>
+    <div
+      :ref="(el) => registerLayoutItem('tilt', el)"
+      class="expedition__br expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'tilt' }"
+      :style="layoutItemStyle('tilt')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('tilt', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.tilt }}</div>
         <FloatingToolbar :buttons="brTiltButtons" @trigger="onToolbarTrigger" />
-        <div class="expedition__br-row">
+    </div>
           <div
-            class="expedition__br-eye"
-            :class="'expedition__br-eye--' + (ui.prefs.toolbarSize || 'm')"
-            role="toolbar"
-            aria-label="UI visibility"
-          >
+      :ref="(el) => registerLayoutItem('layout', el)"
+      class="expedition__br-eye expedition__layout-item expedition__layout-item--clickable"
+      :class="[
+        'expedition__br-eye--' + (ui.prefs.toolbarSize || 'm'),
+        { 'expedition__layout-item--dragging': layoutDrag?.id === 'layout' },
+      ]"
+      :style="layoutItemStyle('layout')"
+      role="toolbar"
+      aria-label="Layout customization"
+      @pointerdown.capture="(e) => onLayoutPointerDown('layout', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.layout }}</div>
+      <button
+        type="button"
+        class="expedition__br-eye-btn"
+        :class="{ 'expedition__br-eye-btn--active': ui.layoutCustomizing }"
+        :aria-label="ui.layoutCustomizing ? 'Finish customizing layout' : 'Customize layout'"
+        :title="ui.layoutCustomizing ? 'Finish customizing layout' : 'Customize layout'"
+        :aria-pressed="ui.layoutCustomizing ? 'true' : 'false'"
+        @click="ui.toggleLayoutCustomizing()"
+      >
+        <svg viewBox="0 0 24 24" class="expedition__br-eye-icon" aria-hidden="true">
+          <path
+            :d="GLYPHS.layout"
+            fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          />
+        </svg>
+        <span class="expedition__keycap" aria-hidden="true">{{ shortcutLabel('layout') }}</span>
+      </button>
+    </div>
+    <div
+      :ref="(el) => registerLayoutItem('visibility', el)"
+      class="expedition__br-eye expedition__br-eye--visibility expedition__layout-item"
+      :class="[
+        'expedition__br-eye--' + (ui.prefs.toolbarSize || 'm'),
+        { 'expedition__layout-item--dragging': layoutDrag?.id === 'visibility' },
+      ]"
+      :style="layoutItemStyle('visibility')"
+      role="toolbar"
+      aria-label="UI visibility"
+      @pointerdown.capture="(e) => onLayoutPointerDown('visibility', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.visibility }}</div>
             <button
               type="button"
               class="expedition__br-eye-btn"
@@ -467,20 +784,52 @@ async function _fitAllBounds(m) {
               <span class="expedition__keycap" aria-hidden="true">{{ shortcutLabel('hide-ui') }}</span>
             </button>
           </div>
-          <BasemapPanel />
-        </div>
-      </div>
+    <div
+      :ref="(el) => registerLayoutItem('basemap', el)"
+      class="expedition__br expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'basemap' }"
+      :style="layoutItemStyle('basemap')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('basemap', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.basemap }}</div>
+      <BasemapPanel />
     </div>
 
     <!-- Bottom-left: lat/lng + zoom readout. Sits clear of MapLibre's scale
          bar (which lives at the very bottom-left). -->
-    <div class="expedition__bl">
+    <div
+      :ref="(el) => registerLayoutItem('coords', el)"
+      class="expedition__bl expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'coords' }"
+      :style="layoutItemStyle('coords')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('coords', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.coords }}</div>
       <CoordReadout />
     </div>
 
     <!-- Bottom-center: legend of enabled layers (hidden when empty). -->
-    <div class="expedition__bc">
+    <div
+      :ref="(el) => registerLayoutItem('legend', el)"
+      class="expedition__bc expedition__layout-item"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'legend' }"
+      :style="layoutItemStyle('legend')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('legend', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.legend }}</div>
       <Legend />
+    </div>
+
+    <div v-if="ui.layoutCustomizing" class="expedition__layout-overlay" aria-hidden="true">
+      <span
+        v-for="n in LAYOUT_ROWS * LAYOUT_COLS"
+        :key="n"
+        class="expedition__layout-cell"
+      />
+    </div>
+    <div v-if="ui.layoutCustomizing" class="expedition__layout-actions">
+      <button type="button" class="expedition__layout-action" @click="ui.resetChromeLayout()">Reset</button>
+      <button type="button" class="expedition__layout-action expedition__layout-action--primary" @click="ui.setLayoutCustomizing(false)">Done</button>
     </div>
 
     <MapPopup />
@@ -596,6 +945,107 @@ async function _fitAllBounds(m) {
   position: absolute;
   pointer-events: none;
   z-index: 20;
+}
+.expedition__layout-item {
+  position: absolute;
+  right: auto;
+  bottom: auto;
+  transform: none;
+  z-index: 22;
+  transition: left 160ms cubic-bezier(0.16, 1, 0.3, 1), top 160ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 120ms ease;
+}
+.expedition__layout-handle {
+  display: none;
+}
+.expedition--layout-editing .expedition__layout-item {
+  pointer-events: auto;
+  cursor: grab;
+  border-radius: 10px;
+  outline: 1px solid rgba(147, 197, 253, 0.72);
+  background: rgba(8, 10, 15, 0.20);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.10), 0 12px 34px rgba(0, 0, 0, 0.32);
+}
+.expedition--layout-editing .expedition__layout-item > :not(.expedition__layout-handle) {
+  pointer-events: none;
+}
+.expedition--layout-editing .expedition__layout-item--clickable > :not(.expedition__layout-handle) {
+  pointer-events: auto;
+}
+.expedition--layout-editing .expedition__layout-item--dragging {
+  cursor: grabbing;
+  transition: none;
+  z-index: 45;
+  outline-color: #93C5FD;
+  box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.18), 0 18px 46px rgba(0, 0, 0, 0.48);
+}
+.expedition--layout-editing .expedition__layout-handle {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  right: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #BFDBFE;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.expedition__layout-overlay {
+  position: absolute;
+  inset: 12px;
+  z-index: 18;
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  grid-template-rows: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  pointer-events: none;
+}
+.expedition__layout-cell {
+  border: 1px dashed rgba(147, 197, 253, 0.24);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.035);
+}
+.expedition__layout-actions {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(11, 14, 20, 0.84);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+}
+.expedition__layout-action {
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 11px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #E6E8EC;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.expedition__layout-action:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+.expedition__layout-action--primary {
+  background: rgba(59, 130, 246, 0.30);
+  color: #DBEAFE;
+}
+.expedition__layout-action--primary:hover {
+  background: rgba(59, 130, 246, 0.42);
 }
 .expedition__tl { top: 12px; left: 12px; }
 /* Top-right is now a flex row of two toolbars: search sits to the
@@ -735,6 +1185,11 @@ async function _fitAllBounds(m) {
   transform: translateX(-50%);
 }
 .expedition__bc > * { pointer-events: auto; }
+.expedition__layout-item {
+  right: auto;
+  bottom: auto;
+  transform: none;
+}
 
 /* Settings modal — the UserSettings component owns its own
    fixed-position overlay (click backdrop to dismiss). We just
@@ -760,14 +1215,9 @@ async function _fitAllBounds(m) {
    CommandPalette) are wrapped in .chrome-hideable spans and
    hidden via the unscoped <style> block below — scoped CSS can't
    reach them. */
-.expedition--chrome-hidden .expedition__tl,
-.expedition--chrome-hidden .expedition__tr,
-.expedition--chrome-hidden .expedition__cr,
-.expedition--chrome-hidden .expedition__bc,
+.expedition--chrome-hidden .expedition__layout-item:not(.expedition__br-eye--visibility):not(.expedition__bl),
 .expedition--chrome-hidden .expedition__left,
-.expedition--chrome-hidden .expedition__right,
-.expedition--chrome-hidden .expedition__br > .expedition__br-stack > .expedition__br-row > :not(.expedition__br-eye),
-.expedition--chrome-hidden .expedition__br > .expedition__br-stack > :not(.expedition__br-row) {
+.expedition--chrome-hidden .expedition__right {
   opacity: 0;
   pointer-events: none;
   transition: opacity 220ms ease;
@@ -776,11 +1226,11 @@ async function _fitAllBounds(m) {
    to not register as chrome, high enough that the user can find it.
    transition matches the 220ms used elsewhere for symmetric fade
    in / out. */
-.expedition--chrome-hidden .expedition__br-eye {
+.expedition--chrome-hidden .expedition__br-eye--visibility {
   opacity: 0.22;
   transition: opacity 220ms ease;
 }
-.expedition--chrome-hidden .expedition__br-eye:hover {
+.expedition--chrome-hidden .expedition__br-eye--visibility:hover {
   opacity: 0.7;
 }
 
@@ -810,6 +1260,56 @@ async function _fitAllBounds(m) {
      them globally when chrome-hidden is on. Scoped rules above
      cover everything else. -->
 <style>
+.expedition .expedition__layout-item {
+  position: absolute;
+  right: auto;
+  bottom: auto;
+  transform: none;
+  z-index: 22;
+  transition: left 160ms cubic-bezier(0.16, 1, 0.3, 1), top 160ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 120ms ease;
+}
+.expedition .expedition__layout-handle {
+  display: none;
+}
+.expedition.expedition--layout-editing .expedition__layout-item {
+  pointer-events: auto;
+  cursor: grab;
+  border-radius: 10px;
+  outline: 1px solid rgba(147, 197, 253, 0.72);
+  background: rgba(8, 10, 15, 0.20);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.10), 0 12px 34px rgba(0, 0, 0, 0.32);
+}
+.expedition.expedition--layout-editing .expedition__layout-item > :not(.expedition__layout-handle) {
+  pointer-events: none;
+}
+.expedition.expedition--layout-editing .expedition__layout-item--clickable > :not(.expedition__layout-handle) {
+  pointer-events: auto;
+}
+.expedition.expedition--layout-editing .expedition__layout-item--dragging {
+  cursor: grabbing;
+  transition: none;
+  z-index: 45;
+  outline-color: #93C5FD;
+  box-shadow: 0 0 0 5px rgba(59, 130, 246, 0.18), 0 18px 46px rgba(0, 0, 0, 0.48);
+}
+.expedition.expedition--layout-editing .expedition__layout-handle {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  right: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #BFDBFE;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
 .expedition--chrome-hidden .chrome-hideable {
   opacity: 0;
   pointer-events: none;

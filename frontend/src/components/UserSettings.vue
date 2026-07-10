@@ -150,6 +150,7 @@ const groups = computed(() => [
           { value: 'xlg', label: 'XL' },
         ],
       },
+      { kind: 'layout' },
     ],
   },
   {
@@ -326,10 +327,40 @@ function resetAll() {
       distanceUnits: 'km',
       cursor: 'crosshair',
       toolbarSize: 'm',
+      chromeLayoutVersion: 3,
+      chromeLayout: {
+        map: { col: 0, row: 0, anchorX: 'start', anchorY: 'start' },
+        toolsPrimary: { col: 0, row: 5, anchorX: 'start', anchorY: 'start' },
+        toolsStyle: { col: 0, row: 24, anchorX: 'start', anchorY: 'start' },
+        search: { col: 4, row: 0, anchorX: 'end', anchorY: 'start' },
+        settings: { col: 0, row: 0, anchorX: 'end', anchorY: 'start' },
+        fit: { col: 0, row: 10, anchorX: 'end', anchorY: 'end' },
+        tilt: { col: 0, row: 5, anchorX: 'end', anchorY: 'end' },
+        layout: { col: 8, row: 0, anchorX: 'end', anchorY: 'end' },
+        visibility: { col: 4, row: 0, anchorX: 'end', anchorY: 'end' },
+        basemap: { col: 0, row: 0, anchorX: 'end', anchorY: 'end' },
+        coords: { col: 0, row: 0, anchorX: 'start', anchorY: 'end' },
+        legend: { col: 0, row: 0, anchorX: 'center', anchorY: 'end' },
+      },
       openRecentOnLaunch: true,
       showTemplatesOnEmpty: true,
     }
   })
+}
+
+function startLayoutCustomize() {
+  emit('close')
+  ui.setLayoutCustomizing(true)
+}
+
+function resetLayoutPreference() {
+  ui.resetChromeLayout()
+  if (draft.value) {
+    draft.value = {
+      ...draft.value,
+      chromeLayout: JSON.parse(JSON.stringify(ui.prefs.chromeLayout)),
+    }
+  }
 }
 
 // Control handlers — write into the draft only. The watcher above
@@ -590,6 +621,14 @@ function registerRef(key, kind, el) {
                   >{{ o.label }}</button>
                 </div>
                 <span v-if="item.help" class="us__row-help">{{ item.help }}</span>
+              </template>
+              <template v-else-if="item.kind === 'layout'">
+                <span class="us__row-title">Map layout</span>
+                <div class="us__layout-actions">
+                  <button type="button" class="us__mini-btn" @click="startLayoutCustomize">Customize</button>
+                  <button type="button" class="us__mini-btn us__mini-btn--ghost" @click="resetLayoutPreference">Reset</button>
+                </div>
+                <span class="us__row-help">Move map controls on a snapped grid with fixed spacing.</span>
               </template>
             </div>
           </template>
@@ -979,6 +1018,34 @@ function registerRef(key, kind, el) {
 .us__chip--active {
   background: rgba(59, 130, 246, 0.18);
   color: #fff;
+}
+.us__layout-actions {
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.us__mini-btn {
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.20);
+  color: #DBEAFE;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.us__mini-btn:hover {
+  background: rgba(59, 130, 246, 0.30);
+  color: #fff;
+}
+.us__mini-btn--ghost {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(230, 232, 236, 0.82);
+}
+.us__mini-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.11);
 }
 
 .us__select-pop {

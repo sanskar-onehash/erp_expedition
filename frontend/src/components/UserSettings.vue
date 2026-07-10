@@ -20,6 +20,7 @@
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useUiStore } from '../state/ui.js'
+import { SHORTCUTS, formatShortcut } from '../lib/keymaps.js'
 
 const ui = useUiStore()
 
@@ -152,6 +153,11 @@ const groups = computed(() => [
     ],
   },
   {
+    key: 'shortcuts',
+    title: 'Shortcuts',
+    items: [],
+  },
+  {
     key: 'startup',
     title: 'Startup',
     items: [
@@ -167,6 +173,19 @@ const groups = computed(() => [
 const activeGroup = computed(() =>
   groups.value.find((g) => g.key === activeKey.value) || groups.value[0]
 )
+
+const shortcutGroups = computed(() => {
+  const out = []
+  for (const shortcut of SHORTCUTS) {
+    let group = out.find((item) => item.title === shortcut.group)
+    if (!group) {
+      group = { title: shortcut.group, items: [] }
+      out.push(group)
+    }
+    group.items.push(shortcut)
+  }
+  return out
+})
 
 // Subset of prefs that should mirror to live ui state immediately
 // (visible through the backdrop). Map defaults (defaultZoom,
@@ -190,8 +209,12 @@ watch(() => props.open, (isOpen) => {
   if (isOpen) {
     snapshot.value = JSON.parse(JSON.stringify(ui.prefs))
     draft.value = JSON.parse(JSON.stringify(ui.prefs))
-    activeKey.value = groups.value[0]?.key || null
+    activeKey.value = ui.settingsInitialTab || groups.value[0]?.key || null
   }
+})
+
+watch(() => [ui.settingsInitialTab, ui.settingsTabRequest], ([tab]) => {
+  if (props.open && tab) activeKey.value = tab
 })
 
 // Live preview — whenever the draft changes, push the previewable
@@ -453,6 +476,20 @@ function registerRef(key, kind, el) {
           </template>
 
           <!-- Other sections: walk the items and render the right control. -->
+          <template v-else-if="activeGroup.key === 'shortcuts'">
+            <div class="us__shortcut-help">Hold Alt and hover a front button to reveal its shortcut. Hold Shift + Alt to reveal all visible front shortcuts.</div>
+            <div v-for="group in shortcutGroups" :key="group.title" class="us__shortcut-group">
+              <div class="us__shortcut-group-title">{{ group.title }}</div>
+              <div v-for="shortcut in group.items" :key="shortcut.id" class="us__shortcut-row">
+                <div class="us__shortcut-copy">
+                  <span class="us__shortcut-name">{{ shortcut.label }}</span>
+                  <span class="us__shortcut-desc">{{ shortcut.description }}</span>
+                </div>
+                <span class="us__shortcut-keys">{{ formatShortcut(shortcut) }}</span>
+              </div>
+            </div>
+          </template>
+
           <template v-else>
             <div
               v-for="item in activeGroup.items"
@@ -804,6 +841,63 @@ function registerRef(key, kind, el) {
   color: rgba(230, 232, 236, 0.5);
   margin-top: -2px;
   line-height: 1.4;
+}
+.us__shortcut-help {
+  margin: 4px 10px 10px;
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.us__shortcut-group {
+  margin: 8px 4px 12px;
+}
+.us__shortcut-group-title {
+  padding: 0 6px 5px;
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.us__shortcut-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+.us__shortcut-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.us__shortcut-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.us__shortcut-name {
+  color: rgba(230, 232, 236, 0.9);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.us__shortcut-desc {
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.us__shortcut-keys {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
 }
 .us__switch-label {
   display: flex; align-items: center; gap: 8px;

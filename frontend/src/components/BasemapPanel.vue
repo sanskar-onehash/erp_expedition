@@ -12,6 +12,7 @@ import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { getSkin, DEFAULT_SKIN_ID } from '../api/skins.js'
 import { call } from '../api/client.js'
+import { shortcutLabel } from '../lib/keymaps.js'
 
 // Hover-to-preview delay. Fires 250ms after the cursor enters a cell so
 // brushing past a card en route to another one doesn't trigger a
@@ -99,9 +100,16 @@ function onDocClick(e) {
   if (!open.value) return
   if (rootEl.value && !rootEl.value.contains(e.target)) close()
 }
-onMounted(() => document.addEventListener('mousedown', onDocClick))
+function onShortcut(event) {
+  if (event?.detail?.id === 'basemap') toggle()
+}
+onMounted(() => {
+  document.addEventListener('mousedown', onDocClick)
+  window.addEventListener('expedition:shortcut', onShortcut)
+})
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocClick)
+  window.removeEventListener('expedition:shortcut', onShortcut)
   clearPendingPreview()
 })
 
@@ -117,6 +125,7 @@ defineExpose({ open, close, toggle })
         <path d="M3 12l9 4 9-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" opacity="0.7"/>
         <path d="M3 17l9 4 9-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" opacity="0.4"/>
       </svg>
+      <span class="bp__key" aria-hidden="true">{{ shortcutLabel('basemap') }}</span>
     </button>
     <div v-if="open" class="bp__popover" role="dialog" aria-label="Basemap picker">
       <div class="bp__head">
@@ -173,6 +182,7 @@ defineExpose({ open, close, toggle })
 .bp--xlg { --ft-size: 48px; --ft-icon: 20px; }
 
 .bp__trigger {
+  position: relative;
   width: var(--ft-size, 32px);
   height: var(--ft-size, 32px);
   display: flex; align-items: center; justify-content: center;
@@ -190,6 +200,27 @@ defineExpose({ open, close, toggle })
   width: var(--ft-icon, 16px);
   height: var(--ft-icon, 16px);
   flex: none;
+}
+.bp__key {
+  position: absolute;
+  right: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(50%) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(8, 10, 15, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.38);
+  transition: opacity 80ms ease, transform 80ms ease;
+  z-index: 3;
 }
 .bp__popover {
   position: absolute;

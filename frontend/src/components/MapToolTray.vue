@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { useZonesStore } from '../state/zones.js'
+import { shortcutLabel } from '../lib/keymaps.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -27,9 +28,9 @@ const shapeTools = [
 ]
 
 const actionTools = computed(() => [
-  { id: 'select', label: 'Select / pan', glyph: 'M5 4l10 16 2-7 6-2L5 4z' },
-  { id: 'measure-line', label: 'Measure distance', glyph: 'M4 19L19 4 M7 16l1 1 M10 13l1 1 M13 10l1 1 M16 7l1 1' },
-  { id: 'measure-area', label: 'Measure area', glyph: 'M6 7l9-3 5 8-4 8-10-2-2-8z' },
+  { id: 'select', label: 'Select / pan', glyph: 'M5 4l10 16 2-7 6-2L5 4z', shortcut: shortcutLabel('select') },
+  { id: 'measure-line', label: 'Measure distance', glyph: 'M4 19L19 4 M7 16l1 1 M10 13l1 1 M13 10l1 1 M16 7l1 1', shortcut: shortcutLabel('measure-line') },
+  { id: 'measure-area', label: 'Measure area', glyph: 'M6 7l9-3 5 8-4 8-10-2-2-8z', shortcut: shortcutLabel('measure-area') },
 ])
 const presets = ['#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#06B6D4', '#F97316', '#84CC16', '#EF4444', '#6366F1', '#14B8A6', '#A855F7']
 const selectedZone = computed(() => ui.selectedZone)
@@ -55,11 +56,13 @@ watch(selectedZone, (zone) => {
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown, true)
   document.addEventListener('keydown', onDocumentKeyDown)
+  window.addEventListener('expedition:shortcut', onShortcut)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown, true)
   document.removeEventListener('keydown', onDocumentKeyDown)
+  window.removeEventListener('expedition:shortcut', onShortcut)
 })
 
 function closeEditPanel() {
@@ -84,6 +87,35 @@ function onDocumentPointerDown(event) {
 
 function onDocumentKeyDown(event) {
   if (event.key === 'Escape') closePopovers({ clearZone: true })
+}
+
+function onShortcut(event) {
+  const id = event?.detail?.id
+  if (id === 'select') trigger('select')
+  else if (id === 'draw-shape') startSelectedShape()
+  else if (id === 'choose-shape') {
+    styleOpen.value = false
+    tiltOpen.value = false
+    shapeOpen.value = !shapeOpen.value
+  } else if (id === 'measure-line') trigger('measure-line')
+  else if (id === 'measure-area') trigger('measure-area')
+  else if (id === 'drawing-color') {
+    shapeOpen.value = false
+    tiltOpen.value = false
+    styleOpen.value = !styleOpen.value
+  } else if (id === 'zone-edit') toggleZoneEditMode()
+  else if (id === 'tilt-rotate') {
+    shapeOpen.value = false
+    styleOpen.value = false
+    tiltOpen.value = !tiltOpen.value
+  } else if (id === 'undo-vertex' && ui.drawMode !== 'off' && ui.draftVertices.length) {
+    ui.undoDraftVertex()
+  } else if (id === 'finish-drawing' && ui.drawMode !== 'off') {
+    finishDrawing()
+  } else if (id === 'cancel-tool') {
+    clearDrawing()
+    closePopovers({ clearZone: true })
+  }
 }
 
 function active(id) {
@@ -255,6 +287,7 @@ function commitDrawingColor(event) {
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M5 4l10 16 2-7 6-2L5 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('select') }}</span>
       </button>
 
       <div class="mtt__shape">
@@ -269,6 +302,7 @@ function commitDrawingColor(event) {
           <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
             <path :d="activeShape.glyph" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
+          <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('draw-shape') }}</span>
         </button>
         <button
           type="button"
@@ -282,6 +316,7 @@ function commitDrawingColor(event) {
           <svg viewBox="0 0 12 12" aria-hidden="true">
             <path d="M4.5 3L7.5 6L4.5 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
+          <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('choose-shape') }}</span>
         </button>
       </div>
 
@@ -298,6 +333,7 @@ function commitDrawingColor(event) {
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path :d="tool.glyph" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ tool.shortcut }}</span>
       </button>
     </div>
 
@@ -321,6 +357,7 @@ function commitDrawingColor(event) {
     <div class="mtt__group">
       <button type="button" class="mtt__btn" title="Drawing color" aria-label="Drawing color" @click="styleOpen = !styleOpen">
         <span class="mtt__swatch" :style="{ background: ui.drawingColor }" />
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('drawing-color') }}</span>
       </button>
       <button
         type="button"
@@ -334,12 +371,14 @@ function commitDrawingColor(event) {
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M5 6h14v12H5z M8 9h8v6H8z M4 4l3 3 M20 4l-3 3 M4 20l3-3 M20 20l-3-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('zone-edit') }}</span>
       </button>
       <div class="mtt__tilt-wrap">
         <button type="button" class="mtt__btn" title="Tilt / rotate" aria-label="Tilt / rotate" @click="tiltOpen = !tiltOpen">
           <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
             <path d="M12 14a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M12 14v5 M8 19h8 M5 12h2 M17 12h2 M12 5V3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
+          <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('tilt-rotate') }}</span>
         </button>
         <div v-if="tiltOpen" class="mtt__pop mtt__pop--tilt">
           <div ref="tiltPad" class="mtt__tilt" @dblclick.prevent="resetTilt">
@@ -359,16 +398,19 @@ function commitDrawingColor(event) {
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M9 7H4v5 M4 12a8 8 0 1 0 2.3-5.7L4 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('undo-vertex') }}</span>
       </button>
       <button v-if="ui.drawMode !== 'off'" type="button" class="mtt__btn" title="Finish drawing" aria-label="Finish drawing" @click="finishDrawing">
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M5 12l4 4L19 6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('finish-drawing') }}</span>
       </button>
       <button v-if="ui.drawMode !== 'off'" type="button" class="mtt__btn" title="Cancel tool" aria-label="Cancel tool" @click="clearDrawing">
         <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
         </svg>
+        <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('cancel-tool') }}</span>
       </button>
     </div>
 
@@ -468,6 +510,7 @@ function commitDrawingColor(event) {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.32);
 }
 .mtt__btn {
+  position: relative;
   width: 32px;
   height: 32px;
   display: flex;
@@ -483,6 +526,27 @@ function commitDrawingColor(event) {
 .mtt__btn--active { background: rgba(59, 130, 246, 0.20); color: #93C5FD; }
 .mtt__btn:disabled { opacity: 0.35; cursor: default; }
 .mtt__icon { width: 17px; height: 17px; }
+.mtt__key {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(8, 10, 15, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.38);
+  transition: opacity 80ms ease, transform 80ms ease;
+  z-index: 6;
+}
 .mtt__shape {
   position: relative;
   display: grid;
@@ -493,6 +557,7 @@ function commitDrawingColor(event) {
   border-bottom-right-radius: 5px;
 }
 .mtt__shape-more {
+  position: relative;
   width: 32px;
   height: 12px;
   display: flex;

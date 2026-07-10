@@ -201,9 +201,35 @@ export const useUiStore = defineStore('ui', () => {
   // Settings popover (top-right cog). Distinct from a panel because it
   // doesn't slide in from an edge; it anchors to its trigger.
   const settingsOpen = ref(false)
+  const settingsInitialTab = ref(null)
+  const settingsTabRequest = ref(0)
   function openSettings() { settingsOpen.value = true }
+  function openSettingsTab(tab) {
+    settingsInitialTab.value = tab || null
+    settingsTabRequest.value += 1
+    settingsOpen.value = true
+  }
   function closeSettings() { settingsOpen.value = false }
   function toggleSettings() { settingsOpen.value = !settingsOpen.value }
+  function toggleSettingsTab(tab) {
+    settingsInitialTab.value = tab || null
+    settingsTabRequest.value += 1
+    settingsOpen.value = !settingsOpen.value
+  }
+
+  // Keyboard shortcut hint overlay. Holding Alt reveals the shortcut
+  // on the hovered button; Shift+Alt pins every visible front-button
+  // shortcut at once.
+  const shortcutAltDown = ref(false)
+  const shortcutHintsAll = ref(false)
+  function setShortcutModifiers(event) {
+    shortcutAltDown.value = !!event?.altKey
+    shortcutHintsAll.value = !!event?.altKey && !!event?.shiftKey
+  }
+  function clearShortcutModifiers() {
+    shortcutAltDown.value = false
+    shortcutHintsAll.value = false
+  }
 
   // Heatmap per-layer toggle (Phase 2, PR-7). Session-only — not
   // persisted to the layer DocType yet. Map: layerName -> bool.
@@ -533,9 +559,13 @@ export const useUiStore = defineStore('ui', () => {
     closeRightPanel,
     toggleRightPanel,
     settingsOpen,
+    settingsInitialTab,
+    settingsTabRequest,
     openSettings,
+    openSettingsTab,
     closeSettings,
     toggleSettings,
+    toggleSettingsTab,
     heatmapEnabled,
     isHeatmapOn,
     setHeatmap,
@@ -579,5 +609,9 @@ export const useUiStore = defineStore('ui', () => {
     confirmRequest,
     ask,
     resolveConfirm,
+    shortcutAltDown,
+    shortcutHintsAll,
+    setShortcutModifiers,
+    clearShortcutModifiers,
   }
 })

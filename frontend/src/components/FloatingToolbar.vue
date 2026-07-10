@@ -41,7 +41,11 @@ const emit = defineEmits(['trigger'])
 
 const cls = computed(() => {
   const size = ui.prefs.toolbarSize || 'm'
-  return 'ft ft--' + props.orientation + ' ft--' + size
+  return {
+    ['ft ft--' + props.orientation + ' ft--' + size]: true,
+    'ft--hint-hover': ui.shortcutAltDown,
+    'ft--hint-all': ui.shortcutHintsAll,
+  }
 })
 </script>
 
@@ -62,6 +66,7 @@ const cls = computed(() => {
         <path :d="b.glyph" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <span v-if="b.badge != null && b.badge !== ''" class="ft__badge">{{ b.badge }}</span>
+      <span v-if="b.shortcut" class="ft__key" aria-hidden="true">{{ b.shortcut }}</span>
     </button>
   </div>
 </template>
@@ -142,5 +147,40 @@ const cls = computed(() => {
   letter-spacing: 0;
   box-shadow: 0 0 0 2px rgba(11, 14, 20, 0.9);
   pointer-events: none;
+}
+.ft__key {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(8, 10, 15, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.38);
+  transition: opacity 80ms ease, transform 80ms ease;
+  z-index: 3;
+}
+.ft--horizontal .ft__key {
+  left: 50%;
+  top: calc(100% + 6px);
+  transform: translateX(-50%) scale(0.96);
+}
+.ft--hint-hover .ft__btn:hover .ft__key,
+.ft--hint-all .ft__key {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+.ft--horizontal.ft--hint-hover .ft__btn:hover .ft__key,
+.ft--horizontal.ft--hint-all .ft__key {
+  transform: translateX(-50%) scale(1);
 }
 </style>

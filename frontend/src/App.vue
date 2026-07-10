@@ -32,6 +32,7 @@ import MeasureTool from './components/MeasureTool.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import UserSettings from './components/UserSettings.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
+import { isEditableTarget, shortcutLabel } from './lib/keymaps.js'
 
 const mapStore = useMapStore()
 const ui = useUiStore()
@@ -43,28 +44,99 @@ function onFitDataEvent(event) {
   fitToData(event?.detail?.mode || 'all')
 }
 
+function dispatchShortcut(id) {
+  window.dispatchEvent(new CustomEvent('expedition:shortcut', { detail: { id } }))
+}
+
+function runShortcut(id) {
+  if (id === 'shortcuts') ui.openSettingsTab('shortcuts')
+  else if (id === 'layers') onToolbarTrigger('layers')
+  else if (id === 'search') onToolbarTrigger('search')
+  else if (id === 'settings') ui.toggleSettingsTab('map')
+  else if (id === 'hide-ui') ui.toggleChrome()
+  else if (id === 'fit-all') onToolbarTrigger('fit-all')
+  else if (id === 'fit-visible') onToolbarTrigger('fit-visible')
+  else if (id === 'tilt-reset') onToolbarTrigger('tilt-reset')
+  else dispatchShortcut(id)
+}
+
+function onGlobalKeydown(e) {
+  ui.setShortcutModifiers(e)
+
+  const key = e.key.toLowerCase()
+  if (!isEditableTarget(e.target) && e.altKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    e.stopImmediatePropagation?.()
+    return
+  }
+  if ((e.metaKey || e.ctrlKey) && key === 'k') {
+    e.preventDefault()
+    ui.commandKOpen = !ui.commandKOpen
+    return
+  }
+  if ((e.metaKey || e.ctrlKey) && key === 'f') {
+    e.preventDefault()
+    runShortcut('search')
+    return
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    e.preventDefault()
+    runShortcut('settings')
+    return
+  }
+  if (isEditableTarget(e.target)) return
+  if (e.ctrlKey || e.metaKey) return
+
+  let id = null
+  if (e.key === '?') id = 'shortcuts'
+  else if (key === 'm') id = 'layers'
+  else if (key === 'h') id = 'hide-ui'
+  else if (key === 'b') id = 'basemap'
+  else if (key === 'f') id = e.shiftKey ? 'fit-all' : 'fit-visible'
+  else if (e.key === '0') id = 'tilt-reset'
+  else if (key === 'v') id = 'select'
+  else if (key === 'd') id = e.shiftKey ? 'choose-shape' : 'draw-shape'
+  else if (key === 'r') id = e.shiftKey ? 'measure-area' : 'measure-line'
+  else if (key === 'c') id = 'drawing-color'
+  else if (key === 'e') id = 'zone-edit'
+  else if (key === 't') id = 'tilt-rotate'
+  else if (key === 'z') id = 'undo-vertex'
+  else if (e.key === 'Enter') id = 'finish-drawing'
+  else if (e.key === 'Escape') id = 'cancel-tool'
+
+  if (!id) return
+  e.preventDefault()
+  runShortcut(id)
+}
+
+function onGlobalKeyup(e) {
+  ui.setShortcutModifiers(e)
+  if (!isEditableTarget(e.target) && (e.key === 'Alt' || e.altKey)) {
+    e.preventDefault()
+    e.stopImmediatePropagation?.()
+  }
+}
+
+function onWindowBlur() {
+  ui.clearShortcutModifiers()
+}
+
 onMounted(async () => {
   await iconStore.loadIcons().catch((e) => {
     console.warn('[expedition] custom icons unavailable', e)
   })
   await mapStore.bootstrap()
   window.addEventListener('expedition:fit-data', onFitDataEvent)
-  window.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-      e.preventDefault()
-      ui.commandKOpen = !ui.commandKOpen
-    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-      // Toggle the cross-layer search bar (different from Ctrl+K,
-      // which toggles the command palette). e.preventDefault()
-      // suppresses the browser's native find-in-page.
-      e.preventDefault()
-      ui.toggleSearch()
-    }
-  })
+  document.addEventListener('keydown', onGlobalKeydown, true)
+  document.addEventListener('keyup', onGlobalKeyup, true)
+  window.addEventListener('blur', onWindowBlur)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('expedition:fit-data', onFitDataEvent)
+  document.removeEventListener('keydown', onGlobalKeydown, true)
+  document.removeEventListener('keyup', onGlobalKeyup, true)
+  window.removeEventListener('blur', onWindowBlur)
 })
 
 // Enabled-layer count for the layers toolbar badge.
@@ -99,16 +171,16 @@ const GLYPHS = {
 // Top-left: map workspace. The badge still shows enabled layers because
 // that is the most useful at-rest status for the active map.
 const tlButtons = computed(() => [
-  { id: 'layers', label: 'Map', glyph: GLYPHS.layers, badge: enabledLayerCount.value || '' },
+  { id: 'layers', label: 'Map', glyph: GLYPHS.layers, badge: enabledLayerCount.value || '', shortcut: shortcutLabel('layers') },
 ])
 // Top-right split into two separate toolbars (different visual
 // groups) so a user can distinguish at a glance: search is on the
 // left of the corner, settings sits at the very corner.
 const trSearchButtons = computed(() => [
-  { id: 'search', label: 'Search (Ctrl+F)', glyph: GLYPHS.search },
+  { id: 'search', label: 'Search', glyph: GLYPHS.search, shortcut: shortcutLabel('search') },
 ])
 const trSettingsButtons = computed(() => [
-  { id: 'settings', label: 'Settings', glyph: GLYPHS.settings, active: ui.settingsOpen },
+  { id: 'settings', label: 'Settings', glyph: GLYPHS.settings, active: ui.settingsOpen, shortcut: shortcutLabel('settings') },
 ])
 // Bottom-right: two standard FloatingToolbars. The fit tray holds
 // both fit modes (fit-all + fit-visible) as buttons stacked
@@ -124,11 +196,11 @@ const trSettingsButtons = computed(() => [
 // except this one (which stays dim) so the user can always toggle
 // UI back on.
 const brFitButtons = computed(() => [
-  { id: 'fit-all', label: 'Fit to all enabled data', glyph: GLYPHS.fit },
-  { id: 'fit-visible', label: 'Fit to visible features', glyph: GLYPHS.fitVisible },
+  { id: 'fit-all', label: 'Fit to all enabled data', glyph: GLYPHS.fit, shortcut: shortcutLabel('fit-all') },
+  { id: 'fit-visible', label: 'Fit to visible features', glyph: GLYPHS.fitVisible, shortcut: shortcutLabel('fit-visible') },
 ])
 const brTiltButtons = computed(() => [
-  { id: 'tilt-reset', label: 'Reset tilt (top view)', glyph: GLYPHS.tiltReset },
+  { id: 'tilt-reset', label: 'Reset tilt (top view)', glyph: GLYPHS.tiltReset, shortcut: shortcutLabel('tilt-reset') },
 ])
 const toolbarButtonSizes = { xs: 22, s: 28, m: 32, lg: 40, xlg: 48 }
 const chromeStyle = computed(() => {
@@ -323,7 +395,15 @@ async function _fitAllBounds(m) {
 </script>
 
 <template>
-  <div class="expedition" :class="{ 'expedition--chrome-hidden': ui.chromeHidden }" :style="chromeStyle">
+  <div
+    class="expedition"
+    :class="{
+      'expedition--chrome-hidden': ui.chromeHidden,
+      'expedition--shortcut-hover': ui.shortcutAltDown,
+      'expedition--shortcut-all': ui.shortcutHintsAll,
+    }"
+    :style="chromeStyle"
+  >
     <Basemap class="expedition__basemap" />
     <LoadingOverlay />
 
@@ -384,6 +464,7 @@ async function _fitAllBounds(m) {
                   stroke-linecap="round" stroke-linejoin="round"
                 />
               </svg>
+              <span class="expedition__keycap" aria-hidden="true">{{ shortcutLabel('hide-ui') }}</span>
             </button>
           </div>
           <BasemapPanel />
@@ -418,6 +499,19 @@ async function _fitAllBounds(m) {
 </template>
 
 <style scoped>
+:global(html),
+:global(body),
+:global(#expedition-root) {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0B0E14;
+}
+:global(body) {
+  overscroll-behavior: none;
+}
+
 .expedition {
   position: fixed;
   inset: 0;
@@ -563,6 +657,7 @@ async function _fitAllBounds(m) {
 .expedition__br-eye--xlg { --ft-size: 48px; --ft-icon: 20px; }
 
 .expedition__br-eye-btn {
+  position: relative;
   width: var(--ft-size, 32px);
   height: var(--ft-size, 32px);
   display: flex; align-items: center; justify-content: center;
@@ -587,6 +682,32 @@ async function _fitAllBounds(m) {
   width: var(--ft-icon, 16px);
   height: var(--ft-icon, 16px);
   flex: none;
+}
+.expedition__keycap {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(8, 10, 15, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.38);
+  transition: opacity 80ms ease, transform 80ms ease;
+  z-index: 3;
+}
+.expedition__tr :deep(.ft__key),
+.expedition__br :deep(.ft__key) {
+  left: auto;
+  right: calc(100% + 6px);
 }
 
 /* The basemap panel trigger needs pointer-events on, even though its
@@ -693,5 +814,20 @@ async function _fitAllBounds(m) {
   opacity: 0;
   pointer-events: none;
   transition: opacity 220ms ease;
+}
+
+.expedition--shortcut-hover .expedition__br-eye-btn:hover .expedition__keycap,
+.expedition--shortcut-all .expedition__keycap,
+.expedition--shortcut-hover .mtt__btn:hover .mtt__key,
+.expedition--shortcut-hover .mtt__shape-more:hover .mtt__key,
+.expedition--shortcut-all .mtt__key {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+.expedition--shortcut-hover .bp__trigger:hover .bp__key,
+.expedition--shortcut-all .bp__key {
+  opacity: 1;
+  transform: translateX(50%) scale(1);
 }
 </style>

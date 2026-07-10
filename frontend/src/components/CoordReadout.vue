@@ -10,6 +10,7 @@
  * PR-10 of the quiet-canvas plan.
  */
 import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
+import { wrapLng } from '../lib/geo.js'
 
 const lat = ref(null)
 const lng = ref(null)
@@ -41,7 +42,7 @@ function onMove(e) {
     const rect = canvas.getBoundingClientRect()
     const ll = m.unproject([e.clientX - rect.left, e.clientY - rect.top])
     lat.value = ll.lat
-    lng.value = ll.lng
+    lng.value = wrapLng(ll.lng)
     zoom.value = m.getZoom()
   })
 }

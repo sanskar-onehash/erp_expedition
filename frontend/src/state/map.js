@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { call } from '../api/client.js'
+import { wrapLng } from '../lib/geo.js'
 import { useLayersStore } from './layers.js'
 import { useUiStore } from './ui.js'
 import { useInsightsStore } from './insights.js'
@@ -126,7 +127,7 @@ export const useMapStore = defineStore('map', () => {
     if (!m) return null
     const center = m.getCenter?.()
     return {
-      center: center ? [center.lng, center.lat] : undefined,
+      center: center ? [wrapLng(center.lng), center.lat] : undefined,
       zoom: m.getZoom?.(),
       bearing: m.getBearing?.(),
       pitch: m.getPitch?.(),

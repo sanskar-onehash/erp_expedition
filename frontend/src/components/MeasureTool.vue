@@ -18,6 +18,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useUiStore } from '../state/ui.js'
 import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
+import { normalizeLngLat, shortestLngDelta } from '../lib/geo.js'
 
 const ui = useUiStore()
 const vertices = ref([])
@@ -47,13 +48,14 @@ function start() {
 
 function onMapClick(e) {
   if (!ui.measureMode) return
-  vertices.value = [...vertices.value, [e.lngLat.lng, e.lngLat.lat]]
-  pointer.value = [e.lngLat.lng, e.lngLat.lat]
+  const point = normalizeLngLat([e.lngLat.lng, e.lngLat.lat])
+  vertices.value = [...vertices.value, point]
+  pointer.value = point
 }
 
 function onMapMove(e) {
   if (!ui.measureMode || !vertices.value.length) return
-  pointer.value = [e.lngLat.lng, e.lngLat.lat]
+  pointer.value = normalizeLngLat([e.lngLat.lng, e.lngLat.lat])
 }
 
 function onMapDblClick(e) {
@@ -217,7 +219,7 @@ function toRad(deg) { return deg * Math.PI / 180 }
 function haversine(a, b) {
   const lat1 = toRad(a[1]), lat2 = toRad(b[1])
   const dLat = lat2 - lat1
-  const dLng = toRad(b[0] - a[0])
+  const dLng = toRad(shortestLngDelta(a[0], b[0]))
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
   return 2 * EARTH_R * Math.asin(Math.sqrt(h))
 }
@@ -235,7 +237,7 @@ function polygonArea(coords) {
   for (let i = 0; i < coords.length - 1; i++) {
     const [lng1, lat1] = coords[i]
     const [lng2, lat2] = coords[i + 1]
-    total += toRad(lng2 - lng1) * (2 + Math.sin(toRad(lat1)) + Math.sin(toRad(lat2)))
+    total += toRad(shortestLngDelta(lng1, lng2)) * (2 + Math.sin(toRad(lat1)) + Math.sin(toRad(lat2)))
   }
   return Math.abs(total * EARTH_R * EARTH_R / 2)
 }

@@ -15,6 +15,7 @@ import { useZonesStore } from '../state/zones.js'
 import { useInsightsStore } from '../state/insights.js'
 import { useLayersStore } from '../state/layers.js'
 import { call } from '../api/client.js'
+import { viewportBoundsForServer } from '../lib/geo.js'
 
 const mapStore = useMapStore()
 const ui = useUiStore()
@@ -100,24 +101,24 @@ async function loadActivity() {
     activityError.value = 'Map is not ready.'
     return
   }
-  const b = m.getBounds()
+  const boundsList = viewportBoundsForServer(m.getBounds()) || []
   const { start } = rangeToDates(activityRange.value)
   activityLoading.value = true
   activityError.value = ''
   try {
-    const params = {
-      bounds: {
-        south: b.getSouth(),
-        west: b.getWest(),
-        north: b.getNorth(),
-        east: b.getEast(),
-      },
-      limit: 200,
-    }
-    if (start) params.start_date = start
-    if (activityUser.value) params.user = activityUser.value
-    if (activityType.value) params.activity_types = [activityType.value]
-    activityRows.value = await call('expedition.api.activity.list_in_bounds', params)
+    const responses = await Promise.all(boundsList.map((bounds) => {
+      const params = { bounds, limit: 200 }
+      if (start) params.start_date = start
+      if (activityUser.value) params.user = activityUser.value
+      if (activityType.value) params.activity_types = [activityType.value]
+      return call('expedition.api.activity.list_in_bounds', params)
+    }))
+    const seen = new Set()
+    activityRows.value = responses.flat().filter((row) => {
+      if (!row?.name || seen.has(row.name)) return false
+      seen.add(row.name)
+      return true
+    }).slice(0, 200)
   } catch (e) {
     activityError.value = e.message || String(e)
     activityRows.value = []

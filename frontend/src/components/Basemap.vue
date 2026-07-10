@@ -38,6 +38,13 @@ import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
 import {
+  normalizeGeometryLngs,
+  normalizeLngLat,
+  shortestLngDelta,
+  viewportBoundsForServer,
+  wrapLng,
+} from '../lib/geo.js'
+import {
   RAMP_PRESETS,
   buildHeatmapColor,
   buildHeatmapIntensity,
@@ -58,19 +65,16 @@ const CLUSTER_MAX_ZOOM = 12
 const FALLBACK_COLOR = '#FF3B30'
 
 /**
- * Compute the lowest zoom at which a single Mercator world exactly
- * fills the canvas without wrapping or repeating. A Mercator world is
- * a 512px tile wide at zoom 0, scaling as 512 * 2^z at zoom z, and is
- * square in pixel space (high latitudes are clamped to ~85°). So the
- * limiting dimension is the smaller of the canvas sides — at the
- * returned zoom, the world just fits inside the shorter side. Any
- * further zoom-out would either repeat the world (with
- * renderWorldCopies=true) or leave a void (with it off).
+ * Compute the lowest zoom where one Mercator world is at least as wide
+ * as the viewport. With renderWorldCopies enabled, this is the critical
+ * globe invariant: horizontal pan can wrap seamlessly, but the screen
+ * can never contain the same longitude twice.
  */
-function computeGlobeFitZoom(width, height) {
-  if (!width || !height) return 0
+function computeGlobeFitZoom(width) {
+  if (!width) return 0
   const TILE_PX = 512
-  return Math.max(0, Math.log2(Math.min(width, height) / TILE_PX))
+  const EPSILON = 0.002
+  return Math.max(0, Math.log2(width / TILE_PX) + EPSILON)
 }
 
 const VIRTUAL_GROUP_SEPARATOR = '__grp__'
@@ -734,7 +738,7 @@ function distanceMeters(a, b) {
   const lat1 = toRad(a[1])
   const lat2 = toRad(b[1])
   const dLat = toRad(b[1] - a[1])
-  const dLng = toRad(b[0] - a[0])
+  const dLng = toRad(shortestLngDelta(a[0], b[0]))
   const h = Math.sin(dLat / 2) ** 2
     + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
   return earth * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
@@ -1266,13 +1270,7 @@ function _fetchAllVisibleBounds() {
       layerStore.fetchFeatures(layer.name, null)
       continue
     }
-    const b = map.getBounds()
-    layerStore.fetchFeatures(layer.name, {
-      south: b.getSouth(),
-      west: b.getWest(),
-      north: b.getNorth(),
-      east: b.getEast(),
-    })
+    layerStore.fetchFeatures(layer.name, viewportBoundsForServer(map.getBounds()))
   }
 }
 
@@ -1501,7 +1499,7 @@ function selectZoneFeature(e) {
 
 function offsetPosition(position, deltaLng, deltaLat) {
   if (!Array.isArray(position)) return position
-  return [Number(position[0]) + deltaLng, Number(position[1]) + deltaLat]
+  return [wrapLng(Number(position[0]) + deltaLng), Number(position[1]) + deltaLat]
 }
 
 function offsetGeometry(geometry, deltaLng, deltaLat) {
@@ -1524,7 +1522,7 @@ function offsetGeometry(geometry, deltaLng, deltaLat) {
       coordinates: geometry.coordinates.map((poly) => poly.map((ring) => ring.map((p) => offsetPosition(p, deltaLng, deltaLat)))),
     }
   }
-  return geometry
+  return normalizeGeometryLngs(geometry)
 }
 
 function centroidForGeometry(geometry) {
@@ -1558,7 +1556,7 @@ function onZoneMouseDown(e) {
   _zoneDrag = {
     mapName,
     zone,
-    startLngLat: [e.lngLat.lng, e.lngLat.lat],
+    startLngLat: normalizeLngLat([e.lngLat.lng, e.lngLat.lat]),
     currentGeometry: zone.geometry,
   }
   map.dragPan.disable()
@@ -1569,7 +1567,8 @@ function onZoneMouseDown(e) {
 
 function onZoneDragMove(e) {
   if (!_zoneDrag) return
-  const deltaLng = e.lngLat.lng - _zoneDrag.startLngLat[0]
+  const current = normalizeLngLat([e.lngLat.lng, e.lngLat.lat])
+  const deltaLng = shortestLngDelta(_zoneDrag.startLngLat[0], current[0])
   const deltaLat = e.lngLat.lat - _zoneDrag.startLngLat[1]
   const geometry = offsetGeometry(_zoneDrag.zone.geometry, deltaLng, deltaLat)
   if (!geometry) return
@@ -1589,7 +1588,7 @@ async function onZoneDragEnd() {
   _setMapCursor()
   if (!drag.currentGeometry) return
   try {
-    const updated = await zoneStore.updateZone(drag.mapName, drag.zone.name, { geometry: drag.currentGeometry })
+    const updated = await zoneStore.updateZone(drag.mapName, drag.zone.name, { geometry: normalizeGeometryLngs(drag.currentGeometry) })
     ui.selectZone(updated)
   } catch (err) {
     console.error('[expedition] zone move failed', err)
@@ -1768,13 +1767,11 @@ function applySkin(skinId) {
 onMounted(() => {
   const startCenter = [0, 0]
   const initialSkin = getSkin(activeSkinId.value)
-  // Floor the zoom-out to the largest size at which a single world
-  // exactly fills the canvas, and disable world-copy wrap so the
-  // user can never see the same country twice in one view. The
-  // floor is recomputed on resize — the world doesn't get smaller
-  // when the user makes the window narrower.
+  // Floor zoom-out so a single world is always at least viewport-wide.
+  // With world copies enabled this gives horizontal globe wrapping
+  // without ever showing the same longitude twice in one view.
   const rect = mapEl.value.getBoundingClientRect()
-  const minZoom = computeGlobeFitZoom(rect.width, rect.height)
+  const minZoom = computeGlobeFitZoom(rect.width)
   const startZoom = minZoom
   map = new maplibregl.Map({
     container: mapEl.value,
@@ -1783,12 +1780,12 @@ onMounted(() => {
     zoom: startZoom,
     pitch: 0,
     minZoom,
-    renderWorldCopies: false,
+    renderWorldCopies: true,
     attributionControl: { compact: true },
   })
   map.on('resize', () => {
     const r = mapEl.value.getBoundingClientRect()
-    map.setMinZoom(computeGlobeFitZoom(r.width, r.height))
+    map.setMinZoom(computeGlobeFitZoom(r.width))
   })
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right')
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left')
@@ -1832,7 +1829,7 @@ onMounted(() => {
       if (zones.length) return
     }
     e.preventDefault?.()
-    ui.openContextMenu(e.point.x, e.point.y, e.lngLat.lat, e.lngLat.lng)
+    ui.openContextMenu(e.point.x, e.point.y, e.lngLat.lat, wrapLng(e.lngLat.lng))
   })
 
   // PR-13 — modifier-drag rotate/tilt.
@@ -1999,7 +1996,7 @@ onMounted(() => {
       flyTo: (opts) => map && map.flyTo(opts),
       easeTo: (opts) => map && map.easeTo(opts),
       jumpTo: (opts) => map && map.jumpTo(opts),
-      getCenter: () => map && map.getCenter(),
+      getCenter: () => map && normalizeLngLat(map.getCenter()),
       getZoom: () => map && map.getZoom(),
       getMap: () => map,
       finishDrawing: () => _finishDrawing(),
@@ -2064,7 +2061,7 @@ onMounted(() => {
   map.on('mousemove', (e) => {
     if (ui.drawMode === 'off') return
     const snapIndex = _snapIndexForPoint(e.point)
-    const snapped = snapIndex >= 0 ? ui.draftVertices[snapIndex] : [e.lngLat.lng, e.lngLat.lat]
+    const snapped = snapIndex >= 0 ? ui.draftVertices[snapIndex] : normalizeLngLat([e.lngLat.lng, e.lngLat.lat])
     ui.setDraftPointer(snapped, snapIndex)
     _renderDraft()
   })
@@ -2173,7 +2170,7 @@ function _handleDrawClick(e) {
     map.doubleClickZoom.disable()
     _dblClickDisabled = true
   }
-  const point = [e.lngLat.lng, e.lngLat.lat]
+  const point = normalizeLngLat([e.lngLat.lng, e.lngLat.lat])
   if (ui.drawMode === 'polygon') {
     if (ui.draftSnapIndex === 0 && ui.draftVertices.length >= 3) {
       _finishDrawing()
@@ -2219,7 +2216,7 @@ function _geometryFromDraft() {
 }
 
 async function _finishDrawing() {
-  const geometry = _geometryFromDraft()
+  const geometry = normalizeGeometryLngs(_geometryFromDraft())
   if (!geometry) return
   const mapName = mapStore.activeMap?.map?.name
   if (!mapName) return

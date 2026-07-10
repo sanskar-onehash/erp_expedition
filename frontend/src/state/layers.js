@@ -16,6 +16,7 @@ import {
   describeParsedMapSearch,
   parseMapSearch,
 } from '../lib/mapSearch.js'
+import { viewportBoundsForServer } from '../lib/geo.js'
 
 export const useLayersStore = defineStore('layers', () => {
   const layers = ref([])            // array of {name, title, style, ...}
@@ -216,18 +217,46 @@ export const useLayersStore = defineStore('layers', () => {
     }
   }
 
+  function _mergeFeatureCollections(collections) {
+    const valid = (collections || []).filter((fc) => fc && Array.isArray(fc.features))
+    if (!valid.length) return { type: 'FeatureCollection', features: [], total: 0, truncated: false }
+    const merged = { ...valid[0], features: [] }
+    const seen = new Set()
+    let total = 0
+    let truncated = false
+    for (const fc of valid) {
+      total += Number(fc.total || fc.features.length || 0)
+      truncated = truncated || !!fc.truncated
+      for (const feature of fc.features || []) {
+        const id = feature?._id ?? feature?.id ?? feature?.properties?._name ?? JSON.stringify(feature?.geometry)
+        if (id != null && seen.has(id)) continue
+        if (id != null) seen.add(id)
+        merged.features.push(feature)
+      }
+    }
+    merged.total = total
+    merged.truncated = truncated
+    return merged
+  }
+
+  async function _callFeatures(layerName, bounds, options = {}) {
+    const args = { layer: layerName, bounds }
+    if (options.groupKey != null) args.group_key = options.groupKey
+    if (Array.isArray(options.extraFields) && options.extraFields.length) {
+      args.extra_fields = options.extraFields
+    }
+    return call('expedition.api.layer.get_features', args)
+  }
+
   async function fetchFeatures(layerName, bounds, options = {}) {
     const cacheKey = options.cacheKey || layerName
     if (loading.value[cacheKey]) return
     loading.value[cacheKey] = true
     useUiStore().beginFetch()
     try {
-      const args = { layer: layerName, bounds }
-      if (options.groupKey != null) args.group_key = options.groupKey
-      if (Array.isArray(options.extraFields) && options.extraFields.length) {
-        args.extra_fields = options.extraFields
-      }
-      const fc = await call('expedition.api.layer.get_features', args)
+      const boundList = Array.isArray(bounds) ? bounds : [bounds]
+      const responses = await Promise.all(boundList.map((b) => _callFeatures(layerName, b, options)))
+      const fc = _mergeFeatureCollections(responses)
       if (activeSearch.value?.parsed && !options.allowDuringSearch) return
       _promoteIds(fc)
       _setFeatures(cacheKey, fc)
@@ -250,12 +279,18 @@ export const useLayersStore = defineStore('layers', () => {
     for (const item of pending) loading.value[item.cacheKey] = true
     useUiStore().beginFetch()
     try {
-      const resp = await call('expedition.api.layer.get_virtual_group_features', {
+      const boundList = Array.isArray(bounds) ? bounds : [bounds]
+      const responses = await Promise.all(boundList.map((b) => call('expedition.api.layer.get_virtual_group_features', {
         layer: layerName,
-        bounds,
+        bounds: b,
         group_keys: pending.map((item) => item.groupKey),
-      })
-      const byGroup = resp?.groups || {}
+      })))
+      const byGroup = {}
+      for (const resp of responses) {
+        for (const [groupKey, fc] of Object.entries(resp?.groups || {})) {
+          byGroup[groupKey] = _mergeFeatureCollections([byGroup[groupKey], fc])
+        }
+      }
       if (activeSearch.value?.parsed) return
       for (const item of pending) {
         const fc = byGroup[item.groupKey]
@@ -285,13 +320,7 @@ export const useLayersStore = defineStore('layers', () => {
     } else if (window.expeditionMap?.getMap) {
       const m = window.expeditionMap.getMap()
       if (m && m.getBounds) {
-        const b2 = m.getBounds()
-        await fetchFeatures(layerName, {
-          south: b2.getSouth(),
-          west: b2.getWest(),
-          north: b2.getNorth(),
-          east: b2.getEast(),
-        })
+        await fetchFeatures(layerName, viewportBoundsForServer(m.getBounds()))
       }
     }
   }

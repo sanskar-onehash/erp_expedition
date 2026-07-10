@@ -15,6 +15,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { call } from '../api/client.js'
+import { wrapLng } from '../lib/geo.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -54,7 +55,7 @@ async function onSaveView() {
     await call('expedition.api.map.save_map_card', {
       title,
       viewport: {
-        center: [center.lat, center.lng],
+        center: [wrapLng(center.lng), center.lat],
         zoom: m.getZoom(),
         bearing: m.getBearing(),
         pitch: m.getPitch(),
@@ -78,9 +79,9 @@ async function onDropPin() {
   try {
     await call('expedition.api.activity.log_activity', {
       activity_type: 'visit',
-      title: `Visit at ${m.lat.toFixed(4)}, ${m.lng.toFixed(4)}`,
+      title: `Visit at ${m.lat.toFixed(4)}, ${wrapLng(m.lng).toFixed(4)}`,
       latitude: m.lat,
-      longitude: m.lng,
+      longitude: wrapLng(m.lng),
       map_name: mapStore.activeMap?.map?.name,
       occurred_at: new Date().toISOString().slice(0, 19),
     })
@@ -93,7 +94,7 @@ async function onDropPin() {
 async function onCopyCoords() {
   const m = menu.value
   if (!m) return
-  const text = `${m.lat.toFixed(6)}, ${m.lng.toFixed(6)}`
+  const text = `${m.lat.toFixed(6)}, ${wrapLng(m.lng).toFixed(6)}`
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text)
@@ -119,7 +120,7 @@ function onStartPolygon() {
   if (!m) return
   ui.startDrawPolygon()
   // Seed the first vertex so the user starts mid-draw.
-  ui.pushDraftVertex({ lng: m.lng, lat: m.lat })
+  ui.pushDraftVertex([wrapLng(m.lng), m.lat])
   dismiss()
 }
 

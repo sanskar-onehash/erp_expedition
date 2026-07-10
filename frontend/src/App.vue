@@ -33,6 +33,7 @@ import ContextMenu from './components/ContextMenu.vue'
 import UserSettings from './components/UserSettings.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
 import { isEditableTarget, shortcutLabel } from './lib/keymaps.js'
+import { viewportBoundsForServer, wrapLng } from './lib/geo.js'
 
 const mapStore = useMapStore()
 const ui = useUiStore()
@@ -507,8 +508,11 @@ function _envelopeOf(features) {
  * "is this thing on screen?" decisions.
  */
 function _intersectsBounds(feature, bounds) {
+  const ranges = viewportBoundsForServer(bounds) || []
   for (const c of _coordsOf(feature?.geometry)) {
-    if (bounds.contains(c)) return true
+    const lng = wrapLng(c?.[0])
+    const lat = c?.[1]
+    if (ranges.some((b) => lat >= b.south && lat <= b.north && lng >= b.west && lng <= b.east)) return true
   }
   return false
 }

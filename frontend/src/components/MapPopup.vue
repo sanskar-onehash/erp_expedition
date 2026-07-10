@@ -22,6 +22,7 @@ import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { call } from '../api/client.js'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
+import { wrapLng } from '../lib/geo.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -345,7 +346,7 @@ async function scheduleVisit() {
   if (!sourceDoctype.value || !sourceName.value) return
   const f = feature.value
   const lat = f && f._lngLat ? f._lngLat.lat : null
-  const lng = f && f._lngLat ? f._lngLat.lng : null
+  const lng = f && f._lngLat ? wrapLng(f._lngLat.lng) : null
   try {
     await call('expedition.api.activity.log_activity', {
       activity_type: 'visit',

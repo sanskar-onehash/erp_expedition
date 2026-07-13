@@ -41,6 +41,7 @@ export const useMapStore = defineStore('map', () => {
   }
 
   async function bootstrap() {
+    const ui = useUiStore()
     // Try the user's "recent" list first; if anything goes wrong (e.g.
     // a guest visitor where list_for_user returns 403) fall through to
     // the public templates so the canvas never lands empty.
@@ -50,8 +51,22 @@ export const useMapStore = defineStore('map', () => {
       console.warn('[expedition] list_for_user unavailable; using templates', e)
       recent.value = []
     }
-    if (recent.value.length > 0) {
-      await switchMap(recent.value[0].name)
+
+    const localRecentName = ui.prefs.openRecentOnLaunch
+      ? ui.recent?.[0]?.name
+      : null
+    if (localRecentName) {
+      try {
+        await switchMap(localRecentName)
+        return
+      } catch (e) {
+        console.warn('[expedition] remembered map unavailable; falling back', e)
+      }
+    }
+
+    const fallbackName = recent.value.find((row) => row?.name && row.name !== localRecentName)?.name
+    if (fallbackName) {
+      await switchMap(fallbackName)
     } else {
       // Fall back to the first template so the canvas never lands empty.
       templates.value = await call('expedition.api.map.list_templates')
@@ -95,10 +110,6 @@ export const useMapStore = defineStore('map', () => {
     // don't carry over from the previous map.
     ui.selectedFeature = null
     ui.clearSelection()
-    layerStore.features = {}
-    layerStore.loading = {}
-    layerStore.lastFetched = {}
-    layerStore.bounds = {}
     // Sync basemap skin from the map doc, if it points at a gallery id.
     const skinId = resolveSkinIdFromMap(payload?.map)
     if (skinId) ui.currentSkinId = skinId

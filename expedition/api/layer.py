@@ -2140,6 +2140,7 @@ def get_features(
                     "color": layer_doc.color,
                     "icon": layer_doc.icon,
                     "size": layer_doc.size,
+                    "pin_min_zoom": getattr(layer_doc, "pin_min_zoom", 0) or 0,
                     "cluster": layer_doc.cluster,
                     "heatmap": layer_doc.heatmap,
                     "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
@@ -2519,6 +2520,7 @@ def get_features(
             "color": layer_doc.color,
             "icon": layer_doc.icon,
             "size": layer_doc.size,
+            "pin_min_zoom": getattr(layer_doc, "pin_min_zoom", 0) or 0,
             "cluster": layer_doc.cluster,
             "heatmap": layer_doc.heatmap,
             "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
@@ -2759,6 +2761,7 @@ def get_features(
         "color": layer_doc.color,
         "icon": layer_doc.icon,
         "size": layer_doc.size,
+        "pin_min_zoom": getattr(layer_doc, "pin_min_zoom", 0) or 0,
         "cluster": layer_doc.cluster,
         "heatmap": layer_doc.heatmap,
         "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
@@ -3194,61 +3197,65 @@ def list_for_map(map_name: str) -> list[dict]:
         frappe.throw("Not permitted", frappe.PermissionError)
     assert_map_read(map_name)
 
+    fields = [
+        "name",
+        "title",
+        "map",
+        "source_doctype",
+        "location_source",
+        "location_link_field",
+        "location_doctype",
+        "location_reverse_link_field",
+        "location_fields_json",
+        "latitude_field",
+        "longitude_field",
+        "label_field",
+        "filter_json",
+        "group_by_field",
+        "group_config_json",
+        "popup_template",
+        "popup_fields_json",
+        "linked_metrics_json",
+        "linked_metric_filters_json",
+        "click_action",
+        "color",
+        "icon",
+        "size",
+        "cluster",
+        "heatmap",
+        "heatmap_mode",
+        "heatmap_weight_field",
+        "heatmap_weight_min",
+        "heatmap_weight_max",
+        "heatmap_weight_scale",
+        "heatmap_weight_stops_json",
+        "heatmap_radius_min",
+        "heatmap_radius_max",
+        "heatmap_intensity_min",
+        "heatmap_intensity_max",
+        "heatmap_opacity",
+        "heatmap_ramp_json",
+        "territory_enabled",
+        "territory_color",
+        "territory_opacity",
+        "territory_padding_meters",
+        "stroke_color",
+        "stroke_width",
+        "fill_opacity",
+        "enabled",
+        "sequence",
+        "radius_enabled",
+        "radius_field",
+        "radius_meters",
+        "radius_opacity",
+    ]
+    if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
+        fields.insert(fields.index("cluster"), "pin_min_zoom")
+
     rows = frappe.get_all(
         "Expedition Layer",
         filters={"map": map_name},
-        fields=[
-            "name",
-            "title",
-            "map",
-            "source_doctype",
-            "location_source",
-            "location_link_field",
-            "location_doctype",
-            "location_reverse_link_field",
-            "location_fields_json",
-            "latitude_field",
-            "longitude_field",
-            "label_field",
-            "filter_json",
-            "group_by_field",
-            "group_config_json",
-            "popup_template",
-            "popup_fields_json",
-            "linked_metrics_json",
-            "linked_metric_filters_json",
-            "click_action",
-            "color",
-            "icon",
-            "size",
-            "cluster",
-            "heatmap",
-            "heatmap_mode",
-            "heatmap_weight_field",
-            "heatmap_weight_min",
-            "heatmap_weight_max",
-            "heatmap_weight_scale",
-            "heatmap_weight_stops_json",
-            "heatmap_radius_min",
-            "heatmap_radius_max",
-            "heatmap_intensity_min",
-            "heatmap_intensity_max",
-            "heatmap_opacity",
-            "heatmap_ramp_json",
-            "territory_enabled",
-            "territory_color",
-            "territory_opacity",
-            "territory_padding_meters",
-            "stroke_color",
-            "stroke_width",
-            "fill_opacity",
-            "enabled",
-            "sequence",
-            "radius_enabled",
-            "radius_field",
-            "radius_meters",
-            "radius_opacity",
-        ],
+        fields=fields,
         order_by="sequence asc, modified desc",
     )
     out = []
@@ -3356,6 +3363,12 @@ def _heatmap_config_dict(layer: Any) -> dict[str, Any]:
     }
 
 
+def _ensure_pin_min_zoom_column() -> None:
+    if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
+        return
+    frappe.reload_doc("expedition", "doctype", "expedition_layer")
+
+
 @frappe.whitelist()
 def create(
     map_name: str,
@@ -3371,6 +3384,7 @@ def create(
     label_field: str | None = None,
     color: str | None = None,
     size: str = "m",
+    pin_min_zoom: float = 0,
     cluster: int = 1,
     enabled: int = 1,
     icon: str | None = None,
@@ -3412,6 +3426,7 @@ def create(
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
     assert_map_write(map_name)
     assert_source_read(source_doctype)
+    _ensure_pin_min_zoom_column()
     if location_source == "Linked DocType" and location_doctype:
         assert_source_read(location_doctype)
     _assert_icons_readable(icon, group_config_json)
@@ -3446,6 +3461,7 @@ def create(
             "click_action": click_action or "popup",
             "color": color or "#3B82F6",
             "size": size,
+            "pin_min_zoom": float(pin_min_zoom or 0),
             "cluster": int(cluster),
             "enabled": int(enabled),
             "icon": icon or "",
@@ -3488,6 +3504,8 @@ def update(layer_name: str, **fields) -> dict:
     latitude_field, longitude_field, filter_json, icon, heatmap,
     stroke_color, stroke_width, fill_opacity, sequence.
     """
+    if "pin_min_zoom" in fields:
+        _ensure_pin_min_zoom_column()
     doc = frappe.get_doc("Expedition Layer", layer_name)
     if doc.map:
         assert_map_write(doc.map)
@@ -3499,6 +3517,7 @@ def update(layer_name: str, **fields) -> dict:
         "title",
         "color",
         "size",
+        "pin_min_zoom",
         "cluster",
         "enabled",
         "label_field",
@@ -4113,6 +4132,7 @@ def _layer_style_dict(layer: dict) -> dict:
         "color": layer.get("color"),
         "icon": layer.get("icon"),
         "size": layer.get("size"),
+        "pin_min_zoom": layer.get("pin_min_zoom") or 0,
         "cluster": layer.get("cluster"),
         "heatmap": layer.get("heatmap"),
         "heatmap_config": _heatmap_config_dict(layer),
@@ -4156,6 +4176,7 @@ def _layer_to_dto(doc) -> dict:
         "color": doc.color,
         "icon": doc.icon,
         "size": doc.size,
+        "pin_min_zoom": getattr(doc, "pin_min_zoom", 0) or 0,
         "cluster": doc.cluster,
         "heatmap": doc.heatmap,
         "heatmap_mode": doc.heatmap_mode or "count",
@@ -4189,6 +4210,7 @@ def _layer_to_dto(doc) -> dict:
                 "color": doc.color,
                 "icon": doc.icon,
                 "size": doc.size,
+                "pin_min_zoom": getattr(doc, "pin_min_zoom", 0) or 0,
                 "cluster": doc.cluster,
                 "heatmap": doc.heatmap,
                 "heatmap_mode": doc.heatmap_mode,
@@ -4238,6 +4260,7 @@ def create_master(
     label_field: str | None = None,
     color: str | None = None,
     size: str = "m",
+    pin_min_zoom: float = 0,
     cluster: int = 1,
     enabled: int = 1,
     icon: str | None = None,
@@ -4280,6 +4303,7 @@ def create_master(
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
     assert_source_read(source_doctype)
     _assert_icons_readable(icon, group_config_json)
+    _ensure_pin_min_zoom_column()
 
     doc = frappe.new_doc("Expedition Layer")
     doc.update(
@@ -4297,6 +4321,7 @@ def create_master(
             "label_field": label_field or "",
             "color": color or "#3B82F6",
             "size": size,
+            "pin_min_zoom": float(pin_min_zoom or 0),
             "cluster": int(cluster),
             "enabled": int(enabled),
             "icon": icon or "",
@@ -4378,6 +4403,7 @@ def list_masters() -> list[dict]:
             "color",
             "icon",
             "size",
+            "pin_min_zoom",
             "cluster",
             "heatmap",
             "heatmap_mode",
@@ -4471,6 +4497,7 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "color": master.color,
             "icon": master.icon,
             "size": master.size,
+            "pin_min_zoom": getattr(master, "pin_min_zoom", 0) or 0,
             "cluster": master.cluster,
             "heatmap": master.heatmap,
             "heatmap_mode": master.heatmap_mode or "count",

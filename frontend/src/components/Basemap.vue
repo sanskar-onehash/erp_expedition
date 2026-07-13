@@ -61,6 +61,7 @@ import {
 const SIZE_TO_RADIUS = { xs: 7, s: 9, m: 11, l: 14, xl: 18 }
 const ICON_IMAGE_SIZE = 36
 const CLUSTER_MAX_ZOOM = 12
+const MAPLIBRE_MAX_ZOOM = 24
 // Punchy Apple-red fallback so even unconfigured layers read as
 // primary data points.
 const FALLBACK_COLOR = '#FF3B30'
@@ -103,6 +104,22 @@ function virtualGroupName(layerName, groupKey) {
 }
 function parentLayerName(renderName) {
   return String(renderName || '').split(VIRTUAL_GROUP_SEPARATOR)[0]
+}
+
+function pinMinZoom(layerDoc, style = {}) {
+  const raw = style.pin_min_zoom ?? layerDoc?.pin_min_zoom ?? 0
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(MAPLIBRE_MAX_ZOOM, Math.max(0, value))
+}
+
+function layerZoomOptions(minZoom) {
+  return minZoom > 0 ? { minzoom: minZoom } : {}
+}
+
+function applyLayerZoomRange(layerId, minZoom) {
+  if (!map?.getLayer?.(layerId) || typeof map.setLayerZoomRange !== 'function') return
+  map.setLayerZoomRange(layerId, minZoom || 0, MAPLIBRE_MAX_ZOOM)
 }
 
 // MapLibre's fill-extrusion only renders polygons, but Expedition
@@ -189,6 +206,20 @@ function _removeRenderArtifacts(renderName) {
   for (const id of [extrusionSourceId(renderName), territorySourceId(renderName), haloSourceId(renderName), sourceId(renderName)]) {
     if (map.getSource(id)) map.removeSource(id)
     delete _sourceClusterState[id]
+  }
+  _renderedLayerNames.delete(renderName)
+}
+
+function _pruneStaleRenderedLayers() {
+  if (!map || !map.getStyle()) return
+  const activeBaseNames = new Set((layerStore.layers || []).map((layer) => layer.name))
+  for (const renderName of [..._renderedLayerNames]) {
+    if (activeBaseNames.has(parentLayerName(renderName))) continue
+    _removeLayerFromMap(parentLayerName(renderName))
+    _removeRenderArtifacts(renderName)
+  }
+  for (const key of Object.keys(lastLoadedFeatures || {})) {
+    if (!activeBaseNames.has(parentLayerName(key))) delete lastLoadedFeatures[key]
   }
 }
 
@@ -277,6 +308,7 @@ let _homeFitTimer = null
 // until the user moves the map).
 let _layerFetchedOnce = new Set()
 let _interactivePointLayers = new Set()
+let _renderedLayerNames = new Set()
 
 function _setMapCursor(kind = activeMapCursor(ui)) {
   if (_zoneDrag) kind = 'grabbing'
@@ -1176,6 +1208,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
   if (!fc) return
   const parentName = renderContext?.parentName || parentLayerName(layerName)
   const renderName = renderContext?.renderName || layerName
+  _renderedLayerNames.add(renderName)
   const layerDoc = renderContext?.layerDoc || layerStore.layers.find((l) => l.name === parentName)
   if (!layerDoc) return
   const style = renderContext?.style || (renderName !== parentName ? fc?.layer?.style : null) || layerStore.getLayerStyle(parentName) || {}
@@ -1185,6 +1218,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
   const wantsCluster = !!(style.cluster || layerDoc.cluster)
   const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
   const heatOn = enabled && ui.isHeatmapOn(parentName)
+  const minPinZoom = pinMinZoom(layerDoc, style)
 
   if (!renderContext && renderName === parentName) {
     const virtualGroups = buildVirtualGroupLayers(layerName, fc, layerDoc, style, color)
@@ -1318,10 +1352,12 @@ function _addLayerOnMap(layerName, renderContext = null) {
       id: shid,
       type: 'circle',
       source: sid,
+      ...layerZoomOptions(minPinZoom),
       filter: circlePointFilter(wantsCluster),
       paint: shadowPaint(radius),
     })
   } else {
+    applyLayerZoomRange(shid, minPinZoom)
     map.setFilter(shid, circlePointFilter(wantsCluster))
     map.setPaintProperty(shid, 'circle-radius', shadowPaint(radius)['circle-radius'])
   }
@@ -1331,10 +1367,12 @@ function _addLayerOnMap(layerName, renderContext = null) {
       id: rid,
       type: 'circle',
       source: sid,
+      ...layerZoomOptions(minPinZoom),
       filter: circlePointFilter(wantsCluster),
       paint: ringPaint(radius),
     })
   } else {
+    applyLayerZoomRange(rid, minPinZoom)
     map.setFilter(rid, circlePointFilter(wantsCluster))
     map.setPaintProperty(rid, 'circle-radius', ringPaint(radius)['circle-radius'])
   }
@@ -1344,10 +1382,12 @@ function _addLayerOnMap(layerName, renderContext = null) {
       id: lid,
       type: 'circle',
       source: sid,
+      ...layerZoomOptions(minPinZoom),
       filter: circlePointFilter(wantsCluster),
       paint: pinPaint(color, radius),
     })
   } else {
+    applyLayerZoomRange(lid, minPinZoom)
     map.setFilter(lid, circlePointFilter(wantsCluster))
     map.setPaintProperty(lid, 'circle-color', pinColorExpression(color))
     map.setPaintProperty(lid, 'circle-radius', pinPaint(color, radius)['circle-radius'])
@@ -1378,6 +1418,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
           id: iid,
           type: 'symbol',
           source: sid,
+          ...layerZoomOptions(minPinZoom),
           filter,
           layout: {
             'icon-image': ['get', '_display_icon_image'],
@@ -1394,6 +1435,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
         })
       } else {
         // Layer exists; refresh the icon image and color.
+        applyLayerZoomRange(iid, minPinZoom)
         map.setFilter(iid, filter)
         map.setLayoutProperty(iid, 'icon-image', ['get', '_display_icon_image'])
         map.setLayoutProperty(iid, 'icon-size', iconSize)
@@ -1415,10 +1457,12 @@ function _addLayerOnMap(layerName, renderContext = null) {
         id: cid,
         type: 'circle',
         source: sid,
+        ...layerZoomOptions(minPinZoom),
         filter: ['has', 'point_count'],
         paint: clusterPaint(color),
       })
     } else {
+      applyLayerZoomRange(cid, minPinZoom)
       map.setPaintProperty(cid, 'circle-color', color)
     }
     if (!map.getLayer(ccid)) {
@@ -1426,6 +1470,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
         id: ccid,
         type: 'symbol',
         source: sid,
+        ...layerZoomOptions(minPinZoom),
         filter: ['has', 'point_count'],
         layout: {
           'text-field': ['get', 'point_count_abbreviated'],
@@ -1434,6 +1479,8 @@ function _addLayerOnMap(layerName, renderContext = null) {
         },
         paint: { 'text-color': '#FFFFFF' },
       })
+    } else {
+      applyLayerZoomRange(ccid, minPinZoom)
     }
     map.off('click', cid, onClusterClick)
     map.on('click', cid, onClusterClick)
@@ -1463,9 +1510,11 @@ function _addLayerOnMap(layerName, renderContext = null) {
         id: eid,
         type: 'fill-extrusion',
         source: esid,
+        ...layerZoomOptions(minPinZoom),
         paint: extrusionPaint(color, parentName),
       })
     } else {
+      applyLayerZoomRange(eid, minPinZoom)
       map.setPaintProperty(eid, 'fill-extrusion-color', color)
       map.setPaintProperty(eid, 'fill-extrusion-height', extrusionPaint(color, parentName)['fill-extrusion-height'])
     }
@@ -1493,10 +1542,12 @@ function _addLayerOnMap(layerName, renderContext = null) {
         id: haloId,
         type: 'circle',
         source: sid,
+        ...layerZoomOptions(minPinZoom),
         filter: pointFilter(wantsCluster),
         paint: haloPaint,
       }, shid)
     } else {
+      applyLayerZoomRange(haloId, minPinZoom)
       map.setFilter(haloId, pointFilter(wantsCluster))
       for (const [key, value] of Object.entries(haloPaint)) map.setPaintProperty(haloId, key, value)
     }
@@ -1656,6 +1707,7 @@ function _fetchAllVisibleBounds() {
 
 function _reAddAllLayers() {
   if (!map || !map.isStyleLoaded()) return
+  _pruneStaleRenderedLayers()
   for (const layer of layerStore.layers) {
     if (layerStore.features[layer.name]) {
       _addLayerOnMap(layer.name)
@@ -2747,6 +2799,7 @@ watch(
   })),
   () => {
     if (!map || !map.isStyleLoaded()) return
+    _pruneStaleRenderedLayers()
     for (const layer of layerStore.layers) {
       if (_hasRenderedLayer(layer.name)) {
         _addLayerOnMap(layer.name)

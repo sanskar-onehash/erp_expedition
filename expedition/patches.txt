@@ -8,3 +8,4 @@
 expedition.patches.v0_3_0.migrate_expedition_layer_filter_json_to_child_table
 expedition.patches.v0_3_0.migrate_expedition_layer_group_config_to_child_table
 expedition.patches.v0_3_0.migrate_expedition_map_filters_json_to_child_table
+expedition.patches.v0_3_0.add_layer_pin_min_zoom

@@ -55,6 +55,14 @@ class ExpeditionLayer(Document):
         self._validate_linked_metrics()
         self._validate_linked_metric_filters()
         self._validate_location_fields()
+        self._normalize_pin_min_zoom()
+
+    def _normalize_pin_min_zoom(self):
+        try:
+            zoom = float(self.pin_min_zoom or 0)
+        except (TypeError, ValueError):
+            zoom = 0
+        self.pin_min_zoom = min(24, max(0, zoom))
 
     def _sync_filter_json_from_child_table(self):
         """Serialize the Filters child table rows into filter_json."""

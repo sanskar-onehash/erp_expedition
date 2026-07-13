@@ -27,6 +27,7 @@ export const useLayersStore = defineStore('layers', () => {
   const loading = ref({})           // layer.name -> bool
   const lastFetched = ref({})       // layer.name -> timestamp (for debugging + future cache busting)
   const lastBounds = ref({})        // layer.name -> {south, west, north, east} from the most recent fetch
+  const mapGeneration = ref(0)      // increments whenever the active map's layer set is replaced
   // Per-layer lat/lng envelope of every row in the source DocType
   // (after the layer's filter). Sourced from the server's
   // get_layer_bounds endpoint, cached for the session. Lets
@@ -119,8 +120,16 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   function replaceMapLayers(dtos) {
+    mapGeneration.value += 1
     layers.value = []
+    features.value = {}
     territoryFeatures.value = {}
+    unfilteredFeatures.value = {}
+    loading.value = {}
+    lastFetched.value = {}
+    lastBounds.value = {}
+    bounds.value = {}
+    activeSearch.value = null
     for (const dto of dtos || []) _replaceLayer(dto)
     _emitLayersChanged()
   }
@@ -212,6 +221,7 @@ export const useLayersStore = defineStore('layers', () => {
   function _styleFromDto(d) {
     return {
       color: d.color, icon: d.icon, size: d.size,
+      pin_min_zoom: d.pin_min_zoom ?? 0,
       cluster: d.cluster, heatmap: d.heatmap,
       heatmap_config: d.heatmap_config,
       territory_enabled: d.territory_enabled,
@@ -257,11 +267,13 @@ export const useLayersStore = defineStore('layers', () => {
   async function fetchFeatures(layerName, bounds, options = {}) {
     const cacheKey = options.cacheKey || layerName
     if (loading.value[cacheKey]) return
+    const generation = mapGeneration.value
     loading.value[cacheKey] = true
     useUiStore().beginFetch()
     try {
       const boundList = Array.isArray(bounds) ? bounds : [bounds]
       const responses = await Promise.all(boundList.map((b) => _callFeatures(layerName, b, options)))
+      if (generation !== mapGeneration.value) return
       const fc = _mergeFeatureCollections(responses)
       if (activeSearch.value?.parsed && !options.allowDuringSearch) return
       _promoteIds(fc)
@@ -270,7 +282,7 @@ export const useLayersStore = defineStore('layers', () => {
       if (bounds) lastBounds.value[layerName] = bounds
       _emitFeaturesUpdated(cacheKey)
     } finally {
-      loading.value[cacheKey] = false
+      if (generation === mapGeneration.value) loading.value[cacheKey] = false
       useUiStore().endFetch()
     }
   }
@@ -281,6 +293,7 @@ export const useLayersStore = defineStore('layers', () => {
     if (!pending.length) return
     const batchKey = `${layerName}::groups`
     if (loading.value[batchKey]) return
+    const generation = mapGeneration.value
     loading.value[batchKey] = true
     for (const item of pending) loading.value[item.cacheKey] = true
     useUiStore().beginFetch()
@@ -291,6 +304,7 @@ export const useLayersStore = defineStore('layers', () => {
         bounds: b,
         group_keys: pending.map((item) => item.groupKey),
       })))
+      if (generation !== mapGeneration.value) return
       const byGroup = {}
       for (const resp of responses) {
         for (const [groupKey, fc] of Object.entries(resp?.groups || {})) {
@@ -308,8 +322,10 @@ export const useLayersStore = defineStore('layers', () => {
       }
       if (bounds) lastBounds.value[layerName] = bounds
     } finally {
-      for (const item of pending) loading.value[item.cacheKey] = false
-      loading.value[batchKey] = false
+      if (generation === mapGeneration.value) {
+        for (const item of pending) loading.value[item.cacheKey] = false
+        loading.value[batchKey] = false
+      }
       useUiStore().endFetch()
     }
   }
@@ -559,15 +575,17 @@ export const useLayersStore = defineStore('layers', () => {
     const cacheKey = `territory:${layerName}`
     if (!force && territoryFeatures.value[layerName]) return territoryFeatures.value[layerName]
     if (loading.value[cacheKey]) return territoryFeatures.value[layerName] || null
+    const generation = mapGeneration.value
     loading.value[cacheKey] = true
     try {
       const fc = await _callFeatures(layerName, null, { groupKey: options.groupKey })
+      if (generation !== mapGeneration.value) return null
       _promoteIds(fc)
       territoryFeatures.value = { ...territoryFeatures.value, [layerName]: fc }
       _emitFeaturesUpdated(layerName)
       return fc
     } finally {
-      loading.value[cacheKey] = false
+      if (generation === mapGeneration.value) loading.value[cacheKey] = false
     }
   }
 
@@ -578,6 +596,7 @@ export const useLayersStore = defineStore('layers', () => {
     if (!items.length) return
     const batchKey = `territory:${layerName}:groups`
     if (loading.value[batchKey]) return
+    const generation = mapGeneration.value
     loading.value[batchKey] = true
     try {
       const resp = await call('expedition.api.layer.get_virtual_group_features', {
@@ -585,6 +604,7 @@ export const useLayersStore = defineStore('layers', () => {
         bounds: null,
         group_keys: items.map((item) => item.groupKey),
       })
+      if (generation !== mapGeneration.value) return
       const next = { ...territoryFeatures.value }
       for (const item of items) {
         const fc = resp?.groups?.[item.groupKey]
@@ -595,7 +615,7 @@ export const useLayersStore = defineStore('layers', () => {
       territoryFeatures.value = next
       _emitFeaturesUpdated(layerName)
     } finally {
-      loading.value[batchKey] = false
+      if (generation === mapGeneration.value) loading.value[batchKey] = false
     }
   }
 
@@ -615,18 +635,21 @@ export const useLayersStore = defineStore('layers', () => {
     if (!force && bounds.value[layerName] !== undefined) {
       return bounds.value[layerName] || null
     }
+    const generation = mapGeneration.value
     bounds.value = { ...bounds.value, [layerName]: null }
     try {
       const b = await call(
         'expedition.api.layer.get_layer_bounds',
         { layer: layerName },
       )
+      if (generation !== mapGeneration.value) return null
       const safe = b && typeof b.south === 'number'
         ? b
         : { south: 0, west: 0, north: 0, east: 0, count: 0 }
       bounds.value = { ...bounds.value, [layerName]: safe }
       return safe
     } catch (e) {
+      if (generation !== mapGeneration.value) return null
       // Drop the in-flight marker so a retry can try again.
       const next = { ...bounds.value }
       delete next[layerName]

@@ -34,6 +34,7 @@
   "color",
   "icon",
   "size",
+  "pin_min_zoom",
   "cluster",
   "column_style_b",
   "stroke_color",
@@ -250,6 +251,13 @@
    "label": "Size",
    "options": "xs\ns\nm\nl\nxl",
    "default": "m"
+  },
+  {
+   "fieldname": "pin_min_zoom",
+   "fieldtype": "Float",
+   "label": "Show Pins From Zoom",
+   "default": "0",
+   "description": "Hide this layer's pins and clusters below this zoom level. Use 0 to always show pins."
   },
   {
    "fieldname": "cluster",

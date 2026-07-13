@@ -53,6 +53,7 @@ const form = ref({
   label_field: '',
   color: '#3B82F6',
   size: 'm',
+  pin_min_zoom: 0,
   cluster: 1,
   enabled: 1,
   icon: '',          // '' = no glyph (plain dot), otherwise id from icons.svg
@@ -223,6 +224,7 @@ watch(
         label_field: '',
         color: '#3B82F6',
         size: 'm',
+        pin_min_zoom: 0,
         cluster: 1,
         enabled: 1,
         icon: '',
@@ -287,6 +289,7 @@ watch(
         label_field: l.label_field || '',
         color: l.color || '#3B82F6',
         size: l.size || 'm',
+        pin_min_zoom: l.pin_min_zoom ?? 0,
         cluster: l.cluster ? 1 : 0,
         enabled: l.enabled ? 1 : 0,
         icon: l.icon || '',
@@ -338,6 +341,7 @@ watch(
   () => ({
     color: form.value.color,
     size: form.value.size,
+    pin_min_zoom: form.value.pin_min_zoom,
     cluster: form.value.cluster,
     enabled: form.value.enabled,
     icon: form.value.icon,
@@ -374,6 +378,7 @@ watch(
     layerStore.previewLayerFields(form.value.name, {
       color: safeLayerColor(preview.color, previewOriginalLayer.value?.color || '#3B82F6'),
       size: preview.size || 'm',
+      pin_min_zoom: Number(preview.pin_min_zoom) || 0,
       cluster: preview.cluster,
       enabled: preview.enabled,
       icon: preview.icon || '',
@@ -1728,6 +1733,12 @@ function moneySuggestionSourceLabel(suggestion) {
   return `${suggestion?.source_doctype || 'DocType'} · ${path || 'link'} · ${suggestion?.aggregate || 'sum'} ${suggestion?.field || 'rows'}`
 }
 
+function normalizePinMinZoom(value) {
+  const zoom = Number(value)
+  if (!Number.isFinite(zoom) || zoom <= 0) return 0
+  return Math.min(24, Math.max(0, zoom))
+}
+
 async function save() {
   saving.value = true
   error.value = ''
@@ -1756,6 +1767,7 @@ async function save() {
         return
       }
     }
+    form.value.pin_min_zoom = normalizePinMinZoom(form.value.pin_min_zoom)
     if (form.value.location_source === 'Linked DocType' && !form.value.location_link_field) {
       error.value = 'Choose the Link field that points to the location document.'
       saving.value = false
@@ -1802,6 +1814,7 @@ async function save() {
         label_field: form.value.label_field,
         color: form.value.color,
         size: form.value.size,
+        pin_min_zoom: Number(form.value.pin_min_zoom) || 0,
         cluster: form.value.cluster,
         enabled: form.value.enabled,
         icon: form.value.icon,
@@ -1854,6 +1867,7 @@ async function save() {
         title: form.value.title,
         color: form.value.color,
         size: form.value.size,
+        pin_min_zoom: Number(form.value.pin_min_zoom) || 0,
         cluster: form.value.cluster,
         enabled: form.value.enabled,
         icon: form.value.icon,
@@ -2225,6 +2239,13 @@ function close() {
                       @click="form.size = s.v">{{ s.label }}</button>
             </div>
           </div>
+        </div>
+        <div class="le__row">
+          <label class="le__field le__field--half">
+            <span class="le__label">Show pins from zoom</span>
+            <input v-model.number="form.pin_min_zoom" class="le__input le__input--sm" type="number" min="0" max="24" step="0.5" />
+          </label>
+          <p class="le__field-note">Use 0 to keep pins visible while zoomed out.</p>
         </div>
 
         <div class="le__filter">
@@ -3319,6 +3340,14 @@ function close() {
 .le__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .le__field--half { flex: 1 1 0; min-width: 0; }
 .le__row { display: flex; gap: 12px; min-width: 0; }
+.le__field-note {
+  flex: 1 1 0;
+  align-self: end;
+  margin: 0 0 3px;
+  color: rgba(230, 232, 236, 0.5);
+  font-size: 11px;
+  line-height: 1.35;
+}
 .le__label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
   color: rgba(230, 232, 236, 0.6); font-weight: 500;

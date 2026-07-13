@@ -550,7 +550,7 @@ function onRowKeydown(event, row) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 8px 10px 10px;
+  margin: 8px 10px 10px;
 }
 .elv__table {
   width: 100%;

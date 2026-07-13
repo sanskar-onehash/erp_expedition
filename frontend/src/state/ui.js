@@ -18,6 +18,7 @@ const DEFAULT_CHROME_LAYOUT = {
   map: { col: 0, row: 0, anchorX: 'start', anchorY: 'start' },
   toolsPrimary: { col: 0, row: 5, anchorX: 'start', anchorY: 'start' },
   toolsStyle: { col: 0, row: 24, anchorX: 'start', anchorY: 'start' },
+  list: { col: 0, row: 0, anchorX: 'end', anchorY: 'center' },
   search: { col: 4, row: 0, anchorX: 'end', anchorY: 'start' },
   settings: { col: 0, row: 0, anchorX: 'end', anchorY: 'start' },
   fit: { col: 0, row: 10, anchorX: 'end', anchorY: 'end' },

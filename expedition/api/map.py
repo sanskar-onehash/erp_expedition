@@ -147,6 +147,11 @@ def load_full(name: str) -> dict:
             "sequence",
             "enabled",
             "source_doctype",
+            "location_source",
+            "location_link_field",
+            "location_doctype",
+            "location_reverse_link_field",
+            "location_fields_json",
             "color",
             "icon",
             "size",
@@ -171,6 +176,8 @@ def load_full(name: str) -> dict:
             "group_by_field",
             "group_config_json",
             "popup_fields_json",
+            "linked_metrics_json",
+            "linked_metric_filters_json",
             "click_action",
             "radius_enabled",
             "radius_field",
@@ -619,6 +626,11 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
             "name",
             "title",
             "source_doctype",
+            "location_source",
+            "location_link_field",
+            "location_doctype",
+            "location_reverse_link_field",
+            "location_fields_json",
             "latitude_field",
             "longitude_field",
             "label_field",
@@ -645,6 +657,8 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
             "fill_opacity",
             "popup_template",
             "popup_fields_json",
+            "linked_metrics_json",
+            "linked_metric_filters_json",
             "group_by_field",
             "group_config_json",
             "click_action",
@@ -657,6 +671,11 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_layer.map = new_map.name
         new_layer.title = tl.title
         new_layer.source_doctype = tl.source_doctype
+        new_layer.location_source = tl.location_source or "Direct Fields"
+        new_layer.location_link_field = tl.location_link_field or ""
+        new_layer.location_doctype = tl.location_doctype or ""
+        new_layer.location_reverse_link_field = tl.location_reverse_link_field or ""
+        new_layer.location_fields_json = tl.location_fields_json or ""
         new_layer.latitude_field = tl.latitude_field
         new_layer.longitude_field = tl.longitude_field
         new_layer.label_field = tl.label_field or ""
@@ -685,6 +704,8 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_layer.fill_opacity = tl.fill_opacity if tl.fill_opacity is not None else 0.6
         new_layer.popup_template = tl.popup_template or ""
         new_layer.popup_fields_json = tl.popup_fields_json or ""
+        new_layer.linked_metrics_json = tl.linked_metrics_json or ""
+        new_layer.linked_metric_filters_json = tl.linked_metric_filters_json or ""
         new_layer.group_by_field = tl.group_by_field or ""
         new_layer.group_config_json = tl.group_config_json or ""
         new_layer.click_action = tl.click_action or "popup"

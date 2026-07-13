@@ -37,6 +37,7 @@ import { useIconsStore } from '../state/icons.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
+import { openDeskDoc } from '../lib/desk.js'
 import {
   normalizeGeometryLngs,
   normalizeLngLat,
@@ -1182,11 +1183,7 @@ function onPointClick(e) {
   if (action === 'open_form' || action === 'redirect') {
     const props = f.properties || {}
     if (props._doctype && props._name) {
-      const route = `/app/${encodeURIComponent(String(props._doctype).toLowerCase().replace(/ /g, '-'))}/${encodeURIComponent(props._name)}`
-      if (window.frappe?.set_route) {
-        try { window.frappe.set_route(route); return } catch {}
-      }
-      window.open(route, '_blank')
+      openDeskDoc(props._doctype, props._name)
       return
     }
   }

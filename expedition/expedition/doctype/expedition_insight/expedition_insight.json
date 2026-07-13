@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
+  "map",
   "insight_type",
   "severity",
   "summary",
@@ -31,15 +32,28 @@
    "reqd": 1
   },
   {
+   "fieldname": "map",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Map",
+   "options": "Expedition Map",
+   "reqd": 1
+  },
+  {
    "fieldname": "insight_type",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Insight Type",
-   "options": "uncovered_zone\nstale_relationship\ndormant_account\nhotspot\ngap\nat_risk\ncategory_gap",
+   "options": "uncovered_zone\nstale_relationship\ndormant_account\nhotspot\ngap\nat_risk\ncategory_gap\nlinked_money",
    "reqd": 1
   },
   {
    "fieldname": "severity",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Severity",
    "options": "info\nlow\nmedium\nhigh",
    "default": "info"
@@ -69,6 +83,7 @@
   {
    "fieldname": "linked_doctype",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Linked DocType",
    "options": "DocType"
   },
@@ -95,6 +110,7 @@
   {
    "fieldname": "computed_at",
    "fieldtype": "Datetime",
+   "in_list_view": 1,
    "label": "Computed At",
    "default": "Now"
   },
@@ -106,6 +122,8 @@
   {
    "fieldname": "is_active",
    "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Active",
    "default": "1"
   }

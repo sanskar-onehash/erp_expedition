@@ -43,6 +43,11 @@ const form = ref({
   name: null,
   title: '',
   source_doctype: '',
+  location_source: 'Direct Fields',
+  location_link_field: '',
+  location_doctype: '',
+  location_reverse_link_field: '',
+  location_fields_json: '',
   latitude_field: 'latitude',
   longitude_field: 'longitude',
   label_field: '',
@@ -54,6 +59,8 @@ const form = ref({
   filter_rows: [], // [{ field, op, value }]
   popup_template: '',  // Jinja template rendered server-side per feature
   popup_fields: [],    // list of fieldnames for the default popup body
+  linked_metrics_json: '',
+  linked_metric_filters_json: '',
   group_by_field: '',  // '' = no grouping; otherwise a fieldname on source
   group_config: {},    // { "<value>": { color, icon, label } } — overrides default style
   click_action: 'popup', // 'popup' | 'redirect' | 'none'
@@ -75,6 +82,15 @@ const error = ref('')
 const sourceDts = ref([])
 const sourceFields = ref([])          // local working list (filled from cache)
 const sourceFieldsLoading = ref(false)
+const moneyMetricSuggestions = ref([])
+const moneyMetricSuggestionsLoading = ref(false)
+const moneyMetricSuggestionsError = ref('')
+const metricFieldCache = ref({})
+const metricFieldLoading = ref({})
+const metricFieldError = ref({})
+const locationFields = ref([])
+const locationFieldsLoading = ref(false)
+const loadedLocationDoctype = ref('')
 const sourcePickerOpen = ref(false)
 const fieldPickerOpen = ref('')
 const groupValues = ref([]) // distinct values for the group_by_field
@@ -86,6 +102,9 @@ const uploadTitle = ref('')
 const uploadScope = ref('Personal')
 const iconEditTitle = ref('')
 const iconBusy = ref(false)
+const popupPreview = ref(null)
+const popupPreviewLoading = ref(false)
+const popupPreviewError = ref('')
 
 const COLOR_PRESETS = [
   '#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6',
@@ -103,6 +122,37 @@ const SIZE_OPTIONS = [
   { v: 'l', label: 'L' },
   { v: 'xl', label: 'XL' },
 ]
+const LOCATION_SOURCE_OPTIONS = [
+  { v: 'Direct Fields', label: 'Direct fields', hint: 'Latitude and longitude live on the source row' },
+  { v: 'Linked DocType', label: 'Linked DocType', hint: 'A Link field points to the location row' },
+  { v: 'Reverse Linked DocType', label: 'Reverse linked DocType', hint: 'Location rows point back to the source row' },
+  { v: 'Dynamic Link DocType', label: 'Dynamic Link DocType', hint: 'Location rows use Frappe Dynamic Link rows' },
+]
+const CLICK_ACTION_OPTIONS = [
+  { v: 'popup', label: 'Show popup', hint: 'Open the map popup' },
+  { v: 'open_form', label: 'Open DocType form', hint: 'Open the source row in Desk' },
+  { v: 'none', label: 'None', hint: 'Ignore pin clicks' },
+]
+const HEATMAP_MODE_OPTIONS = [
+  { v: 'count', label: 'Record concentration', hint: 'Where are records concentrated?' },
+  { v: 'sum', label: 'Metric concentration', hint: 'Where is a numeric metric concentrated?' },
+]
+const HEATMAP_SCALE_OPTIONS = [
+  { v: 'linear', label: 'Linear' },
+  { v: 'log', label: 'Log' },
+]
+const UPLOAD_SCOPE_OPTIONS = [
+  { v: 'Personal', label: 'Personal' },
+  { v: 'Global', label: 'Global' },
+]
+const LINKED_METRIC_AGGREGATES = [
+  { v: 'count', label: 'Count' },
+  { v: 'sum', label: 'Sum' },
+  { v: 'avg', label: 'Avg' },
+  { v: 'min', label: 'Min' },
+  { v: 'max', label: 'Max' },
+]
+const METRIC_FILTER_OPERATORS = ['=', '!=', '>', '>=', '<', '<=', 'between', 'in', 'not in', 'is']
 
 const iconSections = computed(() => [
   { key: 'builtin', label: 'Built-in', icons: iconStore.builtin },
@@ -122,6 +172,25 @@ const filteredSourceDts = computed(() => {
     : sourceDts.value
   return items.slice(0, 80)
 })
+const filteredLocationDts = computed(() => {
+  const q = String(form.value.location_doctype || '').trim().toLowerCase()
+  const items = q
+    ? sourceDts.value.filter((dt) =>
+      String(dt.name || '').toLowerCase().includes(q) ||
+      String(dt.module || '').toLowerCase().includes(q)
+    )
+    : sourceDts.value
+  return items.slice(0, 80)
+})
+
+async function loadSourceDoctypes() {
+  if (sourceDts.value.length) return
+  try {
+    sourceDts.value = await call('expedition.api.layer.list_source_doctypes')
+  } catch (e) {
+    error.value = 'Could not load source DocTypes: ' + e.message
+  }
+}
 
 watch(
   () => ui.editorOpen,
@@ -134,11 +203,17 @@ watch(
     error.value = ''
     asMaster.value = !!v.asMaster
     iconStore.loadIcons().catch((e) => { error.value = 'Could not load icons: ' + e.message })
+    await loadSourceDoctypes()
     if (v.mode === 'create') {
       form.value = {
         name: null,
         title: '',
         source_doctype: '',
+        location_source: 'Direct Fields',
+        location_link_field: '',
+        location_doctype: '',
+        location_reverse_link_field: '',
+        location_fields_json: '',
         latitude_field: 'latitude',
         longitude_field: 'longitude',
         label_field: '',
@@ -150,6 +225,8 @@ watch(
         filter_rows: [],
         popup_template: '',
         popup_fields: [],
+        linked_metrics_json: '',
+        linked_metric_filters_json: '',
         group_by_field: '',
         group_config: {},
         click_action: 'popup',
@@ -170,13 +247,6 @@ watch(
         radius_field: '',
         radius_meters: 5000,
         radius_opacity: 0.18,
-      }
-      if (sourceDts.value.length === 0) {
-        try {
-          sourceDts.value = await call('expedition.api.layer.list_source_doctypes')
-        } catch (e) {
-          error.value = 'Could not load source DocTypes: ' + e.message
-        }
       }
     } else if (v.mode === 'edit' && v.layer) {
       const requestedLayer = v.layer
@@ -199,6 +269,11 @@ watch(
         name: l.name,
         title: l.title,
         source_doctype: l.source_doctype,
+        location_source: l.location_source || 'Direct Fields',
+        location_link_field: l.location_link_field || '',
+        location_doctype: l.location_doctype || '',
+        location_reverse_link_field: l.location_reverse_link_field || '',
+        location_fields_json: l.location_fields_json || '',
         latitude_field: l.latitude_field,
         longitude_field: l.longitude_field,
         label_field: l.label_field || '',
@@ -210,6 +285,8 @@ watch(
         filter_rows: parseFilterRows(l.filter_json),
         popup_template: l.popup_template || '',
         popup_fields: l.popup_fields || [],
+        linked_metrics_json: l.linked_metrics_json || '',
+        linked_metric_filters_json: l.linked_metric_filters_json || '',
         group_by_field: l.group_by_field || '',
         group_config: _parseGroupConfig(l.group_config_json || l.group_config),
         click_action: l.click_action || 'popup',
@@ -232,6 +309,7 @@ watch(
         radius_opacity: l.radius_opacity ?? 0.18,
       }
       await _loadSourceFields(l.source_doctype)
+      await _loadLocationFieldsFromForm()
       if (form.value.group_by_field && !isAdvancedGrouping.value) {
         if (groupMode.value === 'bands') {
           _syncBandStyles()
@@ -457,10 +535,6 @@ function colorPickerValue(value) {
   return '#3B82F6'
 }
 
-function setPickedColor(value) {
-  form.value.color = String(value || '#3B82F6').toUpperCase()
-}
-
 function setPresetColor(value) {
   form.value.color = value
 }
@@ -680,8 +754,12 @@ async function _loadSourceFields(dt) {
   if (!dt) {
     sourceFields.value = []
     sourceFieldsLoading.value = false
+    moneyMetricSuggestions.value = []
+    moneyMetricSuggestionsLoading.value = false
+    moneyMetricSuggestionsError.value = ''
     return
   }
+  _loadMoneyMetricSuggestions(dt)
   sourceFieldsLoading.value = true
   try {
     sourceFields.value = await layerStore.getSourceFields(dt)
@@ -693,21 +771,234 @@ async function _loadSourceFields(dt) {
   }
 }
 
+async function _loadMoneyMetricSuggestions(dt) {
+  const requested = String(dt || '').trim()
+  if (!requested) {
+    moneyMetricSuggestions.value = []
+    moneyMetricSuggestionsLoading.value = false
+    moneyMetricSuggestionsError.value = ''
+    return
+  }
+  moneyMetricSuggestionsLoading.value = true
+  moneyMetricSuggestionsError.value = ''
+  try {
+    const result = await call('expedition.api.layer.suggest_money_metrics', {
+      source_doctype: requested,
+      limit: 16,
+    })
+    if (form.value.source_doctype !== requested) return
+    moneyMetricSuggestions.value = Array.isArray(result?.suggestions)
+      ? result.suggestions
+      : []
+  } catch (e) {
+    if (form.value.source_doctype !== requested) return
+    moneyMetricSuggestions.value = []
+    moneyMetricSuggestionsError.value = e.message || String(e)
+  } finally {
+    if (form.value.source_doctype === requested) {
+      moneyMetricSuggestionsLoading.value = false
+    }
+  }
+}
+
+async function _loadLocationFields(dt) {
+  if (!dt) {
+    locationFields.value = []
+    locationFieldsLoading.value = false
+    loadedLocationDoctype.value = ''
+    return
+  }
+  locationFieldsLoading.value = true
+  try {
+    locationFields.value = await layerStore.getSourceFields(dt)
+    loadedLocationDoctype.value = dt
+  } catch (e) {
+    error.value = 'Could not load linked location fields: ' + e.message
+    locationFields.value = []
+    loadedLocationDoctype.value = ''
+  } finally {
+    locationFieldsLoading.value = false
+  }
+}
+
+async function _loadLocationFieldsFromForm() {
+  if (form.value.location_source === 'Direct Fields') {
+    locationFields.value = []
+    return
+  }
+  await _loadLocationFields(form.value.location_doctype)
+}
+
 // Numeric fields only — used for the radius-field picker so the
 // halo can't accidentally be sized by a Text field.
+const linkedMetricFields = computed(() => {
+  return linkedMetricRows.value
+    .filter((metric) => metric?.key)
+    .map((metric) => ({
+      fieldname: `_metric_${metric.key}`,
+      fieldtype: 'Float',
+      label: metric.label || metric.key,
+      options: '',
+    }))
+})
+const groupFieldOptions = computed(() => [
+  ...sourceFields.value,
+  ...linkedMetricFields.value,
+])
 const numericFields = computed(() =>
-  sourceFields.value.filter((f) =>
-    ['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)
-  )
+  [
+    ...sourceFields.value.filter((f) =>
+      ['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)
+    ),
+    ...linkedMetricFields.value,
+  ]
 )
 const coordinateFields = computed(() =>
   sourceFields.value.filter((f) => f.fieldtype === 'Float')
 )
+const linkFields = computed(() =>
+  sourceFields.value.filter((f) => f.fieldtype === 'Link' && f.options)
+)
+const activeCoordinateFields = computed(() =>
+  form.value.location_source !== 'Direct Fields'
+    ? locationFields.value.filter((f) => f.fieldtype === 'Float')
+    : coordinateFields.value
+)
+const activeCoordinateLoading = computed(() =>
+  form.value.location_source !== 'Direct Fields'
+    ? locationFieldsLoading.value
+    : sourceFieldsLoading.value
+)
+const reverseLinkFields = computed(() =>
+  locationFields.value.filter((f) =>
+    f.fieldtype === 'Link' && f.options === form.value.source_doctype
+  )
+)
+const locationFieldRows = computed(() =>
+  _parseJsonArray(form.value.location_fields_json).filter((fieldname) => typeof fieldname === 'string')
+)
+const availableLocationExtraFields = computed(() =>
+  (form.value.location_source !== 'Direct Fields' ? locationFields.value : sourceFields.value)
+    .filter((f) =>
+      f.fieldname &&
+      !['Section Break', 'Column Break', 'Tab Break', 'HTML', 'Table', 'Table MultiSelect', 'Button', 'Image', 'Fold'].includes(f.fieldtype) &&
+      ![form.value.latitude_field, form.value.longitude_field].includes(f.fieldname) &&
+      !locationFieldRows.value.includes(f.fieldname)
+    )
+)
+const linkedMetricRows = computed(() =>
+  _parseJsonArray(form.value.linked_metrics_json).filter((row) => row && typeof row === 'object')
+)
+const linkedMetricFilterRows = computed(() =>
+  _parseJsonArray(form.value.linked_metric_filters_json).filter((row) => row && typeof row === 'object')
+)
+const linkedMetricKeys = computed(() => linkedMetricRows.value.map((row) => row.key).filter(Boolean))
+const linkedMetricByKey = computed(() => {
+  const out = new Map()
+  for (const metric of linkedMetricRows.value) {
+    if (metric?.key) out.set(metric.key, metric)
+  }
+  return out
+})
+function metricDoctype(metric) {
+  return String(metric?.source_doctype || '').trim()
+}
+
+function metricFields(metric) {
+  return metricFieldCache.value[metricDoctype(metric)] || []
+}
+
+function metricFieldsBusy(metric) {
+  return !!metricFieldLoading.value[metricDoctype(metric)]
+}
+
+function metricFieldsMessage(metric) {
+  const dt = metricDoctype(metric)
+  if (!dt) return 'Enter a DocType first.'
+  if (metricFieldLoading.value[dt]) return 'Loading fields...'
+  if (metricFieldError.value[dt]) return 'Could not load fields.'
+  if (!metricFieldCache.value[dt]) return 'Open to load fields.'
+  return ''
+}
+
+function metricLinkFields(metric) {
+  const fields = metricFields(metric).filter((f) =>
+    f.fieldname && (
+      f.fieldtype === 'Dynamic Link' ||
+      (f.fieldtype === 'Link' && f.options === form.value.source_doctype)
+    )
+  )
+  return fields.sort((a, b) => {
+    const aScore = a.fieldtype === 'Link' ? 0 : 1
+    const bScore = b.fieldtype === 'Link' ? 0 : 1
+    return aScore - bScore || String(a.label || a.fieldname).localeCompare(String(b.label || b.fieldname))
+  })
+}
+
+function metricDynamicSelectorFields(metric) {
+  const linkField = metricFields(metric).find((f) => f.fieldname === metric.link_field)
+  const required = linkField?.fieldtype === 'Dynamic Link' ? linkField.options : ''
+  if (!required) return []
+  const fields = metricFields(metric).filter((f) => {
+    if (!f.fieldname) return false
+    if (required && f.fieldname === required) return true
+    if (f.fieldtype === 'Link' && f.options === 'DocType') return true
+    if (f.fieldtype === 'Select') return true
+    return ['Data', 'Small Text', 'Read Only'].includes(f.fieldtype)
+  })
+  return fields.sort((a, b) => {
+    const aScore = required && a.fieldname === required ? 0 : 1
+    const bScore = required && b.fieldname === required ? 0 : 1
+    return aScore - bScore || String(a.label || a.fieldname).localeCompare(String(b.label || b.fieldname))
+  })
+}
+
+function metricAmountFields(metric) {
+  return metricFields(metric).filter((f) =>
+    f.fieldname && ['Currency', 'Duration', 'Float', 'Int', 'Percent', 'Rating'].includes(f.fieldtype)
+  )
+}
+const visibleMoneyMetricSuggestions = computed(() => {
+  const existing = new Set(linkedMetricKeys.value)
+  return moneyMetricSuggestions.value
+    .filter((suggestion) => suggestion?.key && !existing.has(suggestion.key))
+    .slice(0, 8)
+})
+const popupFieldOptions = computed(() =>
+  sourceFields.value.filter((field) => !form.value.popup_fields.includes(field.fieldname))
+)
+const popupTemplateSnippets = computed(() => {
+  const snippets = [
+    { label: 'Label', value: '{{ label }}' },
+    { label: 'Name', value: '{{ doc.name }}' },
+  ]
+  for (const field of sourceFields.value.slice(0, 4)) {
+    if (!field?.fieldname || field.fieldname === 'name') continue
+    snippets.push({
+      label: field.label || field.fieldname,
+      value: `{{ doc.${field.fieldname} }}`,
+    })
+  }
+  for (const metric of linkedMetricRows.value.slice(0, 3)) {
+    if (!metric?.key) continue
+    snippets.push({
+      label: metric.label || metric.key,
+      value: `{{ metrics.${metric.key} }}`,
+    })
+  }
+  for (const fieldname of locationFieldRows.value.slice(0, 3)) {
+    snippets.push({
+      label: `Location ${fieldname}`,
+      value: `{{ location.${fieldname} }}`,
+    })
+  }
+  return snippets.slice(0, 10)
+})
 const heatmapRampOptions = computed(() =>
   Object.entries(RAMP_PRESETS).map(([key, preset]) => ({ key, label: preset.label }))
 )
 const selectedGroupField = computed(() =>
-  sourceFields.value.find((f) => f.fieldname === form.value.group_by_field) || null
+  groupFieldOptions.value.find((f) => f.fieldname === form.value.group_by_field) || null
 )
 const groupBandKind = computed(() => {
   const ft = selectedGroupField.value?.fieldtype
@@ -794,10 +1085,12 @@ async function onSourceChange() {
   const sourceDoctype = form.value.source_doctype?.trim?.() || ''
   form.value.source_doctype = sourceDoctype
   await _loadSourceFields(sourceDoctype)
-  const floatFields = coordinateFields.value
-  const byName = new Map(floatFields.map((f) => [f.fieldname, f]))
-  form.value.latitude_field = byName.has('latitude') ? 'latitude' : (floatFields[0]?.fieldname || '')
-  form.value.longitude_field = byName.has('longitude') ? 'longitude' : (floatFields.find((f) => f.fieldname !== form.value.latitude_field)?.fieldname || '')
+  form.value.location_source = 'Direct Fields'
+  form.value.location_link_field = ''
+  form.value.location_doctype = ''
+  form.value.location_reverse_link_field = ''
+  locationFields.value = []
+  chooseDefaultCoordinateFields(coordinateFields.value)
   form.value.label_field = ''
   form.value.filter_rows = []
   form.value.group_by_field = ''
@@ -811,6 +1104,54 @@ async function chooseSourceDoctype(name) {
   await onSourceChange()
 }
 
+function chooseDefaultCoordinateFields(fields) {
+  const floatFields = fields || []
+  const byName = new Map(floatFields.map((f) => [f.fieldname, f]))
+  form.value.latitude_field = byName.has('latitude') ? 'latitude' : (floatFields[0]?.fieldname || '')
+  form.value.longitude_field = byName.has('longitude') ? 'longitude' : (floatFields.find((f) => f.fieldname !== form.value.latitude_field)?.fieldname || '')
+}
+
+async function onLocationSourceChange() {
+  form.value.location_link_field = ''
+  form.value.location_doctype = ''
+  form.value.location_reverse_link_field = ''
+  locationFields.value = []
+  loadedLocationDoctype.value = ''
+  chooseDefaultCoordinateFields(
+    form.value.location_source !== 'Direct Fields'
+      ? []
+      : coordinateFields.value
+  )
+}
+
+async function chooseLocationLinkField(fieldname) {
+  const field = linkFields.value.find((f) => f.fieldname === fieldname)
+  form.value.location_link_field = fieldname || ''
+  form.value.location_doctype = field?.options || ''
+  fieldPickerOpen.value = ''
+  await _loadLocationFields(form.value.location_doctype)
+  chooseDefaultCoordinateFields(activeCoordinateFields.value)
+}
+
+async function onLocationDoctypeChange() {
+  form.value.location_doctype = form.value.location_doctype?.trim?.() || ''
+  const changed = form.value.location_doctype !== loadedLocationDoctype.value
+  if (changed) form.value.location_reverse_link_field = ''
+  await _loadLocationFields(form.value.location_doctype)
+  chooseDefaultCoordinateFields(activeCoordinateFields.value)
+}
+
+async function chooseLocationDoctype(name) {
+  form.value.location_doctype = name || ''
+  fieldPickerOpen.value = ''
+  await onLocationDoctypeChange()
+}
+
+function chooseReverseLinkField(fieldname) {
+  form.value.location_reverse_link_field = fieldname || ''
+  fieldPickerOpen.value = ''
+}
+
 function fieldChoiceLabel(fieldname, fields = sourceFields.value) {
   if (!fieldname) return 'None'
   const field = fields.find((f) => f.fieldname === fieldname)
@@ -819,6 +1160,32 @@ function fieldChoiceLabel(fieldname, fields = sourceFields.value) {
 
 function chooseLayerField(kind, fieldname) {
   form.value[kind] = fieldname || ''
+  fieldPickerOpen.value = ''
+}
+
+function optionLabel(options, value, fallback = 'None') {
+  const option = options.find((item) => item.v === value)
+  return option?.label || fallback
+}
+
+function chooseFormOption(field, value) {
+  form.value[field] = value
+  fieldPickerOpen.value = ''
+}
+
+async function chooseLocationSource(value) {
+  form.value.location_source = value
+  fieldPickerOpen.value = ''
+  await onLocationSourceChange()
+}
+
+function chooseUploadScope(value) {
+  uploadScope.value = value
+  fieldPickerOpen.value = ''
+}
+
+function chooseHeatmapRamp(key) {
+  applyHeatmapRamp(key)
   fieldPickerOpen.value = ''
 }
 
@@ -1117,6 +1484,222 @@ function removePopupField(i) {
   form.value.popup_fields.splice(i, 1)
 }
 
+function insertPopupSnippet(snippet) {
+  if (!snippet) return
+  const current = String(form.value.popup_template || '')
+  const spacer = current && !current.endsWith('\n') ? '\n' : ''
+  form.value.popup_template = `${current}${spacer}${snippet}`
+}
+
+async function previewPopupTemplate() {
+  popupPreview.value = null
+  popupPreviewError.value = ''
+  const template = String(form.value.popup_template || '').trim()
+  if (!template) {
+    popupPreviewError.value = 'Add a popup template before previewing.'
+    return
+  }
+  if (!form.value.name) {
+    popupPreviewError.value = 'Save the layer once before previewing this template.'
+    return
+  }
+  popupPreviewLoading.value = true
+  try {
+    popupPreview.value = await call('expedition.api.layer.preview_popup_template', {
+      layer: form.value.name,
+      popup_template: form.value.popup_template,
+    })
+  } catch (e) {
+    popupPreviewError.value = e.message || String(e)
+  } finally {
+    popupPreviewLoading.value = false
+  }
+}
+
+function _parseJsonArray(raw) {
+  if (!raw) return []
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function _writeJsonArray(field, rows) {
+  form.value[field] = rows && rows.length ? JSON.stringify(rows) : ''
+}
+
+function _metricKeyFromLabel(text) {
+  return String(text || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^([^A-Za-z_])/, '_$1')
+    .replace(/_+/g, '_')
+    .replace(/^_+$/, '')
+    .slice(0, 48)
+}
+
+function addLocationField(fieldname) {
+  if (!fieldname) return
+  const rows = [...locationFieldRows.value]
+  if (!rows.includes(fieldname)) rows.push(fieldname)
+  _writeJsonArray('location_fields_json', rows)
+  fieldPickerOpen.value = ''
+}
+
+function removeLocationField(index) {
+  const rows = [...locationFieldRows.value]
+  rows.splice(index, 1)
+  _writeJsonArray('location_fields_json', rows)
+}
+
+function addLinkedMetric() {
+  const rows = [...linkedMetricRows.value]
+  rows.push({
+    key: `metric_${rows.length + 1}`,
+    label: `Metric ${rows.length + 1}`,
+    source_doctype: '',
+    link_field: '',
+    dynamic_link_doctype_field: '',
+    aggregate: 'sum',
+    field: '',
+    filters: [],
+  })
+  _writeJsonArray('linked_metrics_json', rows)
+}
+
+function addMoneyMetricSuggestion(suggestion) {
+  if (!suggestion?.key) return
+  const rows = [...linkedMetricRows.value]
+  if (rows.some((row) => row.key === suggestion.key)) return
+  rows.push({
+    key: suggestion.key,
+    label: suggestion.label || suggestion.key,
+    source_doctype: suggestion.source_doctype || '',
+    link_field: suggestion.link_field || '',
+    dynamic_link_doctype_field: suggestion.dynamic_link_doctype_field || '',
+    aggregate: suggestion.aggregate || 'sum',
+    field: suggestion.aggregate === 'count' ? '' : (suggestion.field || ''),
+    filters: Array.isArray(suggestion.filters) ? suggestion.filters : [],
+  })
+  _writeJsonArray('linked_metrics_json', rows)
+}
+
+function addAllMoneyMetricSuggestions() {
+  visibleMoneyMetricSuggestions.value.forEach((suggestion) => {
+    addMoneyMetricSuggestion(suggestion)
+  })
+}
+
+async function loadMetricFields(metric) {
+  const dt = metricDoctype(metric)
+  if (!dt || metricFieldCache.value[dt] || metricFieldLoading.value[dt]) return
+  metricFieldLoading.value = { ...metricFieldLoading.value, [dt]: true }
+  metricFieldError.value = { ...metricFieldError.value, [dt]: '' }
+  try {
+    const fields = await layerStore.getSourceFields(dt)
+    metricFieldCache.value = { ...metricFieldCache.value, [dt]: Array.isArray(fields) ? fields : [] }
+  } catch (e) {
+    metricFieldError.value = { ...metricFieldError.value, [dt]: e.message || String(e) }
+  } finally {
+    metricFieldLoading.value = { ...metricFieldLoading.value, [dt]: false }
+  }
+}
+
+function openMetricFieldPicker(index, kind, metric) {
+  const key = `metric_field:${index}:${kind}`
+  fieldPickerOpen.value = fieldPickerOpen.value === key ? '' : key
+  if (fieldPickerOpen.value === key) loadMetricFields(metric)
+}
+
+function metricFieldChoiceLabel(metric, fieldname, fallback) {
+  if (metricFieldsBusy(metric)) return 'Loading fields...'
+  const field = metricFields(metric).find((f) => f.fieldname === fieldname)
+  if (field) return `${field.label || field.fieldname} (${field.fieldname})`
+  return fieldname || fallback
+}
+
+function chooseMetricLinkField(index, metric, fieldname) {
+  const field = metricFields(metric).find((f) => f.fieldname === fieldname)
+  const patch = { link_field: fieldname || '' }
+  if (field?.fieldtype === 'Dynamic Link') {
+    patch.dynamic_link_doctype_field = field.options || metric.dynamic_link_doctype_field || ''
+  } else if (field?.fieldtype === 'Link') {
+    patch.dynamic_link_doctype_field = ''
+  }
+  updateLinkedMetric(index, patch)
+  fieldPickerOpen.value = ''
+}
+
+function chooseMetricField(index, fieldname, patchKey) {
+  updateLinkedMetric(index, { [patchKey]: fieldname || '' })
+  fieldPickerOpen.value = ''
+}
+
+function updateLinkedMetric(index, patch) {
+  const rows = [...linkedMetricRows.value]
+  if (!rows[index]) return
+  const next = { ...rows[index], ...patch }
+  if (Object.prototype.hasOwnProperty.call(patch, 'label') && !rows[index].key) {
+    next.key = _metricKeyFromLabel(patch.label)
+  }
+  if (next.aggregate === 'count') next.field = ''
+  rows[index] = next
+  _writeJsonArray('linked_metrics_json', rows)
+}
+
+function removeLinkedMetric(index) {
+  const rows = [...linkedMetricRows.value]
+  const [removed] = rows.splice(index, 1)
+  _writeJsonArray('linked_metrics_json', rows)
+  if (removed?.key) {
+    const filters = linkedMetricFilterRows.value.filter((row) => row.metric !== removed.key)
+    _writeJsonArray('linked_metric_filters_json', filters)
+  }
+}
+
+function addLinkedMetricFilter() {
+  const rows = [...linkedMetricFilterRows.value]
+  rows.push({
+    metric: linkedMetricKeys.value[0] || '',
+    operator: '>',
+    value: 0,
+  })
+  _writeJsonArray('linked_metric_filters_json', rows)
+}
+
+function updateLinkedMetricFilter(index, patch) {
+  const rows = [...linkedMetricFilterRows.value]
+  if (!rows[index]) return
+  rows[index] = { ...rows[index], ...patch }
+  _writeJsonArray('linked_metric_filters_json', rows)
+}
+
+function removeLinkedMetricFilter(index) {
+  const rows = [...linkedMetricFilterRows.value]
+  rows.splice(index, 1)
+  _writeJsonArray('linked_metric_filters_json', rows)
+}
+
+function linkedMetricChoiceLabel(key) {
+  const metric = linkedMetricByKey.value.get(key)
+  if (!metric) return key || 'Choose metric'
+  return metric.label || metric.key
+}
+
+function chooseLinkedMetricFilter(index, key) {
+  updateLinkedMetricFilter(index, { metric: key || '' })
+  fieldPickerOpen.value = ''
+}
+
+function moneySuggestionSourceLabel(suggestion) {
+  const path = suggestion?.dynamic_link_doctype_field
+    ? `${suggestion.dynamic_link_doctype_field}/${suggestion.link_field}`
+    : suggestion?.link_field
+  return `${suggestion?.source_doctype || 'DocType'} · ${path || 'link'} · ${suggestion?.aggregate || 'sum'} ${suggestion?.field || 'rows'}`
+}
+
 async function save() {
   saving.value = true
   error.value = ''
@@ -1139,6 +1722,28 @@ async function save() {
         return
       }
     }
+    if (form.value.location_source === 'Linked DocType' && !form.value.location_link_field) {
+      error.value = 'Choose the Link field that points to the location document.'
+      saving.value = false
+      return
+    }
+    if (form.value.location_source === 'Reverse Linked DocType') {
+      if (!form.value.location_doctype) {
+        error.value = 'Choose the location DocType.'
+        saving.value = false
+        return
+      }
+      if (!form.value.location_reverse_link_field) {
+        error.value = 'Choose the field on the location DocType that links back to the source.'
+        saving.value = false
+        return
+      }
+    }
+    if (form.value.location_source === 'Dynamic Link DocType' && !form.value.location_doctype) {
+      error.value = 'Choose the location DocType.'
+      saving.value = false
+      return
+    }
     if (isCreate.value) {
       if (!form.value.title.trim()) {
         error.value = 'Title is required'
@@ -1153,6 +1758,11 @@ async function save() {
       const basePayload = {
         title: form.value.title,
         source_doctype: form.value.source_doctype,
+        location_source: form.value.location_source,
+        location_link_field: form.value.location_link_field,
+        location_doctype: form.value.location_doctype,
+        location_reverse_link_field: form.value.location_reverse_link_field,
+        location_fields_json: form.value.location_fields_json || '',
         latitude_field: form.value.latitude_field,
         longitude_field: form.value.longitude_field,
         label_field: form.value.label_field,
@@ -1163,6 +1773,8 @@ async function save() {
         icon: form.value.icon,
         popup_template: form.value.popup_template || '',
         popup_fields_json: _serializePopupFields(form.value.popup_fields),
+        linked_metrics_json: form.value.linked_metrics_json || '',
+        linked_metric_filters_json: form.value.linked_metric_filters_json || '',
         group_by_field: form.value.group_by_field,
         group_config_json: _serializeGroupConfig(form.value.group_config),
         click_action: form.value.click_action,
@@ -1207,10 +1819,17 @@ async function save() {
         cluster: form.value.cluster,
         enabled: form.value.enabled,
         icon: form.value.icon,
+        location_source: form.value.location_source,
+        location_link_field: form.value.location_link_field,
+        location_doctype: form.value.location_doctype,
+        location_reverse_link_field: form.value.location_reverse_link_field,
+        location_fields_json: form.value.location_fields_json || '',
         label_field: form.value.label_field,
         filter_json: serializeFilterRows(form.value.filter_rows),
         popup_template: form.value.popup_template || '',
         popup_fields_json: _serializePopupFields(form.value.popup_fields),
+        linked_metrics_json: form.value.linked_metrics_json || '',
+        linked_metric_filters_json: form.value.linked_metric_filters_json || '',
         group_by_field: form.value.group_by_field,
         group_config_json: _serializeGroupConfig(form.value.group_config),
         click_action: form.value.click_action,
@@ -1298,10 +1917,17 @@ function close() {
 
       <div class="le__body">
         <!-- Save-as-master toggle (create mode only) -->
-        <label v-if="isCreate" class="le__check le__check--master">
-          <input v-model="asMaster" type="checkbox" :true-value="true" :false-value="false" />
+        <button
+          v-if="isCreate"
+          type="button"
+          class="le__toggle-row le__toggle-row--master"
+          :class="{ 'le__toggle-row--on': asMaster }"
+          :aria-pressed="asMaster ? 'true' : 'false'"
+          @click="asMaster = !asMaster"
+        >
+          <span class="le__toggle-dot" aria-hidden="true" />
           <span>Save as reusable layer template</span>
-        </label>
+        </button>
 
         <!-- Master banner (edit master only) -->
         <div v-else-if="isMaster" class="le__master-banner">
@@ -1343,24 +1969,118 @@ function close() {
           </div>
         </label>
 
+        <div class="le__field le__link-field">
+          <span class="le__label">Location source</span>
+          <button
+            type="button"
+            class="le__field-select"
+            @click="fieldPickerOpen = fieldPickerOpen === 'location_source' ? '' : 'location_source'"
+          >
+            <span>{{ optionLabel(LOCATION_SOURCE_OPTIONS, form.location_source, 'Direct fields') }}</span>
+            <span class="le__chevron">⌄</span>
+          </button>
+          <div v-if="fieldPickerOpen === 'location_source'" class="le__option-pop">
+            <button
+              v-for="option in LOCATION_SOURCE_OPTIONS"
+              :key="option.v"
+              type="button"
+              class="le__option"
+              :data-active="form.location_source === option.v"
+              @mousedown.prevent="chooseLocationSource(option.v)"
+            >
+              <span>{{ option.label }}</span>
+              <small>{{ option.hint }}</small>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="form.location_source === 'Linked DocType'" class="le__field le__link-field">
+          <span class="le__label">Location link field</span>
+          <button
+            type="button"
+            class="le__field-select"
+            :disabled="!form.source_doctype || sourceFieldsLoading"
+            @click="fieldPickerOpen = fieldPickerOpen === 'location_link_field' ? '' : 'location_link_field'"
+          >
+            <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.location_link_field, linkFields) }}</span>
+            <span class="le__chevron">⌄</span>
+          </button>
+          <div v-if="fieldPickerOpen === 'location_link_field'" class="le__option-pop">
+            <button v-for="f in linkFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLocationLinkField(f.fieldname)">
+              <span>{{ f.label }}</span>
+              <small>{{ f.fieldname }} → {{ f.options }}</small>
+            </button>
+            <p v-if="!linkFields.length" class="le__option-empty">No Link fields found.</p>
+          </div>
+        </div>
+
+        <div v-if="form.location_source === 'Reverse Linked DocType' || form.location_source === 'Dynamic Link DocType'" class="le__field le__link-field">
+          <span class="le__label">Location DocType</span>
+          <input
+            v-model="form.location_doctype"
+            class="le__input"
+            type="text"
+            placeholder="DocType with latitude / longitude…"
+            autocomplete="off"
+            @focus="fieldPickerOpen = 'location_doctype'"
+            @input="fieldPickerOpen = 'location_doctype'"
+            @blur="onLocationDoctypeChange"
+            @keydown.enter.prevent="filteredLocationDts[0] ? chooseLocationDoctype(filteredLocationDts[0].name) : onLocationDoctypeChange()"
+          />
+          <div v-if="fieldPickerOpen === 'location_doctype'" class="le__option-pop">
+            <button
+              v-for="dt in filteredLocationDts"
+              :key="dt.name"
+              type="button"
+              class="le__option"
+              :data-active="form.location_doctype === dt.name"
+              @mousedown.prevent="chooseLocationDoctype(dt.name)"
+            >
+              <span>{{ dt.name }}</span>
+              <small>{{ dt.module }}</small>
+            </button>
+            <p v-if="!filteredLocationDts.length" class="le__option-empty">No matching DocTypes.</p>
+          </div>
+        </div>
+
+        <div v-if="form.location_source === 'Reverse Linked DocType'" class="le__field le__link-field">
+          <span class="le__label">Reverse link field</span>
+          <button
+            type="button"
+            class="le__field-select"
+            :disabled="!form.location_doctype || locationFieldsLoading"
+            @click="fieldPickerOpen = fieldPickerOpen === 'location_reverse_link_field' ? '' : 'location_reverse_link_field'"
+          >
+            <span>{{ locationFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.location_reverse_link_field, reverseLinkFields) }}</span>
+            <span class="le__chevron">⌄</span>
+          </button>
+          <div v-if="fieldPickerOpen === 'location_reverse_link_field'" class="le__option-pop">
+            <button v-for="f in reverseLinkFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseReverseLinkField(f.fieldname)">
+              <span>{{ f.label }}</span>
+              <small>{{ f.fieldname }} → {{ f.options }}</small>
+            </button>
+            <p v-if="!reverseLinkFields.length" class="le__option-empty">No Link fields point to the source DocType.</p>
+          </div>
+        </div>
+
         <div v-if="isCreate" class="le__row">
           <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lat field</span>
             <button
               type="button"
               class="le__field-select"
-              :disabled="!form.source_doctype || sourceFieldsLoading"
+              :disabled="!form.source_doctype || activeCoordinateLoading"
               @click="fieldPickerOpen = fieldPickerOpen === 'latitude_field' ? '' : 'latitude_field'"
             >
-              <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.latitude_field, coordinateFields) }}</span>
+              <span>{{ activeCoordinateLoading ? 'Loading fields…' : fieldChoiceLabel(form.latitude_field, activeCoordinateFields) }}</span>
               <span class="le__chevron">⌄</span>
             </button>
             <div v-if="fieldPickerOpen === 'latitude_field'" class="le__option-pop">
-              <button v-for="f in coordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('latitude_field', f.fieldname)">
+              <button v-for="f in activeCoordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('latitude_field', f.fieldname)">
                 <span>{{ f.label }}</span>
                 <small>{{ f.fieldname }}</small>
               </button>
-              <p v-if="!coordinateFields.length" class="le__option-empty">No Float fields found.</p>
+              <p v-if="!activeCoordinateFields.length" class="le__option-empty">No Float fields found.</p>
             </div>
           </div>
           <div class="le__field le__field--half le__link-field">
@@ -1368,19 +2088,44 @@ function close() {
             <button
               type="button"
               class="le__field-select"
-              :disabled="!form.source_doctype || sourceFieldsLoading"
+              :disabled="!form.source_doctype || activeCoordinateLoading"
               @click="fieldPickerOpen = fieldPickerOpen === 'longitude_field' ? '' : 'longitude_field'"
             >
-              <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.longitude_field, coordinateFields) }}</span>
+              <span>{{ activeCoordinateLoading ? 'Loading fields…' : fieldChoiceLabel(form.longitude_field, activeCoordinateFields) }}</span>
               <span class="le__chevron">⌄</span>
             </button>
             <div v-if="fieldPickerOpen === 'longitude_field'" class="le__option-pop">
-              <button v-for="f in coordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('longitude_field', f.fieldname)">
+              <button v-for="f in activeCoordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('longitude_field', f.fieldname)">
                 <span>{{ f.label }}</span>
                 <small>{{ f.fieldname }}</small>
               </button>
-              <p v-if="!coordinateFields.length" class="le__option-empty">No Float fields found.</p>
+              <p v-if="!activeCoordinateFields.length" class="le__option-empty">No Float fields found.</p>
             </div>
+          </div>
+        </div>
+
+        <div class="le__field le__link-field">
+          <span class="le__label">Location popup fields</span>
+          <div class="le__chips le__chips--inline">
+            <span v-for="(fieldname, index) in locationFieldRows" :key="fieldname" class="le__token">
+              {{ fieldChoiceLabel(fieldname, form.location_source !== 'Direct Fields' ? locationFields : sourceFields) }}
+              <button type="button" class="le__token-x" @click="removeLocationField(index)">×</button>
+            </span>
+            <button
+              type="button"
+              class="le__mini-btn"
+              :disabled="!availableLocationExtraFields.length"
+              @click="fieldPickerOpen = fieldPickerOpen === 'location_extra_fields' ? '' : 'location_extra_fields'"
+            >
+              Add field
+            </button>
+          </div>
+          <div v-if="fieldPickerOpen === 'location_extra_fields'" class="le__option-pop le__option-pop--static">
+            <button v-for="f in availableLocationExtraFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="addLocationField(f.fieldname)">
+              <span>{{ f.label }}</span>
+              <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
+            </button>
+            <p v-if="!availableLocationExtraFields.length" class="le__option-empty">No extra fields available.</p>
           </div>
         </div>
 
@@ -1413,13 +2158,7 @@ function close() {
           <div class="le__field le__field--half">
             <span class="le__label">Color</span>
             <div class="le__color-row le__color-row--custom">
-              <input
-                :value="colorPickerValue(form.color)"
-                class="le__color"
-                type="color"
-                title="Pick color"
-                @input="setPickedColor($event.target.value)"
-              />
+              <span class="le__color" :style="{ background: safeLayerColor(form.color) }" aria-hidden="true" />
               <input
                 v-model="form.color"
                 class="le__input le__color-code"
@@ -1481,10 +2220,17 @@ function close() {
             </div>
             <div v-if="iconStore.canCreate" class="le__icon-manager">
               <input v-model="uploadTitle" class="le__input le__input--sm" type="text" placeholder="Icon name" />
-              <select v-if="iconStore.canManageGlobal" v-model="uploadScope" class="le__input le__input--xs">
-                <option value="Personal">Personal</option>
-                <option value="Global">Global</option>
-              </select>
+              <div v-if="iconStore.canManageGlobal" class="le__field le__field--scope le__link-field">
+                <button type="button" class="le__field-select le__field-select--xs" @click="fieldPickerOpen = fieldPickerOpen === 'upload_scope' ? '' : 'upload_scope'">
+                  <span>{{ optionLabel(UPLOAD_SCOPE_OPTIONS, uploadScope, 'Personal') }}</span>
+                  <span class="le__chevron">⌄</span>
+                </button>
+                <div v-if="fieldPickerOpen === 'upload_scope'" class="le__option-pop">
+                  <button v-for="option in UPLOAD_SCOPE_OPTIONS" :key="option.v" type="button" class="le__option" :data-active="uploadScope === option.v" @mousedown.prevent="chooseUploadScope(option.v)">
+                    <span>{{ option.label }}</span>
+                  </button>
+                </div>
+              </div>
               <label class="le__btn le__btn--ghost" :class="{ 'le__btn--disabled': iconBusy }">
                 Upload Image
                 <input type="file" accept="image/*" class="le__file-input" :disabled="iconBusy" @change="uploadIconFromEvent" />
@@ -1503,16 +2249,28 @@ function close() {
         </div>
 
         <!-- Cluster toggle -->
-        <label class="le__check">
-          <input v-model="form.cluster" type="checkbox" :true-value="1" :false-value="0" />
+        <button
+          type="button"
+          class="le__toggle-row"
+          :class="{ 'le__toggle-row--on': !!form.cluster }"
+          :aria-pressed="form.cluster ? 'true' : 'false'"
+          @click="form.cluster = form.cluster ? 0 : 1"
+        >
+          <span class="le__toggle-dot" aria-hidden="true" />
           <span>Cluster pins at low zoom</span>
-        </label>
+        </button>
 
         <!-- Enabled toggle -->
-        <label class="le__check">
-          <input v-model="form.enabled" type="checkbox" :true-value="1" :false-value="0" />
+        <button
+          type="button"
+          class="le__toggle-row"
+          :class="{ 'le__toggle-row--on': !!form.enabled }"
+          :aria-pressed="form.enabled ? 'true' : 'false'"
+          @click="form.enabled = form.enabled ? 0 : 1"
+        >
+          <span class="le__toggle-dot" aria-hidden="true" />
           <span>Visible on map</span>
-        </label>
+        </button>
 
         <!-- Filter editor -->
         <div class="le__filter">
@@ -1554,7 +2312,7 @@ function close() {
                 <small>No grouping</small>
               </button>
               <button
-                v-for="f in sourceFields"
+                v-for="f in groupFieldOptions"
                 :key="f.fieldname"
                 type="button"
                 class="le__field-option"
@@ -1606,13 +2364,6 @@ function close() {
                     :value="form.group_config[String(band.key)]?.color || GROUP_PALETTE[i % GROUP_PALETTE.length]"
                     @input="e => setGroupColor(band.key, e.target.value)"
                     placeholder="#RRGGBB"
-                  />
-                  <input
-                    class="le__group-color-picker"
-                    type="color"
-                    :value="colorPickerValue(form.group_config[String(band.key)]?.color || GROUP_PALETTE[i % GROUP_PALETTE.length])"
-                    title="Pick custom color"
-                    @input="e => setGroupColor(band.key, e.target.value)"
                   />
                 </div>
               </details>
@@ -1737,7 +2488,9 @@ function close() {
                 <span>Time</span>
                 <input
                   class="le__input le__input--xs"
-                  type="time"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="HH:MM"
                   :value="_bandEdgeTime(_bandEdgeValue(bandEdgePicker.bandIndex, bandEdgePicker.edge))"
                   @input="e => updateBandEdgeTime(e.target.value)"
                 />
@@ -1776,13 +2529,6 @@ function close() {
                       :value="form.group_config[String(val)]?.color || GROUP_PALETTE[0]"
                       @input="e => setGroupColor(val, e.target.value)"
                       placeholder="#RRGGBB"
-                    />
-                    <input
-                      class="le__group-color-picker"
-                      type="color"
-                      :value="colorPickerValue(form.group_config[String(val)]?.color || GROUP_PALETTE[0])"
-                      title="Pick custom color"
-                      @input="e => setGroupColor(val, e.target.value)"
                     />
                   </div>
                 </details>
@@ -1877,12 +2623,23 @@ function close() {
         <div class="le__filter">
           <div class="le__filter-header">
             <span class="le__label">Popup fields <span class="le__hint">(default popup)</span></span>
-            <select :value="''" @change="e => addPopupField(e.target.value)" class="le__input le__input--xs">
-              <option value="" disabled>+ Add field</option>
-              <option v-for="f in sourceFields" :key="f.fieldname" :value="f.fieldname">
-                {{ f.label }}
-              </option>
-            </select>
+            <div class="le__link-field le__add-field-menu">
+              <button
+                type="button"
+                class="le__mini-btn"
+                :disabled="!popupFieldOptions.length"
+                @click="fieldPickerOpen = fieldPickerOpen === 'popup_field' ? '' : 'popup_field'"
+              >
+                Add field
+              </button>
+              <div v-if="fieldPickerOpen === 'popup_field'" class="le__option-pop le__option-pop--right">
+                <button v-for="f in popupFieldOptions" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="addPopupField(f.fieldname); fieldPickerOpen = ''">
+                  <span>{{ f.label }}</span>
+                  <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
+                </button>
+                <p v-if="!popupFieldOptions.length" class="le__option-empty">All fields already added.</p>
+              </div>
+            </div>
           </div>
           <div v-if="form.popup_fields.length" class="le__popup-fields">
             <div v-for="(fn, i) in form.popup_fields" :key="fn" class="le__popup-field-row">
@@ -1894,48 +2651,84 @@ function close() {
         </div>
 
         <!-- Click Action -->
-        <label class="le__field">
+        <div class="le__field le__link-field">
           <span class="le__label">Click action</span>
-          <select v-model="form.click_action" class="le__input">
-            <option value="popup">Show popup</option>
-            <option value="open_form">Open DocType form</option>
-            <option value="none">None (no click action)</option>
-          </select>
-        </label>
+          <button type="button" class="le__field-select" @click="fieldPickerOpen = fieldPickerOpen === 'click_action' ? '' : 'click_action'">
+            <span>{{ optionLabel(CLICK_ACTION_OPTIONS, form.click_action, 'Show popup') }}</span>
+            <span class="le__chevron">⌄</span>
+          </button>
+          <div v-if="fieldPickerOpen === 'click_action'" class="le__option-pop">
+            <button v-for="option in CLICK_ACTION_OPTIONS" :key="option.v" type="button" class="le__option" :data-active="form.click_action === option.v" @mousedown.prevent="chooseFormOption('click_action', option.v)">
+              <span>{{ option.label }}</span>
+              <small>{{ option.hint }}</small>
+            </button>
+          </div>
+        </div>
 
         <div class="le__filter">
           <div class="le__filter-header">
-            <label class="le__check le__check--inline">
-              <input v-model="form.heatmap" type="checkbox" :true-value="1" :false-value="0" />
+            <button
+              type="button"
+              class="le__toggle-row le__toggle-row--inline"
+              :class="{ 'le__toggle-row--on': !!form.heatmap }"
+              :aria-pressed="form.heatmap ? 'true' : 'false'"
+              @click="form.heatmap = form.heatmap ? 0 : 1"
+            >
+              <span class="le__toggle-dot" aria-hidden="true" />
               <span>Heatmap analysis <span class="le__hint">(density or weighted metric)</span></span>
-            </label>
+            </button>
           </div>
           <template v-if="form.heatmap">
-            <label class="le__field">
+            <div class="le__field">
               <span class="le__label">Question</span>
-              <select v-model="form.heatmap_mode" class="le__input le__input--sm">
-                <option value="count">Where are records concentrated?</option>
-                <option value="sum">Where is a numeric metric concentrated?</option>
-              </select>
-            </label>
+              <div class="le__seg-row">
+                <button
+                  v-for="option in HEATMAP_MODE_OPTIONS"
+                  :key="option.v"
+                  type="button"
+                  class="le__seg le__seg--wide"
+                  :class="{ 'le__seg--active': form.heatmap_mode === option.v }"
+                  :title="option.hint"
+                  @click="form.heatmap_mode = option.v"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
             <template v-if="form.heatmap_mode === 'sum'">
               <div class="le__row">
-                <label class="le__field le__field--half">
+                <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Metric field</span>
-                  <select v-model="form.heatmap_weight_field" class="le__input le__input--sm">
-                    <option value="">Choose metric</option>
-                    <option v-for="f in numericFields" :key="f.fieldname" :value="f.fieldname">
-                      {{ f.label }} ({{ f.fieldname }})
-                    </option>
-                  </select>
-                </label>
-                <label class="le__field le__field--half">
+                  <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'heatmap_weight_field' ? '' : 'heatmap_weight_field'">
+                    <span>{{ form.heatmap_weight_field ? fieldChoiceLabel(form.heatmap_weight_field, numericFields) : 'Choose metric' }}</span>
+                    <span class="le__chevron">⌄</span>
+                  </button>
+                  <div v-if="fieldPickerOpen === 'heatmap_weight_field'" class="le__option-pop">
+                    <button type="button" class="le__option" @mousedown.prevent="chooseFormOption('heatmap_weight_field', '')">
+                      <span>Choose metric</span>
+                      <small>No weighted metric</small>
+                    </button>
+                    <button v-for="f in numericFields" :key="f.fieldname" type="button" class="le__option" :data-active="form.heatmap_weight_field === f.fieldname" @mousedown.prevent="chooseFormOption('heatmap_weight_field', f.fieldname)">
+                      <span>{{ f.label }}</span>
+                      <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
+                    </button>
+                  </div>
+                </div>
+                <div class="le__field le__field--half">
                   <span class="le__label">Scale</span>
-                  <select v-model="form.heatmap_weight_scale" class="le__input le__input--sm">
-                    <option value="linear">Linear</option>
-                    <option value="log">Log</option>
-                  </select>
-                </label>
+                  <div class="le__seg-row">
+                    <button
+                      v-for="option in HEATMAP_SCALE_OPTIONS"
+                      :key="option.v"
+                      type="button"
+                      class="le__seg"
+                      :class="{ 'le__seg--active': form.heatmap_weight_scale === option.v }"
+                      @click="form.heatmap_weight_scale = option.v"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="le__row">
                 <label class="le__field le__field--half">
@@ -1963,13 +2756,22 @@ function close() {
                 <span class="le__label">Opacity</span>
                 <input v-model.number="form.heatmap_opacity" class="le__input le__input--sm" type="number" min="0.1" max="1" step="0.05" />
               </label>
-              <label class="le__field le__field--half">
+              <div class="le__field le__field--half le__link-field">
                 <span class="le__label">Ramp</span>
-                <select class="le__input le__input--sm" @change="e => applyHeatmapRamp(e.target.value)">
-                  <option value="">Layer color</option>
-                  <option v-for="r in heatmapRampOptions" :key="r.key" :value="r.key">{{ r.label }}</option>
-                </select>
-              </label>
+                <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'heatmap_ramp' ? '' : 'heatmap_ramp'">
+                  <span>Choose ramp</span>
+                  <span class="le__chevron">⌄</span>
+                </button>
+                <div v-if="fieldPickerOpen === 'heatmap_ramp'" class="le__option-pop">
+                  <button type="button" class="le__option" @mousedown.prevent="chooseHeatmapRamp('')">
+                    <span>Layer color</span>
+                    <small>Use the current layer color</small>
+                  </button>
+                  <button v-for="r in heatmapRampOptions" :key="r.key" type="button" class="le__option" @mousedown.prevent="chooseHeatmapRamp(r.key)">
+                    <span>{{ r.label }}</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </template>
         </div>
@@ -1980,22 +2782,36 @@ function close() {
              feature; radius_meters is the fallback. -->
         <div class="le__filter">
           <div class="le__filter-header">
-            <label class="le__check le__check--inline">
-              <input v-model="form.radius_enabled" type="checkbox" :true-value="1" :false-value="0" />
+            <button
+              type="button"
+              class="le__toggle-row le__toggle-row--inline"
+              :class="{ 'le__toggle-row--on': !!form.radius_enabled }"
+              :aria-pressed="form.radius_enabled ? 'true' : 'false'"
+              @click="form.radius_enabled = form.radius_enabled ? 0 : 1"
+            >
+              <span class="le__toggle-dot" aria-hidden="true" />
               <span>Radius halo <span class="le__hint">(service area around pin)</span></span>
-            </label>
+            </button>
           </div>
           <template v-if="form.radius_enabled">
             <div class="le__row">
-              <label class="le__field le__field--half">
+              <div class="le__field le__field--half le__link-field">
                 <span class="le__label">Radius field (optional)</span>
-                <select v-model="form.radius_field" class="le__input le__input--sm">
-                  <option value="">Use default meters</option>
-                  <option v-for="f in numericFields" :key="f.fieldname" :value="f.fieldname">
-                    {{ f.label }} ({{ f.fieldname }})
-                  </option>
-                </select>
-              </label>
+                <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'radius_field' ? '' : 'radius_field'">
+                  <span>{{ form.radius_field ? fieldChoiceLabel(form.radius_field, numericFields) : 'Use default meters' }}</span>
+                  <span class="le__chevron">⌄</span>
+                </button>
+                <div v-if="fieldPickerOpen === 'radius_field'" class="le__option-pop">
+                  <button type="button" class="le__option" @mousedown.prevent="chooseFormOption('radius_field', '')">
+                    <span>Use default meters</span>
+                    <small>No per-feature radius field</small>
+                  </button>
+                  <button v-for="f in numericFields" :key="f.fieldname" type="button" class="le__option" :data-active="form.radius_field === f.fieldname" @mousedown.prevent="chooseFormOption('radius_field', f.fieldname)">
+                    <span>{{ f.label }}</span>
+                    <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
+                  </button>
+                </div>
+              </div>
               <label class="le__field le__field--half">
                 <span class="le__label">Default meters</span>
                 <input v-model.number="form.radius_meters" class="le__input le__input--sm" type="number" min="100" max="50000" step="100" />
@@ -2017,12 +2833,260 @@ function close() {
             spellcheck="false"
             placeholder="<div class='pin'>{{ label }} — {{ doc.name }}</div>"
           />
+          <div v-if="popupTemplateSnippets.length" class="le__template-snippets">
+            <button
+              v-for="snippet in popupTemplateSnippets"
+              :key="`${snippet.label}:${snippet.value}`"
+              type="button"
+              class="le__snippet-chip"
+              @click="insertPopupSnippet(snippet.value)"
+            >
+              {{ snippet.label }}
+            </button>
+          </div>
+          <div class="le__popup-preview-actions">
+            <button
+              type="button"
+              class="le__mini-btn"
+              :disabled="popupPreviewLoading || !form.popup_template"
+              @click="previewPopupTemplate"
+            >
+              {{ popupPreviewLoading ? 'Previewing' : 'Preview template' }}
+            </button>
+            <span v-if="popupPreview?.source_label" class="le__preview-source">
+              {{ popupPreview.source_label }}
+            </span>
+          </div>
+          <p v-if="popupPreviewError" class="le__preview-error">{{ popupPreviewError }}</p>
+          <div v-if="popupPreview?.html" class="le__popup-preview" v-html="popupPreview.html" />
           <p class="le__hint le__hint--block">
             Rendered server-side per row. Fields of the source row are in scope (e.g.
             <code>&#123;&#123; doc.name &#125;&#125;</code>,
             <code>&#123;&#123; title &#125;&#125;</code>), plus
-            <code>layer</code>. Leave empty to fall back to the default popup.
+            <code>metrics</code>, <code>location</code>, and <code>layer</code>.
+            Leave empty to fall back to the default popup.
           </p>
+        </details>
+
+        <details class="le__advanced" open>
+          <summary>Field metrics <span class="le__hint">(linked records)</span></summary>
+          <div v-if="form.source_doctype" class="le__metric-suggestions">
+            <div class="le__suggestion-head">
+              <span>Suggested field metrics</span>
+              <button
+                type="button"
+                class="le__mini-btn"
+                :disabled="!visibleMoneyMetricSuggestions.length"
+                @click="addAllMoneyMetricSuggestions"
+              >
+                Add all
+              </button>
+            </div>
+            <p v-if="moneyMetricSuggestionsLoading" class="le__suggestion-empty">Scanning linked DocTypes...</p>
+            <p v-else-if="moneyMetricSuggestionsError" class="le__suggestion-empty">Could not load suggestions.</p>
+            <div v-else-if="visibleMoneyMetricSuggestions.length" class="le__suggestion-grid">
+              <button
+                v-for="suggestion in visibleMoneyMetricSuggestions"
+                :key="suggestion.key"
+                type="button"
+                class="le__suggestion-chip"
+                @click="addMoneyMetricSuggestion(suggestion)"
+              >
+                <span>{{ suggestion.label }}</span>
+                <small>{{ moneySuggestionSourceLabel(suggestion) }}</small>
+              </button>
+            </div>
+            <p v-else class="le__suggestion-empty">No unused suggestions found.</p>
+          </div>
+          <div class="le__metric-list">
+            <article v-for="(metric, index) in linkedMetricRows" :key="`${metric.key || index}:${index}`" class="le__metric-card">
+              <div class="le__metric-head">
+                <input
+                  class="le__input le__input--sm"
+                  :value="metric.label || ''"
+                  placeholder="Outstanding amount"
+                  @input="updateLinkedMetric(index, { label: $event.target.value })"
+                />
+                <button type="button" class="le__icon-btn" title="Remove metric" @click="removeLinkedMetric(index)">×</button>
+              </div>
+              <div class="le__row">
+                <label class="le__field le__field--half">
+                  <span class="le__label">Key</span>
+                  <input class="le__input le__input--sm" :value="metric.key || ''" placeholder="outstanding" @input="updateLinkedMetric(index, { key: _metricKeyFromLabel($event.target.value) })" />
+                </label>
+                <label class="le__field le__field--half">
+                  <span class="le__label">DocType</span>
+                  <input class="le__input le__input--sm" :value="metric.source_doctype || ''" placeholder="Sales Invoice" @input="updateLinkedMetric(index, { source_doctype: $event.target.value })" />
+                </label>
+              </div>
+              <div class="le__row">
+                <div class="le__field le__field--half le__link-field">
+                  <span class="le__label">Link field</span>
+                  <button
+                    type="button"
+                    class="le__field-select le__field-select--sm"
+                    :disabled="!metric.source_doctype"
+                    @click="openMetricFieldPicker(index, 'link', metric)"
+                  >
+                    <span>{{ metricFieldChoiceLabel(metric, metric.link_field, 'Choose link field') }}</span>
+                    <span class="le__chevron">⌄</span>
+                  </button>
+                  <div v-if="fieldPickerOpen === `metric_field:${index}:link`" class="le__option-pop">
+                    <button
+                      v-for="field in metricLinkFields(metric)"
+                      :key="field.fieldname"
+                      type="button"
+                      class="le__option"
+                      :data-active="metric.link_field === field.fieldname"
+                      @mousedown.prevent="chooseMetricLinkField(index, metric, field.fieldname)"
+                    >
+                      <span>{{ field.label || field.fieldname }}</span>
+                      <small>{{ field.fieldname }} · {{ field.fieldtype }}{{ field.options ? ` · ${field.options}` : '' }}</small>
+                    </button>
+                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
+                    <p v-else-if="!metricLinkFields(metric).length" class="le__option-empty">No Link or Dynamic Link fields found.</p>
+                  </div>
+                </div>
+                <div class="le__field le__field--half le__link-field">
+                  <span class="le__label">Dynamic selector</span>
+                  <button
+                    type="button"
+                    class="le__field-select le__field-select--sm"
+                    :disabled="!metric.source_doctype"
+                    @click="openMetricFieldPicker(index, 'dynamic', metric)"
+                  >
+                    <span>{{ metricFieldChoiceLabel(metric, metric.dynamic_link_doctype_field, 'Optional selector') }}</span>
+                    <span class="le__chevron">⌄</span>
+                  </button>
+                  <div v-if="fieldPickerOpen === `metric_field:${index}:dynamic`" class="le__option-pop">
+                    <button
+                      type="button"
+                      class="le__option"
+                      :data-active="!metric.dynamic_link_doctype_field"
+                      @mousedown.prevent="chooseMetricField(index, '', 'dynamic_link_doctype_field')"
+                    >
+                      <span>No selector</span>
+                      <small>Use this for normal Link fields</small>
+                    </button>
+                    <button
+                      v-for="field in metricDynamicSelectorFields(metric)"
+                      :key="field.fieldname"
+                      type="button"
+                      class="le__option"
+                      :data-active="metric.dynamic_link_doctype_field === field.fieldname"
+                      @mousedown.prevent="chooseMetricField(index, field.fieldname, 'dynamic_link_doctype_field')"
+                    >
+                      <span>{{ field.label || field.fieldname }}</span>
+                      <small>{{ field.fieldname }} · {{ field.fieldtype }}{{ field.options ? ` · ${field.options}` : '' }}</small>
+                    </button>
+                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
+                    <p v-else-if="!metricDynamicSelectorFields(metric).length" class="le__option-empty">No selector-like fields found.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="le__row">
+                <div class="le__field le__field--half le__link-field">
+                  <span class="le__label">Value field</span>
+                  <button
+                    type="button"
+                    class="le__field-select le__field-select--sm"
+                    :disabled="metric.aggregate === 'count' || !metric.source_doctype"
+                    @click="openMetricFieldPicker(index, 'amount', metric)"
+                  >
+                    <span>{{ metric.aggregate === 'count' ? 'Rows' : metricFieldChoiceLabel(metric, metric.field, 'Choose value field') }}</span>
+                    <span class="le__chevron">⌄</span>
+                  </button>
+                  <div v-if="fieldPickerOpen === `metric_field:${index}:amount`" class="le__option-pop">
+                    <button
+                      v-for="field in metricAmountFields(metric)"
+                      :key="field.fieldname"
+                      type="button"
+                      class="le__option"
+                      :data-active="metric.field === field.fieldname"
+                      @mousedown.prevent="chooseMetricField(index, field.fieldname, 'field')"
+                    >
+                      <span>{{ field.label || field.fieldname }}</span>
+                      <small>{{ field.fieldname }} · {{ field.fieldtype }}</small>
+                    </button>
+                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
+                    <p v-else-if="!metricAmountFields(metric).length" class="le__option-empty">No numeric value fields found.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="le__seg-row">
+                <button
+                  v-for="option in LINKED_METRIC_AGGREGATES"
+                  :key="option.v"
+                  type="button"
+                  class="le__seg"
+                  :class="{ 'le__seg--active': (metric.aggregate || 'count') === option.v }"
+                  @click="updateLinkedMetric(index, { aggregate: option.v })"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </article>
+            <p v-if="!linkedMetricRows.length" class="le__empty-state">No field metrics configured.</p>
+          </div>
+          <button type="button" class="le__btn le__btn--ghost le__btn--wide" @click="addLinkedMetric">Add metric</button>
+          <p class="le__hint le__hint--block">
+            Use any DocType with a Link or Dynamic Link back to this source. Currency and numeric fields can drive value intelligence.
+          </p>
+        </details>
+
+        <details class="le__advanced">
+          <summary>Metric filters <span class="le__hint">(optional)</span></summary>
+          <div class="le__metric-list">
+            <article v-for="(filter, index) in linkedMetricFilterRows" :key="index" class="le__metric-card le__metric-card--compact">
+              <div class="le__row">
+                <div class="le__field le__field--half le__link-field">
+                  <span class="le__label">Metric</span>
+                  <button
+                    type="button"
+                    class="le__field-select le__field-select--sm"
+                    :disabled="!linkedMetricRows.length"
+                    @click="fieldPickerOpen = fieldPickerOpen === `metric_filter:${index}` ? '' : `metric_filter:${index}`"
+                  >
+                    <span>{{ linkedMetricChoiceLabel(filter.metric) }}</span>
+                    <span class="le__chevron">⌄</span>
+                  </button>
+                  <div v-if="fieldPickerOpen === `metric_filter:${index}`" class="le__option-pop">
+                    <button
+                      v-for="metric in linkedMetricRows"
+                      :key="metric.key"
+                      type="button"
+                      class="le__option"
+                      :data-active="filter.metric === metric.key"
+                      @mousedown.prevent="chooseLinkedMetricFilter(index, metric.key)"
+                    >
+                      <span>{{ metric.label || metric.key }}</span>
+                      <small>{{ metric.key }} · {{ metric.aggregate || 'sum' }} {{ metric.field || 'rows' }}</small>
+                    </button>
+                    <p v-if="!linkedMetricRows.length" class="le__option-empty">Add a field metric first.</p>
+                  </div>
+                </div>
+                <label class="le__field le__field--half">
+                  <span class="le__label">Value</span>
+                  <input class="le__input le__input--sm" :value="filter.value ?? ''" placeholder="0" @input="updateLinkedMetricFilter(index, { value: $event.target.value })" />
+                </label>
+              </div>
+              <div class="le__seg-row le__seg-row--wrap">
+                <button
+                  v-for="operator in METRIC_FILTER_OPERATORS"
+                  :key="operator"
+                  type="button"
+                  class="le__seg"
+                  :class="{ 'le__seg--active': (filter.operator || '=') === operator }"
+                  @click="updateLinkedMetricFilter(index, { operator })"
+                >
+                  {{ operator }}
+                </button>
+                <button type="button" class="le__seg le__seg--danger" @click="removeLinkedMetricFilter(index)">Remove</button>
+              </div>
+            </article>
+            <p v-if="!linkedMetricFilterRows.length" class="le__empty-state">No metric filters configured.</p>
+          </div>
+          <button type="button" class="le__btn le__btn--ghost le__btn--wide" :disabled="!linkedMetricRows.length" @click="addLinkedMetricFilter">Add filter</button>
         </details>
 
         <p v-if="error" class="le__error">{{ error }}</p>
@@ -2043,7 +3107,9 @@ function close() {
       :model-value="form.group_config"
       :group-by-field="form.group_by_field"
       :source-doctype="form.source_doctype"
-      :source-fields="sourceFields"
+      :source-fields="groupFieldOptions"
+      :linked-metrics-json="form.linked_metrics_json"
+      :filter-json="serializeFilterRows(form.filter_rows)"
       :layer-color="safeLayerColor(form.color)"
       :layer-icon="form.icon"
       :color-palette="GROUP_PALETTE"
@@ -2158,6 +3224,20 @@ function close() {
   opacity: 0.55;
   cursor: not-allowed;
 }
+.le__field-select--sm {
+  min-height: 31px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.le__field-select--xs {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.le__field--scope {
+  width: 108px;
+  flex: 0 0 auto;
+}
 .le__option-pop {
   position: absolute;
   z-index: 80;
@@ -2175,6 +3255,15 @@ function close() {
   background: rgba(18, 20, 24, 0.98);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
   box-sizing: border-box;
+}
+.le__option-pop--static {
+  position: static;
+  max-height: 190px;
+  margin-top: 8px;
+}
+.le__option-pop--right {
+  left: auto;
+  min-width: 220px;
 }
 .le__option {
   width: 100%;
@@ -2207,6 +3296,10 @@ function close() {
 .le__option:hover {
   background: rgba(59, 130, 246, 0.15);
 }
+.le__option[data-active="true"] {
+  background: rgba(59, 130, 246, 0.2);
+  color: #fff;
+}
 .le__option-empty {
   margin: 0;
   padding: 8px;
@@ -2228,13 +3321,9 @@ function close() {
   width: 36px; height: 36px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
   flex: none;
 }
-.le__color::-webkit-color-swatch-wrapper { padding: 4px; }
-.le__color::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .le__color-code {
   flex: 1 1 126px;
   min-width: 0;
@@ -2262,6 +3351,196 @@ function close() {
 }
 .le__size-chip--active {
   background: rgba(59, 130, 246, 0.18); border-color: #3B82F6; color: #fff;
+}
+.le__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.le__token {
+  max-width: 100%;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px 4px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(230, 232, 236, 0.88);
+  font-size: 11px;
+  box-sizing: border-box;
+}
+.le__token-x,
+.le__icon-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(230, 232, 236, 0.7);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+.le__token-x:hover,
+.le__icon-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fff;
+}
+.le__mini-btn {
+  min-height: 28px;
+  border: 1px solid rgba(59, 130, 246, 0.34);
+  border-radius: 7px;
+  background: rgba(59, 130, 246, 0.12);
+  color: rgba(230, 232, 236, 0.92);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.le__mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.le__metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.le__metric-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 9px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.06);
+}
+.le__suggestion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(230, 232, 236, 0.86);
+  font-size: 11px;
+  font-weight: 650;
+}
+.le__suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+.le__suggestion-chip {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(230, 232, 236, 0.9);
+  padding: 7px 8px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.le__suggestion-chip:hover {
+  border-color: rgba(59, 130, 246, 0.42);
+  background: rgba(59, 130, 246, 0.12);
+}
+.le__suggestion-chip span,
+.le__suggestion-chip small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.le__suggestion-chip span {
+  font-size: 11px;
+  font-weight: 650;
+}
+.le__suggestion-chip small {
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 10px;
+}
+.le__suggestion-empty {
+  margin: 0;
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 11px;
+}
+.le__metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+.le__metric-card--compact {
+  gap: 7px;
+}
+.le__metric-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.le__seg-row {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.le__seg-row--wrap {
+  flex-wrap: wrap;
+}
+.le__seg {
+  min-height: 26px;
+  flex: 1 1 0;
+  min-width: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(230, 232, 236, 0.68);
+  padding: 4px 7px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.le__seg--wide {
+  min-width: 0;
+}
+.le__seg--active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.76);
+  color: #fff;
+}
+.le__seg--danger {
+  flex: 0 0 auto;
+  border-color: rgba(239, 68, 68, 0.24);
+  color: rgba(252, 165, 165, 0.92);
+}
+.le__empty-state {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.11);
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 11px;
+}
+.le__btn--wide {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
 }
 
 /* Icon glyph picker */
@@ -2304,7 +3583,7 @@ function close() {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.le__check--master {
+.le__toggle-row--master {
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.3);
   border-radius: 7px;
@@ -2345,8 +3624,44 @@ function close() {
 .le__file-input {
   display: none;
 }
-.le__check { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
-.le__check input { accent-color: #3B82F6; }
+.le__toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 232, 236, 0.84);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.le__toggle-row--inline {
+  width: auto;
+  min-height: 30px;
+  padding: 6px 9px;
+}
+.le__toggle-row--on {
+  border-color: rgba(59, 130, 246, 0.62);
+  background: rgba(59, 130, 246, 0.14);
+  color: #fff;
+}
+.le__toggle-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: rgba(230, 232, 236, 0.3);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+.le__toggle-row--on .le__toggle-dot {
+  background: #3B82F6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
 .le__filter {
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -2379,6 +3694,69 @@ function close() {
   box-sizing: border-box;
 }
 .le__textarea:focus { outline: none; border-color: #3B82F6; }
+.le__template-snippets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.le__snippet-chip {
+  max-width: 100%;
+  min-height: 25px;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  color: rgba(191, 219, 254, 0.88);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.le__snippet-chip:hover {
+  border-color: rgba(59, 130, 246, 0.48);
+  background: rgba(59, 130, 246, 0.16);
+  color: #fff;
+}
+.le__popup-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.le__preview-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(230, 232, 236, 0.56);
+  font-size: 11px;
+}
+.le__preview-error {
+  margin: 8px 0 0;
+  color: #FCA5A5;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.le__popup-preview {
+  max-height: 190px;
+  overflow: auto;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(230, 232, 236, 0.92);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.le__popup-preview :deep(*) {
+  max-width: 100%;
+}
 .le__hint--block {
   display: block; margin: 6px 0 0; line-height: 1.4;
 }
@@ -2610,26 +3988,6 @@ function close() {
   width: 100%;
   margin-top: 2px;
 }
-.le__group-color-picker {
-  grid-column: 7;
-  grid-row: 1 / span 3;
-  width: 40px;
-  height: 40px;
-	margin-left: 10px;
-  align-self: stretch;
-  padding: 0;
-  border: 2px solid rgba(255, 255, 255, 0.82);
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-}
-.le__group-color-picker::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-.le__group-color-picker::-webkit-color-swatch {
-  border: 0;
-  border-radius: 5px;
-}
 .le__group-val-text {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2821,13 +4179,6 @@ function close() {
   align-items: center;
   flex: none;
 }
-.le__color--sm {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-}
-.le__color--sm::-webkit-color-swatch-wrapper { padding: 2px; }
-.le__color--sm::-webkit-color-swatch { border-radius: 3px; border: 0; }
 .le__input--xs {
   padding: 4px 6px;
   font-size: 11px;

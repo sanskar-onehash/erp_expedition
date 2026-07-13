@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { useZonesStore } from '../state/zones.js'
@@ -21,6 +21,10 @@ const tiltGesture = ref(null)
 const suppressEditAutoOpen = ref(false)
 const shapeOpen = ref(false)
 const selectedShape = ref('polygon')
+const layoutEls = {}
+const popoverEls = {}
+const viewport = ref({ width: 0, height: 0 })
+const popoverRevision = ref(0)
 
 const shapeTools = [
   { id: 'polygon', label: 'Polygon zone', glyph: 'M6 5l11 2 3 9-8 5-8-6 2-10z M6 5h0 M17 7h0 M20 16h0 M12 21h0 M4 15h0' },
@@ -33,6 +37,11 @@ const actionTools = computed(() => [
   { id: 'measure-line', label: 'Measure distance', glyph: 'M4 19L19 4 M7 16l1 1 M10 13l1 1 M13 10l1 1 M16 7l1 1', shortcut: shortcutLabel('measure-line') },
   { id: 'measure-area', label: 'Measure area', glyph: 'M6 7l9-3 5 8-4 8-10-2-2-8z', shortcut: shortcutLabel('measure-area') },
 ])
+const strokeStyleOptions = [
+  { id: 'solid', label: 'Solid', glyph: 'M4 12h16' },
+  { id: 'dashed', label: 'Dashed', glyph: 'M4 12h4m4 0h4m4 0h0' },
+  { id: 'dotted', label: 'Dotted', glyph: 'M5 12h.01M12 12h.01M19 12h.01' },
+]
 const presets = ['#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#06B6D4', '#F97316', '#84CC16', '#EF4444', '#6366F1', '#14B8A6', '#A855F7']
 const selectedZone = computed(() => ui.selectedZone)
 const edit = ref({})
@@ -55,15 +64,22 @@ watch(selectedZone, (zone) => {
 }, { immediate: true })
 
 onMounted(() => {
+  updateViewport()
   document.addEventListener('pointerdown', onDocumentPointerDown, true)
   document.addEventListener('keydown', onDocumentKeyDown)
+  window.addEventListener('resize', updateViewport)
   window.addEventListener('expedition:shortcut', onShortcut)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown, true)
   document.removeEventListener('keydown', onDocumentKeyDown)
+  window.removeEventListener('resize', updateViewport)
   window.removeEventListener('expedition:shortcut', onShortcut)
+})
+
+watch([shapeOpen, styleOpen, editOpen, tiltOpen], () => {
+  nextTick(measurePopovers)
 })
 
 function closeEditPanel() {
@@ -197,10 +213,6 @@ function applyPreset(color) {
   styleOpen.value = false
 }
 
-function nativeColorValue(value, fallback = '#3B82F6') {
-  return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : fallback
-}
-
 function resetTilt() {
   const m = window.expeditionMap?.getMap?.()
   window.removeEventListener('pointermove', updateTiltFromPointer)
@@ -266,7 +278,11 @@ const puckStyle = computed(() => {
 
 const layoutCustomizing = computed(() => !!layout?.customizing?.value)
 function registerLayout(id) {
-  return (el) => layout?.registerLayoutItem?.(id, el)
+  return (el) => {
+    if (el) layoutEls[id] = el
+    else delete layoutEls[id]
+    layout?.registerLayoutItem?.(id, el)
+  }
 }
 function layoutStyle(id) {
   return layout?.itemStyle?.(id) || {}
@@ -282,7 +298,48 @@ function onLayoutPointerDown(id, event) {
 function layoutLabel(id) {
   return layout?.labels?.[id] || ''
 }
-function popoverStyle(id, dx = 48, dy = 0) {
+function updateViewport() {
+  viewport.value = {
+    width: window.innerWidth || 0,
+    height: window.innerHeight || 0,
+  }
+  nextTick(measurePopovers)
+}
+
+function registerPopover(id) {
+  return (el) => {
+    if (el) popoverEls[id] = el
+    else delete popoverEls[id]
+  }
+}
+
+function measurePopovers() {
+  popoverRevision.value += 1
+}
+
+function popoverStyle(id, dx = 48, dy = 0, popoverId = id) {
+  popoverRevision.value
+  const anchor = layoutEls[id]?.getBoundingClientRect?.()
+  const pop = popoverEls[popoverId]?.getBoundingClientRect?.()
+  const width = pop?.width || 180
+  const height = pop?.height || 160
+  const margin = 10
+  const vw = viewport.value.width || window.innerWidth || 0
+  const vh = viewport.value.height || window.innerHeight || 0
+  if (anchor && vw && vh) {
+    const opensRight = anchor.right + dx + width <= vw - margin
+    const opensLeft = anchor.left - dx - width >= margin
+    const rawLeft = opensRight || !opensLeft
+      ? anchor.right + Math.max(0, dx - 40)
+      : anchor.left - dx - width
+    const rawTop = anchor.top + dy
+    return {
+      position: 'fixed',
+      left: `${Math.max(margin, Math.min(vw - margin - width, rawLeft))}px`,
+      top: `${Math.max(margin, Math.min(vh - margin - height, rawTop))}px`,
+      maxHeight: `${Math.max(120, vh - margin * 2)}px`,
+    }
+  }
   const style = layoutStyle(id)
   return {
     left: `calc(${style.left || '12px'} + ${dx}px)`,
@@ -292,11 +349,6 @@ function popoverStyle(id, dx = 48, dy = 0) {
 
 function setEditColor(field, color) {
   edit.value = { ...edit.value, [field]: color }
-}
-
-function commitDrawingColor(event) {
-  ui.setDrawingColor(event.target.value)
-  styleOpen.value = false
 }
 </script>
 
@@ -373,7 +425,7 @@ function commitDrawingColor(event) {
     </div>
     </div>
 
-    <div v-if="shapeOpen" class="mtt__pop mtt__pop--shapes" :style="popoverStyle('toolsPrimary', 48, 44)">
+    <div v-if="shapeOpen" :ref="registerPopover('shape')" class="mtt__pop mtt__pop--shapes" :style="popoverStyle('toolsPrimary', 48, 44, 'shape')">
       <button
         v-for="shape in shapeTools"
         :key="shape.id"
@@ -424,7 +476,7 @@ function commitDrawingColor(event) {
           </svg>
           <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('tilt-rotate') }}</span>
         </button>
-        <div v-if="tiltOpen" class="mtt__pop mtt__pop--tilt">
+        <div v-if="tiltOpen" :ref="registerPopover('tilt')" class="mtt__pop mtt__pop--tilt" :style="popoverStyle('toolsStyle', 48, 64, 'tilt')">
           <div ref="tiltPad" class="mtt__tilt" @dblclick.prevent="resetTilt">
             <span class="mtt__tilt-cross mtt__tilt-cross--h" />
             <span class="mtt__tilt-cross mtt__tilt-cross--v" />
@@ -459,12 +511,12 @@ function commitDrawingColor(event) {
     </div>
     </div>
 
-    <div v-if="styleOpen" class="mtt__pop mtt__pop--style" :style="popoverStyle('toolsStyle', 48, 0)">
+    <div v-if="styleOpen" :ref="registerPopover('style')" class="mtt__pop mtt__pop--style" :style="popoverStyle('toolsStyle', 48, 0, 'style')">
       <div class="mtt__swatches">
         <button v-for="color in presets" :key="color" type="button" class="mtt__preset" :style="{ background: color }" @click="applyPreset(color)" />
       </div>
       <div class="mtt__color-row">
-        <input :value="nativeColorValue(ui.drawingColor)" class="mtt__color" type="color" @change="commitDrawingColor" />
+        <span class="mtt__color-preview" :style="{ background: ui.drawingColor }" />
         <input
           :value="ui.drawingColor"
           class="mtt__color-code"
@@ -475,7 +527,7 @@ function commitDrawingColor(event) {
       </div>
     </div>
 
-    <div v-if="editOpen && selectedZone" class="mtt__pop mtt__pop--edit" :style="popoverStyle('toolsStyle', 48, 0)">
+    <div v-if="editOpen && selectedZone" :ref="registerPopover('edit')" class="mtt__pop mtt__pop--edit" :style="popoverStyle('toolsStyle', 48, 0, 'edit')">
       <label class="mtt__field">
         <span>Name</span>
         <input v-model="edit.title" type="text" placeholder="Zone name" />
@@ -492,10 +544,6 @@ function commitDrawingColor(event) {
         <button v-for="color in presets" :key="'fill-' + color" type="button" class="mtt__preset" :style="{ background: color }" @click="setEditColor('color', color)" />
       </div>
       <label class="mtt__field">
-        <span>Picker</span>
-        <input :value="nativeColorValue(edit.color)" type="color" @input="edit.color = $event.target.value" />
-      </label>
-      <label class="mtt__field">
         <span>Opacity</span>
         <input v-model.number="edit.fill_opacity" type="number" min="0" max="1" step="0.05" />
       </label>
@@ -507,21 +555,29 @@ function commitDrawingColor(event) {
         <button v-for="color in presets" :key="'border-' + color" type="button" class="mtt__preset" :style="{ background: color }" @click="setEditColor('stroke_color', color)" />
       </div>
       <label class="mtt__field">
-        <span>Picker</span>
-        <input :value="nativeColorValue(edit.stroke_color, '#1E40AF')" type="color" @input="edit.stroke_color = $event.target.value" />
-      </label>
-      <label class="mtt__field">
         <span>Width</span>
         <input v-model.number="edit.stroke_width" type="number" min="1" max="16" step="1" />
       </label>
-      <label class="mtt__field">
+      <div class="mtt__field">
         <span>Type</span>
-        <select v-model="edit.stroke_style">
-          <option value="solid">Solid</option>
-          <option value="dashed">Dashed</option>
-          <option value="dotted">Dotted</option>
-        </select>
-      </label>
+        <div class="mtt__seg" role="radiogroup" aria-label="Border type">
+          <button
+            v-for="option in strokeStyleOptions"
+            :key="option.id"
+            type="button"
+            class="mtt__seg-btn"
+            :class="{ 'mtt__seg-btn--active': edit.stroke_style === option.id }"
+            :title="option.label"
+            :aria-label="option.label"
+            :aria-pressed="edit.stroke_style === option.id ? 'true' : 'false'"
+            @click="edit.stroke_style = option.id"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path :d="option.glyph" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
       <div class="mtt__actions">
         <button type="button" class="mtt__save" @click="saveSelectedZone">Save</button>
         <button type="button" class="mtt__delete" @click="deleteSelectedZone">Delete</button>
@@ -635,6 +691,7 @@ function commitDrawingColor(event) {
   position: absolute;
   z-index: 46;
   pointer-events: auto;
+  overflow: auto;
   min-width: 156px;
   background: rgba(11, 14, 20, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -646,8 +703,6 @@ function commitDrawingColor(event) {
 .mtt__pop--style { width: 156px; }
 .mtt__pop--edit { min-width: 220px; }
 .mtt__pop--tilt {
-  top: 0;
-  left: 48px;
   min-width: auto;
   padding: 8px;
 }
@@ -722,21 +777,32 @@ function commitDrawingColor(event) {
 .mtt__field input[type="number"] {
   width: 74px;
 }
-.mtt__field select {
+.mtt__seg {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
   min-width: 0;
-  background: rgba(0, 0, 0, 0.25);
-  color: #E6E8EC;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 5px;
-  padding: 5px 7px;
-  font: inherit;
 }
-.mtt__field input[type="color"] {
-  width: 34px;
-  height: 26px;
-  background: transparent;
-  border: 0;
-  padding: 0;
+.mtt__seg-btn {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(230, 232, 236, 0.68);
+  cursor: pointer;
+}
+.mtt__seg-btn svg {
+  width: 22px;
+  height: 22px;
+}
+.mtt__seg-btn:hover,
+.mtt__seg-btn--active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.52);
+  color: #BFDBFE;
 }
 .mtt__color-row {
   display: grid;
@@ -744,21 +810,13 @@ function commitDrawingColor(event) {
   gap: 7px;
   align-items: center;
 }
-.mtt__color {
+.mtt__color-preview {
   width: 34px;
   height: 28px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-}
-.mtt__color::-webkit-color-swatch-wrapper,
-.mtt__field input[type="color"]::-webkit-color-swatch-wrapper {
-  padding: 3px;
-}
-.mtt__color::-webkit-color-swatch,
-.mtt__field input[type="color"]::-webkit-color-swatch {
-  border: 0;
-  border-radius: 4px;
+  display: block;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
 }
 .mtt__color-code {
   width: 96px;

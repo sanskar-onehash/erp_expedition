@@ -35,6 +35,8 @@
   {
    "fieldname": "map",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Map",
    "options": "Expedition Map",
    "reqd": 1
@@ -42,6 +44,8 @@
   {
    "fieldname": "zone_type",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Zone Type",
    "options": "polygon\ncircle",
    "default": "polygon",
@@ -79,6 +83,8 @@
   {
    "fieldname": "tag",
    "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Tag",
    "description": "Free-form tag for grouping zones (e.g. 'North region')."
   },

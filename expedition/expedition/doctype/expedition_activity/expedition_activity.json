@@ -34,6 +34,8 @@
   {
    "fieldname": "activity_type",
    "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Activity Type",
    "options": "visit\ncall\ndemo\nfollow_up\nscheduled\nnote",
    "reqd": 1
@@ -41,6 +43,8 @@
   {
    "fieldname": "user",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "User",
    "options": "User",
    "default": "Administrator",
@@ -54,6 +58,7 @@
   {
    "fieldname": "map",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Map",
    "options": "Expedition Map"
   },
@@ -66,12 +71,14 @@
   {
    "fieldname": "related_doctype",
    "fieldtype": "Link",
+   "in_standard_filter": 1,
    "label": "Related DocType",
    "options": "DocType"
   },
   {
    "fieldname": "related_name",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Related Name"
   },
   {
@@ -102,6 +109,7 @@
   {
    "fieldname": "occurred_at",
    "fieldtype": "Datetime",
+   "in_list_view": 1,
    "label": "Occurred At",
    "default": "Now"
   },
@@ -113,6 +121,7 @@
   {
    "fieldname": "outcome",
    "fieldtype": "Select",
+   "in_standard_filter": 1,
    "label": "Outcome",
    "options": "\nsuccessful\nunsuccessful\nrescheduled\nno_answer"
   }

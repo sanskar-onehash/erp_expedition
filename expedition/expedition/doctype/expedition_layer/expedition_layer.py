@@ -52,12 +52,14 @@ class ExpeditionLayer(Document):
         self._sync_group_config_json_from_child_table()
         self._validate_filter_json()
         self._validate_heatmap()
+        self._validate_linked_metrics()
+        self._validate_linked_metric_filters()
+        self._validate_location_fields()
 
     def _sync_filter_json_from_child_table(self):
         """Serialize the Filters child table rows into filter_json."""
         rows = self.get("filters") or []
         if not rows:
-            self.filter_json = ""
             return
         result = []
         for row in rows:
@@ -82,7 +84,6 @@ class ExpeditionLayer(Document):
         """Serialize the Groups child table rows into group_config_json."""
         rows = self.get("groups") or []
         if not rows:
-            self.group_config_json = ""
             return
         cfg = {}
         for g in rows:
@@ -118,16 +119,59 @@ class ExpeditionLayer(Document):
     def _validate_source_doctype(self):
         if not self.source_doctype:
             return
-        meta = frappe.get_meta(self.source_doctype)
+        source_meta = frappe.get_meta(self.source_doctype)
+        location_source = self.location_source or "Direct Fields"
+        location_doctype = self.source_doctype
+
+        if location_source == "Linked DocType":
+            link_fieldname = (self.location_link_field or "").strip()
+            if not link_fieldname:
+                frappe.throw("Location Link Field is required for linked locations")
+            link_field = source_meta.get_field(link_fieldname)
+            if not link_field or link_field.fieldtype != "Link" or not link_field.options:
+                frappe.throw(
+                    f"Source DocType {self.source_doctype} has no Link field '{link_fieldname}'"
+                )
+            self.location_doctype = self.location_doctype or link_field.options
+            if self.location_doctype != link_field.options:
+                frappe.throw(
+                    f"Location DocType must match {link_fieldname}'s target DocType ({link_field.options})"
+                )
+            location_doctype = self.location_doctype
+        elif location_source == "Reverse Linked DocType":
+            if not self.location_doctype:
+                frappe.throw("Location DocType is required for reverse linked locations")
+            reverse_fieldname = (self.location_reverse_link_field or "").strip()
+            if not reverse_fieldname:
+                frappe.throw("Reverse Link Field is required for reverse linked locations")
+            location_meta = frappe.get_meta(self.location_doctype)
+            reverse_field = location_meta.get_field(reverse_fieldname)
+            if (
+                not reverse_field
+                or reverse_field.fieldtype != "Link"
+                or reverse_field.options != self.source_doctype
+            ):
+                frappe.throw(
+                    f"Location DocType {self.location_doctype} has no Link field '{reverse_fieldname}' pointing to {self.source_doctype}"
+                )
+            location_doctype = self.location_doctype
+        elif location_source == "Dynamic Link DocType":
+            if not self.location_doctype:
+                frappe.throw("Location DocType is required for dynamic linked locations")
+            if not frappe.db.exists("DocType", "Dynamic Link"):
+                frappe.throw("Dynamic Link DocType is not available on this site")
+            location_doctype = self.location_doctype
+
+        meta = frappe.get_meta(location_doctype)
         lat = meta.get_field(self.latitude_field)
         lng = meta.get_field(self.longitude_field)
         if not lat or lat.fieldtype != "Float":
             frappe.throw(
-                f"Source DocType {self.source_doctype} has no Float field '{self.latitude_field}'"
+                f"Location DocType {location_doctype} has no Float field '{self.latitude_field}'"
             )
         if not lng or lng.fieldtype != "Float":
             frappe.throw(
-                f"Source DocType {self.source_doctype} has no Float field '{self.longitude_field}'"
+                f"Location DocType {location_doctype} has no Float field '{self.longitude_field}'"
             )
 
     def _validate_filter_json(self):
@@ -155,14 +199,62 @@ class ExpeditionLayer(Document):
             weight_field = ""
             self.heatmap_weight_field = ""
         if weight_field:
-            meta = frappe.get_meta(self.source_doctype)
-            field = meta.get_field(weight_field)
-            if not field or field.fieldtype not in NUMERIC_FIELD_TYPES:
-                frappe.throw(
-                    f"Heatmap metric field '{weight_field}' must be numeric on {self.source_doctype}"
-                )
+            if weight_field.startswith("_metric_"):
+                from expedition.api.layer import linked_metric_property_names
+
+                if weight_field not in linked_metric_property_names(
+                    self.linked_metrics_json
+                ):
+                    frappe.throw(
+                        f"Heatmap metric field '{weight_field}' is not defined in Linked Metrics"
+                    )
+            else:
+                meta = frappe.get_meta(self.source_doctype)
+                field = meta.get_field(weight_field)
+                if not field or field.fieldtype not in NUMERIC_FIELD_TYPES:
+                    frappe.throw(
+                        f"Heatmap metric field '{weight_field}' must be numeric on {self.source_doctype}"
+                    )
             _validate_heatmap_weight_range(
                 weight_field,
                 self.heatmap_weight_min,
                 self.heatmap_weight_max,
             )
+
+    def _validate_linked_metrics(self):
+        if not self.linked_metrics_json:
+            return
+        try:
+            metrics = frappe.parse_json(self.linked_metrics_json)
+        except Exception:
+            frappe.throw("Linked Metrics must be valid JSON")
+        if not isinstance(metrics, list):
+            frappe.throw("Linked Metrics must be a JSON array")
+
+        from expedition.api.layer import validate_linked_metrics_json
+
+        validate_linked_metrics_json(self.source_doctype, self.linked_metrics_json)
+
+    def _validate_linked_metric_filters(self):
+        if not self.linked_metric_filters_json:
+            return
+        try:
+            filters = frappe.parse_json(self.linked_metric_filters_json)
+        except Exception:
+            frappe.throw("Linked Metric Filters must be valid JSON")
+        if not isinstance(filters, list):
+            frappe.throw("Linked Metric Filters must be a JSON array")
+
+        from expedition.api.layer import validate_linked_metric_filters_json
+
+        validate_linked_metric_filters_json(
+            self.linked_metrics_json,
+            self.linked_metric_filters_json,
+        )
+
+    def _validate_location_fields(self):
+        if not self.location_fields_json:
+            return
+        from expedition.api.layer import validate_location_fields_json
+
+        validate_location_fields_json(self, self.location_fields_json)

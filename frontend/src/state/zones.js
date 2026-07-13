@@ -55,14 +55,19 @@ export const useZonesStore = defineStore('zones', () => {
     if (!mapName || !name) return
     saving.value = true
     error.value = null
+    const list = byMap.value[mapName] || []
+    const deleted = list.find((z) => z.name === name) || null
+    byMap.value = {
+      ...byMap.value,
+      [mapName]: list.filter((z) => z.name !== name),
+    }
     try {
       await call('expedition.api.zone.delete_zone', { name })
-      const list = byMap.value[mapName] || []
-      byMap.value = {
-        ...byMap.value,
-        [mapName]: list.filter((z) => z.name !== name),
-      }
     } catch (e) {
+      if (deleted) {
+        const current = byMap.value[mapName] || []
+        byMap.value = { ...byMap.value, [mapName]: [...current, deleted] }
+      }
       error.value = e
       throw e
     } finally {

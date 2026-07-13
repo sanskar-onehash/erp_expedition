@@ -152,6 +152,24 @@ DOCSTATUS_FILTER_OPTIONS = [
     {"label": "Submitted", "value": 1},
     {"label": "Cancelled", "value": 2},
 ]
+METRIC_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+LINKED_METRIC_AGGREGATES = {"count", "sum", "avg", "min", "max"}
+MONEY_DOCTYPE_PRIORITY = [
+    "Sales Invoice",
+    "Payment Entry",
+    "Quotation",
+    "Sales Order",
+    "Purchase Invoice",
+    "Journal Entry",
+]
+MONEY_FIELD_CANDIDATES = [
+    ("outstanding_amount", "Outstanding Amount", "sum"),
+    ("grand_total", "Grand Total", "sum"),
+    ("rounded_total", "Rounded Total", "sum"),
+    ("paid_amount", "Paid Amount", "sum"),
+    ("base_grand_total", "Base Grand Total", "sum"),
+    ("amount", "Amount", "sum"),
+]
 
 TEXT_FIELD_TYPES = {
     "Attach",
@@ -233,6 +251,21 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
             value = f"%{value}%"
         normalized.append([field, op, value])
     return normalized
+
+
+def _with_doctype_filters(doctype: str, filters: list | None) -> list[list]:
+    """Return explicit Frappe filters shaped as [doctype, field, op, value]."""
+    out = []
+    for raw in filters or []:
+        if len(raw) == 4:
+            out.append(list(raw))
+        elif len(raw) == 3:
+            field, op, value = raw
+            out.append([doctype, field, op, value])
+        elif len(raw) == 2:
+            field, value = raw
+            out.append([doctype, field, "=", value])
+    return out
 
 
 def _filter_child_operator(op: str | None, value: Any = None) -> str:
@@ -479,6 +512,594 @@ def validate_filter_json(source_doctype: str, filter_json: str | dict | None) ->
         return
     assert_source_read(source_doctype)
     _validate_filter_rows(source_doctype, _coerce_filter(filter_json))
+
+
+def _coerce_linked_metrics(raw: str | list | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        frappe.throw("Linked Metrics must be valid JSON", frappe.ValidationError)
+    if not isinstance(parsed, list):
+        frappe.throw("Linked Metrics must be a JSON array", frappe.ValidationError)
+
+    metrics = []
+    seen = set()
+    for idx, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            frappe.throw(f"Linked metric #{idx + 1} must be an object", frappe.ValidationError)
+        key = str(item.get("key") or "").strip()
+        if not key or not METRIC_KEY_RE.match(key):
+            frappe.throw(
+                f"Linked metric #{idx + 1} needs a key using letters, numbers, and underscores",
+                frappe.ValidationError,
+            )
+        if key in seen:
+            frappe.throw(f"Duplicate linked metric key '{key}'", frappe.ValidationError)
+        seen.add(key)
+        source_doctype = str(
+            item.get("source_doctype") or item.get("doctype") or ""
+        ).strip()
+        link_field = str(item.get("link_field") or "").strip()
+        dynamic_link_doctype_field = str(
+            item.get("dynamic_link_doctype_field")
+            or item.get("doctype_field")
+            or item.get("link_doctype_field")
+            or ""
+        ).strip()
+        aggregate = str(item.get("aggregate") or "count").strip().lower()
+        field = str(item.get("field") or "").strip()
+        label = str(item.get("label") or key).strip()
+        filters = item.get("filters") or []
+        metrics.append(
+            {
+                "key": key,
+                "label": label,
+                "source_doctype": source_doctype,
+                "link_field": link_field,
+                "dynamic_link_doctype_field": dynamic_link_doctype_field,
+                "aggregate": aggregate,
+                "field": field,
+                "filters": filters,
+            }
+        )
+    return metrics
+
+
+def validate_linked_metrics_json(
+    source_doctype: str,
+    linked_metrics_json: str | list | None,
+) -> None:
+    metrics = _coerce_linked_metrics(linked_metrics_json)
+    if not metrics:
+        return
+    assert_source_read(source_doctype)
+    for metric in metrics:
+        metric_doctype = metric["source_doctype"]
+        if not metric_doctype:
+            frappe.throw(
+                f"Linked metric '{metric['key']}' needs source_doctype",
+                frappe.ValidationError,
+            )
+        assert_source_read(metric_doctype)
+        meta = frappe.get_meta(metric_doctype)
+        link_field = meta.get_field(metric["link_field"])
+        if not link_field or link_field.fieldtype not in {"Link", "Dynamic Link"}:
+            frappe.throw(
+                f"Linked metric '{metric['key']}' needs a Link or Dynamic Link field on {metric_doctype}",
+                frappe.ValidationError,
+            )
+        if link_field.fieldtype == "Link":
+            if link_field.options != source_doctype:
+                frappe.throw(
+                    f"Linked metric '{metric['key']}' needs a Link field on {metric_doctype} pointing to {source_doctype}",
+                    frappe.ValidationError,
+                )
+        else:
+            doctype_fieldname = metric.get("dynamic_link_doctype_field") or link_field.options
+            doctype_field = meta.get_field(doctype_fieldname)
+            if not doctype_field or not doctype_field.fieldname:
+                frappe.throw(
+                    f"Linked metric '{metric['key']}' needs a Dynamic Link selector field on {metric_doctype}",
+                    frappe.ValidationError,
+                )
+            metric["dynamic_link_doctype_field"] = doctype_field.fieldname
+            selector_options = {
+                row.strip()
+                for row in str(getattr(doctype_field, "options", "") or "").splitlines()
+                if row.strip()
+            }
+            if (
+                getattr(doctype_field, "fieldtype", "") == "Select"
+                and selector_options
+                and source_doctype not in selector_options
+            ):
+                frappe.throw(
+                    f"Linked metric '{metric['key']}' Dynamic Link selector cannot point to {source_doctype}",
+                    frappe.ValidationError,
+                )
+        aggregate = metric["aggregate"]
+        if aggregate not in LINKED_METRIC_AGGREGATES:
+            frappe.throw(
+                f"Linked metric '{metric['key']}' has unsupported aggregate '{aggregate}'",
+                frappe.ValidationError,
+            )
+        if aggregate != "count":
+            field = meta.get_field(metric["field"])
+            if not field or field.fieldtype not in NUMERIC_FIELD_TYPES:
+                frappe.throw(
+                    f"Linked metric '{metric['key']}' needs a numeric field for {aggregate}",
+                    frappe.ValidationError,
+                )
+        _validate_filter_rows(metric_doctype, _coerce_filter(metric["filters"]) or [])
+
+
+def linked_metric_property_names(linked_metrics_json: str | list | None) -> set[str]:
+    return {
+        f"_metric_{metric['key']}"
+        for metric in _coerce_linked_metrics(linked_metrics_json)
+    }
+
+
+def _coerce_linked_metric_filters(raw: str | list | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        frappe.throw("Linked Metric Filters must be valid JSON", frappe.ValidationError)
+    if not isinstance(parsed, list):
+        frappe.throw("Linked Metric Filters must be a JSON array", frappe.ValidationError)
+
+    filters = []
+    for idx, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            frappe.throw(
+                f"Linked metric filter #{idx + 1} must be an object",
+                frappe.ValidationError,
+            )
+        metric = str(item.get("metric") or item.get("field") or "").strip()
+        operator = _operator_key(item.get("operator") or item.get("op") or "=")
+        if operator == "==":
+            operator = "="
+        value = item.get("value")
+        if not metric or not METRIC_KEY_RE.match(metric):
+            frappe.throw(
+                f"Linked metric filter #{idx + 1} needs a valid metric key",
+                frappe.ValidationError,
+            )
+        if operator not in {"=", "!=", ">", ">=", "<", "<=", "between", "in", "not in", "is"}:
+            frappe.throw(
+                f"Linked metric filter '{metric}' has unsupported operator '{operator}'",
+                frappe.ValidationError,
+            )
+        filters.append({"metric": metric, "operator": operator, "value": value})
+    return filters
+
+
+def validate_linked_metric_filters_json(
+    linked_metrics_json: str | list | None,
+    linked_metric_filters_json: str | list | None,
+) -> None:
+    metric_keys = {
+        metric["key"] for metric in _coerce_linked_metrics(linked_metrics_json)
+    }
+    for flt in _coerce_linked_metric_filters(linked_metric_filters_json):
+        if flt["metric"] not in metric_keys:
+            frappe.throw(
+                f"Linked metric filter references unknown metric '{flt['metric']}'",
+                frappe.ValidationError,
+            )
+        op = flt["operator"]
+        if op in {"in", "not in"} and not _parse_multi_value(flt["value"]):
+            frappe.throw(
+                f"Linked metric filter '{flt['metric']} {op}' needs at least one value",
+                frappe.ValidationError,
+            )
+        if op == "between" and len(_parse_multi_value(flt["value"])) != 2:
+            frappe.throw(
+                f"Linked metric filter '{flt['metric']} between' needs exactly two values",
+                frappe.ValidationError,
+            )
+        if op == "is" and str(flt["value"] or "").strip().lower() not in {"set", "not set"}:
+            frappe.throw(
+                f"Linked metric filter '{flt['metric']} is' must use set or not set",
+                frappe.ValidationError,
+            )
+
+
+def _coerce_metric_number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_filter_matches(metric_value: Any, operator: str, expected: Any) -> bool:
+    op = _operator_key(operator)
+    if op == "==":
+        op = "="
+    if op == "is":
+        is_value = str(expected or "").strip().lower()
+        is_set = metric_value not in (None, "")
+        return is_set if is_value == "set" else not is_set
+    if op in {"in", "not in"}:
+        values = _parse_multi_value(expected)
+        matched = metric_value in values or str(metric_value) in {str(v) for v in values}
+        return matched if op == "in" else not matched
+    if op == "between":
+        values = _parse_multi_value(expected)
+        actual = _coerce_metric_number(metric_value)
+        low = _coerce_metric_number(values[0]) if len(values) > 0 else None
+        high = _coerce_metric_number(values[1]) if len(values) > 1 else None
+        if actual is None or low is None or high is None:
+            return False
+        return low <= actual <= high
+    if op in {">", ">=", "<", "<="}:
+        actual = _coerce_metric_number(metric_value)
+        target = _coerce_metric_number(expected)
+        if actual is None or target is None:
+            return False
+        if op == ">":
+            return actual > target
+        if op == ">=":
+            return actual >= target
+        if op == "<":
+            return actual < target
+        return actual <= target
+    if op == "!=":
+        return metric_value != expected and str(metric_value) != str(expected)
+    return metric_value == expected or str(metric_value) == str(expected)
+
+
+def _passes_linked_metric_filters(layer_doc, metrics: dict[str, Any]) -> bool:
+    filters = _coerce_linked_metric_filters(
+        getattr(layer_doc, "linked_metric_filters_json", "") or ""
+    )
+    if not filters:
+        return True
+    for flt in filters:
+        if not _metric_filter_matches(
+            metrics.get(flt["metric"]),
+            flt["operator"],
+            flt["value"],
+        ):
+            return False
+    return True
+
+
+def _aggregate_metric_values(
+    aggregate: str,
+    values: list[Any],
+) -> int | float | None:
+    if aggregate == "count":
+        return len(values)
+    numbers = []
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            numbers.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if not numbers:
+        return 0 if aggregate in {"sum", "avg"} else None
+    if aggregate == "sum":
+        return sum(numbers)
+    if aggregate == "avg":
+        return sum(numbers) / len(numbers)
+    if aggregate == "min":
+        return min(numbers)
+    if aggregate == "max":
+        return max(numbers)
+    return None
+
+
+def _linked_metric_dynamic_doctype_field(metric: dict[str, Any]) -> str:
+    configured = str(metric.get("dynamic_link_doctype_field") or "").strip()
+    if configured:
+        return configured
+    try:
+        meta = frappe.get_meta(metric["source_doctype"])
+        link_field = meta.get_field(metric["link_field"])
+    except Exception:
+        return ""
+    if link_field and link_field.fieldtype == "Dynamic Link":
+        return str(link_field.options or "").strip()
+    return ""
+
+
+def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    metrics = _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or "")
+    if not metrics or not rows:
+        return {}
+
+    source_names = [row.get("name") for row in rows if row.get("name")]
+    if not source_names:
+        return {}
+
+    out: dict[str, dict[str, Any]] = {name: {} for name in source_names}
+    for metric in metrics:
+        validate_linked_metrics_json(layer_doc.source_doctype, [metric])
+        aggregate = metric["aggregate"]
+        metric_fields = [metric["link_field"]]
+        dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
+        if dynamic_doctype_field and dynamic_doctype_field not in metric_fields:
+            metric_fields.append(dynamic_doctype_field)
+        if aggregate != "count":
+            metric_fields.append(metric["field"])
+        filters = _coerce_filter(metric["filters"]) or []
+        if dynamic_doctype_field:
+            filters.append([dynamic_doctype_field, "=", layer_doc.source_doctype])
+        filters.append([metric["link_field"], "in", source_names])
+        metric_rows = frappe.get_all(
+            metric["source_doctype"],
+            fields=metric_fields,
+            filters=filters,
+            limit_page_length=0,
+        )
+        bucket: dict[str, list[Any]] = {name: [] for name in source_names}
+        for metric_row in metric_rows:
+            source_name = metric_row.get(metric["link_field"])
+            if source_name not in bucket:
+                continue
+            bucket[source_name].append(
+                1 if aggregate == "count" else metric_row.get(metric["field"])
+            )
+        for source_name in source_names:
+            out[source_name][metric["key"]] = _aggregate_metric_values(
+                aggregate,
+                bucket.get(source_name, []),
+            )
+    return out
+
+
+LINKED_RECORD_DISPLAY_FIELDS = [
+    "status",
+    "workflow_state",
+    "grand_total",
+    "rounded_total",
+    "base_grand_total",
+    "outstanding_amount",
+    "paid_amount",
+    "advance_paid",
+    "posting_date",
+    "transaction_date",
+    "due_date",
+    "party",
+    "customer",
+    "lead",
+    "quotation_to",
+    "currency",
+]
+
+
+def _linked_record_field_meta(meta, fieldname: str) -> dict[str, Any] | None:
+    if fieldname in {"name", "modified", "docstatus"}:
+        standard = {
+            "name": ("ID", "Data"),
+            "modified": ("Modified", "Datetime"),
+            "docstatus": ("Document Status", "Select"),
+        }
+        label, fieldtype = standard[fieldname]
+        return {"fieldname": fieldname, "label": label, "fieldtype": fieldtype}
+    field = meta.get_field(fieldname)
+    if not field or not field.fieldname or field.fieldtype in LAYOUT_FIELD_TYPES:
+        return None
+    return {
+        "fieldname": field.fieldname,
+        "label": field.label or field.fieldname,
+        "fieldtype": field.fieldtype,
+        "options": field.options or "",
+    }
+
+
+def _linked_record_fields(metric: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    meta = frappe.get_meta(metric["source_doctype"])
+    fields = ["name", "modified", "docstatus", metric["link_field"]]
+    dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
+    if dynamic_doctype_field and dynamic_doctype_field not in fields:
+        fields.append(dynamic_doctype_field)
+    if metric["aggregate"] != "count" and metric["field"] not in fields:
+        fields.append(metric["field"])
+    for fieldname in LINKED_RECORD_DISPLAY_FIELDS:
+        if fieldname not in fields and _linked_record_field_meta(meta, fieldname):
+            fields.append(fieldname)
+
+    display_meta = []
+    for fieldname in fields:
+        meta_row = _linked_record_field_meta(meta, fieldname)
+        if meta_row:
+            display_meta.append(meta_row)
+    return fields, display_meta
+
+
+def _suggested_linked_record_metrics(source_doctype: str, limit: int = 8) -> list[dict[str, Any]]:
+    suggestions = suggest_money_metrics(source_doctype, limit=limit).get("suggestions") or []
+    metrics: list[dict[str, Any]] = []
+    seen_doctypes: set[str] = set()
+    for suggestion in suggestions:
+        doctype = suggestion.get("source_doctype")
+        link_field = suggestion.get("link_field")
+        if not doctype or not link_field or doctype in seen_doctypes:
+            continue
+        seen_doctypes.add(doctype)
+        metrics.append(
+            {
+                "key": f"suggested_{_metric_key_from_parts(doctype)}",
+                "label": doctype,
+                "source_doctype": doctype,
+                "link_field": link_field,
+                "dynamic_link_doctype_field": suggestion.get("dynamic_link_doctype_field") or "",
+                "aggregate": "count",
+                "field": "",
+                "filters": suggestion.get("filters") or [],
+                "suggested": True,
+            }
+        )
+    return metrics
+
+
+LINKED_RECORD_SUMMARY_FIELDS = [
+    ("outstanding_amount", "Outstanding"),
+    ("paid_amount", "Paid"),
+    ("grand_total", "Total"),
+    ("rounded_total", "Total"),
+    ("base_grand_total", "Base Total"),
+    ("advance_paid", "Advance"),
+    ("amount", "Amount"),
+]
+
+
+def _linked_record_status(row: dict[str, Any]) -> str:
+    status = row.get("status") or row.get("workflow_state")
+    if status:
+        return str(status)
+    docstatus = row.get("docstatus")
+    if docstatus == 0:
+        return "Draft"
+    if docstatus == 1:
+        return "Submitted"
+    if docstatus == 2:
+        return "Cancelled"
+    return "Unknown"
+
+
+def _linked_record_group_summary(
+    rows: list[dict[str, Any]],
+    metric: dict[str, Any],
+) -> dict[str, Any]:
+    totals = []
+    seen_fields: set[str] = set()
+    field_order = []
+    if metric.get("field"):
+        field_order.append((metric["field"], metric["field"].replace("_", " ").title()))
+    field_order.extend(LINKED_RECORD_SUMMARY_FIELDS)
+    for fieldname, label in field_order:
+        if not fieldname or fieldname in seen_fields:
+            continue
+        seen_fields.add(fieldname)
+        total = 0.0
+        count = 0
+        for row in rows:
+            value = _coerce_metric_number(row.get(fieldname))
+            if value is None:
+                continue
+            total += value
+            count += 1
+        if not count:
+            continue
+        totals.append(
+            {
+                "field": fieldname,
+                "label": label,
+                "value": total,
+                "count": count,
+            }
+        )
+
+    statuses: dict[str, int] = {}
+    for row in rows:
+        status = _linked_record_status(row)
+        statuses[status] = statuses.get(status, 0) + 1
+
+    return {
+        "row_count": len(rows),
+        "totals": totals,
+        "statuses": [
+            {"label": label, "count": count}
+            for label, count in sorted(statuses.items(), key=lambda item: (-item[1], item[0]))
+        ],
+    }
+
+
+@frappe.whitelist()
+def get_linked_records(
+    layer: str,
+    source_name: str,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Return compact linked payment/business rows for a popup source row."""
+    layer_doc = frappe.get_doc("Expedition Layer", layer)
+    if not layer_doc.enabled:
+        return {"groups": [], "total": 0}
+
+    assert_source_read(layer_doc.source_doctype)
+    source_name = str(source_name or "").strip()
+    if not source_name:
+        return {"groups": [], "total": 0}
+
+    source_filters = _coerce_filter(layer_doc.filter_json) or []
+    source_filters = _with_doctype_filters(layer_doc.source_doctype, source_filters)
+    source_filters.append([layer_doc.source_doctype, "name", "=", source_name])
+    source_rows = frappe.get_all(
+        layer_doc.source_doctype,
+        fields=["name"],
+        filters=source_filters,
+        limit=1,
+    )
+    if not source_rows:
+        frappe.throw("Source record not found or not readable", frappe.PermissionError)
+
+    metrics = _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or "")
+    configured = bool(metrics)
+    if not metrics:
+        metrics = _suggested_linked_record_metrics(layer_doc.source_doctype)
+    if not metrics:
+        return {"groups": [], "total": 0, "suggested": not configured}
+
+    limit = min(max(int(limit or 12), 1), 50)
+    groups = []
+    total = 0
+    for metric in metrics:
+        validate_linked_metrics_json(layer_doc.source_doctype, [metric])
+        fields, field_meta = _linked_record_fields(metric)
+        filters = _coerce_filter(metric["filters"]) or []
+        dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
+        if dynamic_doctype_field:
+            filters.append([dynamic_doctype_field, "=", layer_doc.source_doctype])
+        filters.append([metric["link_field"], "=", source_name])
+        rows = frappe.get_all(
+            metric["source_doctype"],
+            fields=fields,
+            filters=filters,
+            limit_page_length=limit,
+            order_by="modified desc",
+        )
+        total += len(rows)
+        groups.append(
+            {
+                "key": metric["key"],
+                "label": metric["label"],
+                "source_doctype": metric["source_doctype"],
+                "aggregate": metric["aggregate"],
+                "field": metric["field"],
+                "link_field": metric["link_field"],
+                "dynamic_link_doctype_field": dynamic_doctype_field,
+                "fields": field_meta,
+                "rows": rows,
+                "summary": _linked_record_group_summary(rows, metric),
+                "truncated": len(rows) >= limit,
+                "suggested": bool(metric.get("suggested")),
+            }
+        )
+    return {"groups": groups, "total": total, "suggested": not configured}
+
+
+def _attach_metrics_to_props(
+    props: dict[str, Any],
+    source_name: str | None,
+    metrics_by_name: dict[str, dict[str, Any]],
+) -> None:
+    metrics = metrics_by_name.get(source_name or "") or {}
+    if not metrics:
+        return
+    props["_metrics"] = metrics
+    for key, value in metrics.items():
+        props[f"_metric_{key}"] = value
 
 
 def _parse_group_config_raw(raw: str | dict | None) -> dict:
@@ -743,8 +1364,68 @@ def _group_filter_for_band(field: str, band: dict, kind: str) -> list[list]:
     return filters
 
 
+def _is_linked_metric_field(fieldname: str | None) -> bool:
+    return str(fieldname or "").startswith("_metric_")
+
+
+def _linked_metric_key_from_field(fieldname: str | None) -> str:
+    text = str(fieldname or "")
+    return text[len("_metric_") :] if text.startswith("_metric_") else text
+
+
 def _band_display_key(band: dict) -> str:
     return str(band.get("label") or _group_display_value(band.get("key")))
+
+
+def _linked_metric_group_value(
+    metrics: dict[str, Any],
+    group_by_field: str | None,
+) -> Any:
+    if not _is_linked_metric_field(group_by_field):
+        return None
+    return metrics.get(_linked_metric_key_from_field(group_by_field))
+
+
+def _linked_metric_group_matches(
+    metrics: dict[str, Any],
+    group_by_field: str | None,
+    group_key: str | None,
+    group_rules: dict,
+) -> bool:
+    if not group_key or not _is_linked_metric_field(group_by_field):
+        return True
+    metric_value = _linked_metric_group_value(metrics, group_by_field)
+    if group_rules.get("mode") == "bands":
+        resolved_key, _override = _resolve_group_band(metric_value, group_rules)
+        return str(resolved_key) == str(group_key)
+    if str(group_key) == "(blank)":
+        return metric_value in (None, "")
+    return str(_group_display_value(metric_value)) == str(group_key)
+
+
+def _attach_metric_group_values_to_row(
+    row: dict[str, Any],
+    metrics: dict[str, Any],
+    fields: list[str],
+) -> None:
+    for fieldname in fields:
+        if _is_linked_metric_field(fieldname):
+            row[fieldname] = _linked_metric_group_value(metrics, fieldname)
+
+
+def _multi_group_matches(
+    row: dict[str, Any],
+    metrics: dict[str, Any],
+    rules: dict,
+    group_key: str | None,
+) -> bool:
+    if not group_key or not rules:
+        return True
+    levels = rules.get("levels") or []
+    fields = [level["field"] for level in levels]
+    _attach_metric_group_values_to_row(row, metrics, fields)
+    values = [_resolve_group_level_value(row, level) for level in levels]
+    return _group_path_key(values) == str(group_key)
 
 
 def _group_filters_for_key(
@@ -763,6 +1444,8 @@ def _group_filters_for_key(
             if idx >= len(parts):
                 break
             field = level["field"]
+            if _is_linked_metric_field(field):
+                continue
             value = parts[idx]
             if level.get("mode") == "bands":
                 matched = None
@@ -779,6 +1462,8 @@ def _group_filters_for_key(
         return filters
 
     if not group_by_field:
+        return []
+    if _is_linked_metric_field(group_by_field):
         return []
     if group_rules.get("mode") == "bands":
         for band in group_rules.get("bands") or []:
@@ -825,18 +1510,28 @@ def _virtual_groups_for_layer(
         fields = [level["field"] for level in levels]
         if not fields:
             return []
+        db_fields = [field for field in fields if not _is_linked_metric_field(field)]
+        uses_metric_fields = any(_is_linked_metric_field(field) for field in fields)
+        fetch_fields = ["name", *db_fields]
+        order_by = ", ".join(f"{field} asc" for field in db_fields) if db_fields else "name asc"
         rows = frappe.get_all(
             layer_doc.source_doctype,
-            fields=fields,
+            fields=fetch_fields,
             filters=base_filters,
-            distinct=True,
-            order_by=", ".join(f"{field} asc" for field in fields),
-            limit_page_length=min(max(int(limit or 1000), 1), 5000),
+            distinct=not uses_metric_fields,
+            order_by=order_by,
+            limit_page_length=0 if uses_metric_fields else min(max(int(limit or 1000), 1), 5000),
         )
+        metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
         groups = multi_grouping.get("groups") or {}
         seen = set()
         out = []
         for row in rows:
+            _attach_metric_group_values_to_row(
+                row,
+                metrics_by_name.get(row.get("name"), {}),
+                fields,
+            )
             values = [_resolve_group_level_value(row, level) for level in levels]
             key = _group_path_key(values)
             if key in seen:
@@ -873,6 +1568,8 @@ def _virtual_groups_for_layer(
                 },
             })
         return out
+    if _is_linked_metric_field(group_by_field):
+        return []
 
     rows = frappe.get_all(
         layer_doc.source_doctype,
@@ -987,6 +1684,209 @@ def _source_assignment_fields(source_doctype: str) -> list[dict[str, str]]:
     return fields
 
 
+def _location_source_mode(layer_doc) -> str:
+    mode = str(getattr(layer_doc, "location_source", "") or "Direct Fields").strip()
+    if mode == "Linked DocType":
+        return "linked"
+    if mode == "Reverse Linked DocType":
+        return "reverse"
+    if mode == "Dynamic Link DocType":
+        return "dynamic"
+    return "direct"
+
+
+def _linked_location_config(layer_doc) -> dict[str, str]:
+    """Return validated single-hop linked location config for a layer.
+
+    MVP scope: direct `Link` fields only. Reverse links, Dynamic Link child
+    tables, and one-to-many aggregations can build on this shape later.
+    """
+    if _location_source_mode(layer_doc) != "linked":
+        return {}
+
+    source_meta = frappe.get_meta(layer_doc.source_doctype)
+    link_fieldname = (getattr(layer_doc, "location_link_field", "") or "").strip()
+    link_field = source_meta.get_field(link_fieldname)
+    if not link_field or link_field.fieldtype != "Link" or not link_field.options:
+        frappe.throw(
+            f"Source DocType {layer_doc.source_doctype} has no Link field '{link_fieldname}'",
+            frappe.ValidationError,
+        )
+
+    location_doctype = (getattr(layer_doc, "location_doctype", "") or link_field.options).strip()
+    if location_doctype != link_field.options:
+        frappe.throw(
+            f"Location DocType must match {link_fieldname}'s target DocType ({link_field.options})",
+            frappe.ValidationError,
+        )
+
+    return {
+        "mode": "linked",
+        "link_field": link_fieldname,
+        "location_doctype": location_doctype,
+        "latitude_field": layer_doc.latitude_field,
+        "longitude_field": layer_doc.longitude_field,
+    }
+
+
+def _reverse_location_config(layer_doc) -> dict[str, str]:
+    if _location_source_mode(layer_doc) != "reverse":
+        return {}
+
+    location_doctype = (getattr(layer_doc, "location_doctype", "") or "").strip()
+    reverse_fieldname = (
+        getattr(layer_doc, "location_reverse_link_field", "") or ""
+    ).strip()
+    if not location_doctype:
+        frappe.throw(
+            "Location DocType is required for reverse linked locations",
+            frappe.ValidationError,
+        )
+    location_meta = frappe.get_meta(location_doctype)
+    reverse_field = location_meta.get_field(reverse_fieldname)
+    if (
+        not reverse_field
+        or reverse_field.fieldtype != "Link"
+        or reverse_field.options != layer_doc.source_doctype
+    ):
+        frappe.throw(
+            f"Location DocType {location_doctype} has no Link field '{reverse_fieldname}' pointing to {layer_doc.source_doctype}",
+            frappe.ValidationError,
+        )
+    return {
+        "mode": "reverse",
+        "reverse_link_field": reverse_fieldname,
+        "location_doctype": location_doctype,
+        "latitude_field": layer_doc.latitude_field,
+        "longitude_field": layer_doc.longitude_field,
+    }
+
+
+def _dynamic_location_config(layer_doc) -> dict[str, str]:
+    if _location_source_mode(layer_doc) != "dynamic":
+        return {}
+
+    location_doctype = (getattr(layer_doc, "location_doctype", "") or "").strip()
+    if not location_doctype:
+        frappe.throw(
+            "Location DocType is required for dynamic linked locations",
+            frappe.ValidationError,
+        )
+    if not frappe.db.exists("DocType", "Dynamic Link"):
+        frappe.throw(
+            "Dynamic Link DocType is not available on this site",
+            frappe.ValidationError,
+        )
+    return {
+        "mode": "dynamic",
+        "location_doctype": location_doctype,
+        "latitude_field": layer_doc.latitude_field,
+        "longitude_field": layer_doc.longitude_field,
+    }
+
+
+def _location_config(layer_doc) -> dict[str, str]:
+    return (
+        _linked_location_config(layer_doc)
+        or _reverse_location_config(layer_doc)
+        or _dynamic_location_config(layer_doc)
+    )
+
+
+def _assert_location_read(layer_doc) -> None:
+    cfg = _location_config(layer_doc)
+    if cfg:
+        assert_source_read(cfg["location_doctype"])
+
+
+def _validate_location_coordinate_fields(layer_doc) -> None:
+    target_doctype = layer_doc.source_doctype
+    cfg = _location_config(layer_doc)
+    if cfg:
+        target_doctype = cfg["location_doctype"]
+    meta = frappe.get_meta(target_doctype)
+    for fieldname, label in (
+        (layer_doc.latitude_field, "Latitude Field"),
+        (layer_doc.longitude_field, "Longitude Field"),
+    ):
+        field = meta.get_field(fieldname)
+        if not field or field.fieldtype != "Float":
+            frappe.throw(
+                f"{label} must be a Float field on {target_doctype}",
+                frappe.ValidationError,
+            )
+
+
+def _coerce_location_fields(raw: str | list | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        frappe.throw("Location Fields must be valid JSON", frappe.ValidationError)
+    if not isinstance(parsed, list):
+        frappe.throw("Location Fields must be a JSON array", frappe.ValidationError)
+    out = []
+    seen = set()
+    for item in parsed:
+        fieldname = str(item or "").strip()
+        if not fieldname or fieldname in seen:
+            continue
+        seen.add(fieldname)
+        out.append(fieldname)
+    return out
+
+
+def _location_doctype_for_layer(layer_doc) -> str:
+    cfg = _location_config(layer_doc)
+    return cfg.get("location_doctype") if cfg else layer_doc.source_doctype
+
+
+def validate_location_fields_json(layer_doc, location_fields_json: str | list | None) -> None:
+    fields = _coerce_location_fields(location_fields_json)
+    if not fields:
+        return
+    location_doctype = _location_doctype_for_layer(layer_doc)
+    meta = frappe.get_meta(location_doctype)
+    for fieldname in fields:
+        field = meta.get_field(fieldname)
+        if not field or field.fieldtype in LAYOUT_FIELD_TYPES:
+            frappe.throw(
+                f"Location field '{fieldname}' is not readable on {location_doctype}",
+                frappe.ValidationError,
+            )
+
+
+def _valid_location_fields(layer_doc) -> list[str]:
+    fields = _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or "")
+    if not fields:
+        return []
+    validate_location_fields_json(layer_doc, fields)
+    return fields
+
+
+def _attach_location_to_props(
+    props: dict[str, Any],
+    location_row: dict[str, Any] | None,
+    lat_field: str,
+    lng_field: str,
+) -> None:
+    if not location_row:
+        return
+    location = {
+        k: v
+        for k, v in location_row.items()
+        if k not in {lat_field, lng_field}
+    }
+    if not location:
+        return
+    props["_location"] = location
+    for key, value in location.items():
+        if key == "name":
+            continue
+        props[f"_location_{key}"] = value
+
+
 def _append_valid_source_fields(
     fields: list[str],
     source_doctype: str,
@@ -1055,6 +1955,11 @@ def _full_row_context(
     return ctx
 
 
+def _render_popup_template(template: str, ctx: dict[str, Any]) -> str:
+    html = frappe.render_template(template, ctx)
+    return frappe.utils.sanitize_html(html, always_sanitize=True)
+
+
 @frappe.whitelist(allow_guest=True)
 def get_text_search_matches(
     layer: str,
@@ -1072,8 +1977,9 @@ def get_text_search_matches(
         return {"names": [], "truncated": False}
 
     assert_source_read(layer_doc.source_doctype)
+    _assert_location_read(layer_doc)
     filters = _coerce_filter(layer_doc.filter_json) or []
-    if bounds:
+    if bounds and _location_source_mode(layer_doc) == "direct":
         south = float(bounds.get("south"))
         west = float(bounds.get("west"))
         north = float(bounds.get("north"))
@@ -1098,7 +2004,11 @@ def get_text_search_matches(
         filters=filters,
         or_filters=or_filters,
         limit=limit + 1,
-        order_by=f"{layer_doc.latitude_field} asc",
+        order_by=(
+            f"{layer_doc.latitude_field} asc"
+            if _location_source_mode(layer_doc) == "direct"
+            else "name asc"
+        ),
     )
     names = [row.get("name") for row in rows[:limit]]
     return {"names": [name for name in names if name], "truncated": len(rows) > limit}
@@ -1112,6 +2022,7 @@ def get_features(
     extra_fields: list | str | None = None,
     limit: int = 5000,
     offset: int = 0,
+    render_popup: bool | int | str = True,
 ) -> dict:
     """
     Return a GeoJSON FeatureCollection for the given Expedition Layer.
@@ -1127,6 +2038,8 @@ def get_features(
                     properties for session-local client search.
             limit:  hard cap (default 5000 — clusters take care of the rest)
             offset: pagination offset
+            render_popup: false skips popup_template rendering while still
+                    building the same feature context for preview flows.
 
     Returns:
             {type: "FeatureCollection", features: [...], total: int, truncated: bool}
@@ -1142,6 +2055,7 @@ def get_features(
     # DocType's own permission model is the single source of truth.
 
     layer_doc = frappe.get_doc("Expedition Layer", layer)
+    render_popup = str(render_popup).lower() not in {"0", "false", "no"}
     if not layer_doc.enabled:
         return {
             "type": "FeatureCollection",
@@ -1152,6 +2066,7 @@ def get_features(
 
     # Hard rule: server-side permission check on the source DocType.
     assert_source_read(layer_doc.source_doctype)
+    _assert_location_read(layer_doc)
 
     filters = _coerce_filter(layer_doc.filter_json) or []
     base_filters = list(filters)
@@ -1164,6 +2079,10 @@ def get_features(
         grouping_fields = [level["field"] for level in multi_grouping.get("levels") or []]
     elif group_by_field:
         grouping_fields = [group_by_field]
+    metric_grouping_active = any(_is_linked_metric_field(field) for field in grouping_fields)
+    metric_post_filtering = bool(
+        _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or "")
+    ) or bool(group_key and metric_grouping_active)
 
     if (multi_grouping or group_by_field) and not group_key:
         popup_fields = _coerce_popup_fields(layer_doc.popup_fields_json)
@@ -1189,11 +2108,18 @@ def get_features(
                 "name": layer_doc.name,
                 "title": layer_doc.title,
                 "source_doctype": layer_doc.source_doctype,
+                "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
+                "location_link_field": getattr(layer_doc, "location_link_field", None) or "",
+                "location_doctype": getattr(layer_doc, "location_doctype", None) or "",
+                "location_reverse_link_field": getattr(layer_doc, "location_reverse_link_field", None) or "",
+                "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
                 "click_action": layer_doc.click_action or "popup",
                 "group_by_field": group_by_field,
                 "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
                 "popup_fields": popup_fields,
                 "default_popup_fields": default_popup_fields,
+                "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
+                "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
                 "field_labels": _source_field_labels(layer_doc.source_doctype),
                 "assignment_fields": _source_assignment_fields(layer_doc.source_doctype),
                 "style": {
@@ -1220,7 +2146,7 @@ def get_features(
     # Apply viewport bounds as additional lat/lng WHERE clauses. This is
     # safe because the source lat/lng field types are validated at layer
     # save time (Float), so we cannot SQL-inject via these field names.
-    if bounds:
+    if bounds and _location_source_mode(layer_doc) == "direct":
         south = float(bounds.get("south"))
         west = float(bounds.get("west"))
         north = float(bounds.get("north"))
@@ -1255,7 +2181,11 @@ def get_features(
     field_labels = _source_field_labels(layer_doc.source_doctype)
     assignment_fields = _source_assignment_fields(layer_doc.source_doctype)
 
-    fields = ["name", layer_doc.latitude_field, layer_doc.longitude_field]
+    fields = (
+        ["name"]
+        if _location_source_mode(layer_doc) != "direct"
+        else ["name", layer_doc.latitude_field, layer_doc.longitude_field]
+    )
     if layer_doc.label_field and layer_doc.label_field not in fields:
         fields.append(layer_doc.label_field)
     _append_valid_source_fields(
@@ -1270,8 +2200,351 @@ def get_features(
     _append_valid_source_fields(fields, layer_doc.source_doctype, requested_extra_fields)
     heatmap_config = _heatmap_config_dict(layer_doc)
     heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
-    if heatmap_weight_field and heatmap_weight_field not in fields:
+    if (
+        heatmap_weight_field
+        and not heatmap_weight_field.startswith("_metric_")
+        and heatmap_weight_field not in fields
+    ):
         fields.append(heatmap_weight_field)
+
+    location_cfg = _location_config(layer_doc)
+    if location_cfg:
+        location_doctype = location_cfg["location_doctype"]
+        lat_field = location_cfg["latitude_field"]
+        lng_field = location_cfg["longitude_field"]
+        link_field = location_cfg.get("link_field")
+        reverse_link_field = location_cfg.get("reverse_link_field")
+        location_extra_fields = _valid_location_fields(layer_doc)
+        location_fetch_fields = ["name", lat_field, lng_field]
+        for field in location_extra_fields:
+            if field not in location_fetch_fields:
+                location_fetch_fields.append(field)
+        if link_field and link_field not in fields:
+            fields.append(link_field)
+        for field in grouping_fields:
+            if _is_linked_metric_field(field):
+                continue
+            if field and field not in fields:
+                fields.append(field)
+
+        rows = frappe.get_all(
+            layer_doc.source_doctype,
+            fields=fields,
+            filters=filters,
+            limit_page_length=0 if metric_post_filtering else limit,
+            limit_start=0 if metric_post_filtering else offset,
+            order_by="name asc",
+        )
+        metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
+        linked_by_name: dict[str, dict[str, Any]] = {}
+        reverse_by_source: dict[str, dict[str, Any]] = {}
+        dynamic_by_source: dict[str, dict[str, Any]] = {}
+
+        if location_cfg["mode"] == "linked":
+            linked_names = []
+            seen_linked_names = set()
+            for row in rows:
+                linked_name = row.get(link_field)
+                if linked_name and linked_name not in seen_linked_names:
+                    seen_linked_names.add(linked_name)
+                    linked_names.append(linked_name)
+            if linked_names:
+                location_filters = [["name", "in", linked_names]]
+                if bounds:
+                    south = float(bounds.get("south"))
+                    west = float(bounds.get("west"))
+                    north = float(bounds.get("north"))
+                    east = float(bounds.get("east"))
+                    location_filters += [
+                        [lat_field, ">=", south],
+                        [lat_field, "<=", north],
+                        [lng_field, ">=", west],
+                        [lng_field, "<=", east],
+                        [lat_field, "is", "set"],
+                        [lng_field, "is", "set"],
+                    ]
+                location_rows = frappe.get_all(
+                    location_doctype,
+                    fields=location_fetch_fields,
+                    filters=location_filters,
+                    limit_page_length=len(linked_names),
+                )
+                linked_by_name = {row.get("name"): row for row in location_rows}
+        elif location_cfg["mode"] == "reverse":
+            source_names = [row.get("name") for row in rows if row.get("name")]
+            if source_names:
+                location_filters = [[reverse_link_field, "in", source_names]]
+                if bounds:
+                    south = float(bounds.get("south"))
+                    west = float(bounds.get("west"))
+                    north = float(bounds.get("north"))
+                    east = float(bounds.get("east"))
+                    location_filters += [
+                        [lat_field, ">=", south],
+                        [lat_field, "<=", north],
+                        [lng_field, ">=", west],
+                        [lng_field, "<=", east],
+                        [lat_field, "is", "set"],
+                        [lng_field, "is", "set"],
+                    ]
+                location_rows = frappe.get_all(
+                    location_doctype,
+                    fields=[
+                        *location_fetch_fields,
+                        reverse_link_field,
+                    ],
+                    filters=location_filters,
+                    limit_page_length=max(len(source_names) * 5, 1),
+                    order_by="modified desc",
+                )
+                for row in location_rows:
+                    source_name = row.get(reverse_link_field)
+                    if source_name and source_name not in reverse_by_source:
+                        reverse_by_source[source_name] = row
+        elif location_cfg["mode"] == "dynamic":
+            source_names = [row.get("name") for row in rows if row.get("name")]
+            if source_names:
+                dynamic_rows = frappe.get_all(
+                    "Dynamic Link",
+                    fields=["parent", "link_name"],
+                    filters=[
+                        ["parenttype", "=", location_doctype],
+                        ["link_doctype", "=", layer_doc.source_doctype],
+                        ["link_name", "in", source_names],
+                    ],
+                    limit_page_length=max(len(source_names) * 10, 1),
+                    order_by="modified desc",
+                )
+                parents = []
+                seen_parents = set()
+                for row in dynamic_rows:
+                    parent = row.get("parent")
+                    if parent and parent not in seen_parents:
+                        seen_parents.add(parent)
+                        parents.append(parent)
+                if parents:
+                    location_filters = [["name", "in", parents]]
+                    if bounds:
+                        south = float(bounds.get("south"))
+                        west = float(bounds.get("west"))
+                        north = float(bounds.get("north"))
+                        east = float(bounds.get("east"))
+                        location_filters += [
+                            [lat_field, ">=", south],
+                            [lat_field, "<=", north],
+                            [lng_field, ">=", west],
+                            [lng_field, "<=", east],
+                            [lat_field, "is", "set"],
+                            [lng_field, "is", "set"],
+                        ]
+                    location_rows = frappe.get_all(
+                        location_doctype,
+                        fields=location_fetch_fields,
+                        filters=location_filters,
+                        limit_page_length=len(parents),
+                    )
+                    locations = {row.get("name"): row for row in location_rows}
+                    for row in dynamic_rows:
+                        source_name = row.get("link_name")
+                        parent = row.get("parent")
+                        if (
+                            source_name
+                            and source_name not in dynamic_by_source
+                            and parent in locations
+                        ):
+                            dynamic_by_source[source_name] = locations[parent]
+
+        total = 0
+        features = []
+        for r in rows:
+            if location_cfg["mode"] == "linked":
+                linked_name = r.get(link_field)
+                location_row = linked_by_name.get(linked_name)
+            elif location_cfg["mode"] == "reverse":
+                location_row = reverse_by_source.get(r.get("name"))
+                linked_name = location_row.get("name") if location_row else None
+            else:
+                location_row = dynamic_by_source.get(r.get("name"))
+                linked_name = location_row.get("name") if location_row else None
+            if not location_row:
+                continue
+            lat = location_row.get(lat_field)
+            lng = location_row.get(lng_field)
+            if lat is None or lng is None:
+                continue
+            props = {
+                k: v
+                for k, v in r.items()
+                if not link_field or k != link_field
+            }
+            props["_doctype"] = layer_doc.source_doctype
+            props["_name"] = r.get("name")
+            props["_label"] = (
+                r.get(layer_doc.label_field) if layer_doc.label_field else r.get("name")
+            )
+            props["_location_doctype"] = location_doctype
+            props["_location_name"] = linked_name
+            _attach_location_to_props(props, location_row, lat_field, lng_field)
+            _attach_metrics_to_props(props, r.get("name"), metrics_by_name)
+            if not _passes_linked_metric_filters(
+                layer_doc,
+                metrics_by_name.get(r.get("name"), {}),
+            ):
+                continue
+            source_metrics = metrics_by_name.get(r.get("name"), {})
+            if not multi_grouping and not _linked_metric_group_matches(
+                source_metrics,
+                group_by_field,
+                group_key,
+                group_rules,
+            ):
+                continue
+            if multi_grouping:
+                if not _multi_group_matches(r, source_metrics, multi_grouping, group_key):
+                    continue
+
+            total += 1
+            if metric_post_filtering and total <= offset:
+                continue
+            if len(features) >= limit:
+                continue
+
+            group_value = None
+            if multi_grouping:
+                _attach_metric_group_values_to_row(
+                    r,
+                    source_metrics,
+                    [level["field"] for level in multi_grouping.get("levels") or []],
+                )
+                resolved_group = _resolve_multi_group_style(
+                    r,
+                    multi_grouping,
+                    layer_doc.color,
+                    layer_doc.icon,
+                )
+                if resolved_group:
+                    props["_group_value"] = resolved_group["key"]
+                    props["_group_path"] = resolved_group["path"]
+                    props["_group_label"] = resolved_group["label"]
+                    props["_group_values"] = resolved_group["values"]
+                    if resolved_group.get("color"):
+                        props["_color"] = resolved_group["color"]
+                    if resolved_group.get("icon") == "__none":
+                        props["_icon_disabled"] = 1
+                    elif resolved_group.get("icon"):
+                        props["_icon"] = resolved_group["icon"]
+            elif group_by_field:
+                if _is_linked_metric_field(group_by_field):
+                    source_group_value = _linked_metric_group_value(
+                        source_metrics,
+                        group_by_field,
+                    )
+                else:
+                    source_group_value = r.get(group_by_field)
+                band_override = None
+                if group_rules.get("mode") == "bands":
+                    group_value, band_override = _resolve_group_band(
+                        source_group_value, group_rules
+                    )
+                else:
+                    group_value = source_group_value
+                props["_group_value"] = group_value
+                override = (
+                    group_config.get(str(group_value)) if group_value is not None else None
+                )
+                if not override and band_override:
+                    override = band_override
+                if group_value is not None:
+                    props["_color"] = (
+                        override.get("color")
+                        if override and override.get("color")
+                        else _auto_group_color(group_value)
+                    )
+                if override and override.get("icon") == "__none":
+                    props["_icon_disabled"] = 1
+                elif override and override.get("icon"):
+                    props["_icon"] = override["icon"]
+
+            if popup_template and render_popup:
+                try:
+                    ctx = _full_row_context(layer_doc.source_doctype, r.get("name"), r)
+                    ctx["layer"] = {
+                        "title": layer_doc.title,
+                        "name": layer_doc.name,
+                    }
+                    ctx["metrics"] = metrics_by_name.get(r.get("name"), {})
+                    ctx["location"] = frappe._dict(
+                        props.get("_location") or {"name": linked_name}
+                    )
+                    props["_popup_html"] = _render_popup_template(popup_template, ctx)
+                except (
+                    frappe.exceptions.ValidationError,
+                    frappe.exceptions.SecurityException,
+                ):
+                    raise
+                except Exception:
+                    props["_popup_html"] = ""
+            else:
+                display_fields = popup_fields or default_popup_fields
+                if display_fields:
+                    props["_popup_fields"] = display_fields
+
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lng, lat]},
+                    "properties": props,
+                }
+            )
+
+        response_style = {
+            "color": layer_doc.color,
+            "icon": layer_doc.icon,
+            "size": layer_doc.size,
+            "cluster": layer_doc.cluster,
+            "heatmap": layer_doc.heatmap,
+            "stroke_color": layer_doc.stroke_color,
+            "stroke_width": layer_doc.stroke_width,
+            "fill_opacity": layer_doc.fill_opacity,
+            "heatmap_config": heatmap_config,
+        }
+        if group_key:
+            response_style.update(
+                _style_for_virtual_group_key(
+                    group_key,
+                    layer_doc,
+                    group_config,
+                    group_rules,
+                    multi_grouping,
+                )
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "total": total,
+            "truncated": total > offset + len(features),
+            "layer": {
+                "name": layer_doc.name,
+                "title": layer_doc.title,
+                "source_doctype": layer_doc.source_doctype,
+                "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
+                "location_link_field": link_field or "",
+                "location_reverse_link_field": reverse_link_field or "",
+                "location_doctype": location_doctype,
+                "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
+                "click_action": layer_doc.click_action or "popup",
+                "group_by_field": group_by_field,
+                "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
+                "popup_fields": popup_fields,
+                "default_popup_fields": default_popup_fields,
+                "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
+                "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
+                "field_labels": field_labels,
+                "assignment_fields": assignment_fields,
+                "style": response_style,
+            },
+        }
 
     # If the layer has a popup_template, we need the full row context (every
     # column on the source doc) to render it. Without this, only the
@@ -1283,19 +2556,26 @@ def get_features(
         layer_doc.source_doctype,
         fields=fields,
         filters=filters,
-        limit=limit,
-        limit_start=offset,
+        limit_page_length=0 if metric_post_filtering else limit,
+        limit_start=0 if metric_post_filtering else offset,
         order_by=f"{layer_doc.latitude_field} asc",
     )
+    metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
 
-    total = frappe.db.count(layer_doc.source_doctype, filters=filters)
+    total = 0 if metric_post_filtering else frappe.db.count(layer_doc.source_doctype, filters=filters)
 
     features = []
 
     # Add grouping fields to fetched fields if not already present.
-    if group_by_field and group_by_field not in fields:
+    if (
+        group_by_field
+        and not _is_linked_metric_field(group_by_field)
+        and group_by_field not in fields
+    ):
         fields.append(group_by_field)
     for field in grouping_fields:
+        if _is_linked_metric_field(field):
+            continue
         if field and field not in fields:
             fields.append(field)
 
@@ -1305,10 +2585,11 @@ def get_features(
             layer_doc.source_doctype,
             fields=fields,
             filters=filters,
-            limit=limit,
-            limit_start=offset,
+            limit_page_length=0 if metric_post_filtering else limit,
+            limit_start=0 if metric_post_filtering else offset,
             order_by=f"{layer_doc.latitude_field} asc",
         )
+        metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
 
     for r in rows:
         lat = r.get(layer_doc.latitude_field)
@@ -1326,10 +2607,39 @@ def get_features(
         props["_label"] = (
             r.get(layer_doc.label_field) if layer_doc.label_field else r.get("name")
         )
+        _attach_metrics_to_props(props, r.get("name"), metrics_by_name)
+        if not _passes_linked_metric_filters(
+            layer_doc,
+            metrics_by_name.get(r.get("name"), {}),
+        ):
+            continue
+        source_metrics = metrics_by_name.get(r.get("name"), {})
+        if not multi_grouping and not _linked_metric_group_matches(
+            source_metrics,
+            group_by_field,
+            group_key,
+            group_rules,
+        ):
+            continue
+        if multi_grouping:
+            if not _multi_group_matches(r, source_metrics, multi_grouping, group_key):
+                continue
+
+        if metric_post_filtering:
+            total += 1
+            if total <= offset:
+                continue
+            if len(features) >= limit:
+                continue
 
         # Resolve per-feature group style (segmentation).
         group_value = None
         if multi_grouping:
+            _attach_metric_group_values_to_row(
+                r,
+                source_metrics,
+                [level["field"] for level in multi_grouping.get("levels") or []],
+            )
             resolved_group = _resolve_multi_group_style(
                 r,
                 multi_grouping,
@@ -1348,7 +2658,13 @@ def get_features(
                 elif resolved_group.get("icon"):
                     props["_icon"] = resolved_group["icon"]
         elif group_by_field:
-            source_group_value = r.get(group_by_field)
+            if _is_linked_metric_field(group_by_field):
+                source_group_value = _linked_metric_group_value(
+                    source_metrics,
+                    group_by_field,
+                )
+            else:
+                source_group_value = r.get(group_by_field)
             band_override = None
             if group_rules.get("mode") == "bands":
                 group_value, band_override = _resolve_group_band(
@@ -1377,14 +2693,15 @@ def get_features(
         # rendered HTML is attached as `_popup_html`. `safe_render=True`
         # blocks `.__` attribute traversal (Frappe default), so users
         # cannot reach into Python objects via crafted templates.
-        if popup_template:
+        if popup_template and render_popup:
             try:
                 ctx = _full_row_context(layer_doc.source_doctype, r.get("name"), r)
                 ctx["layer"] = {
                     "title": layer_doc.title,
                     "name": layer_doc.name,
                 }
-                props["_popup_html"] = frappe.render_template(popup_template, ctx)
+                ctx["metrics"] = metrics_by_name.get(r.get("name"), {})
+                props["_popup_html"] = _render_popup_template(popup_template, ctx)
             except (
                 frappe.exceptions.ValidationError,
                 frappe.exceptions.SecurityException,
@@ -1447,15 +2764,86 @@ def get_features(
             "name": layer_doc.name,
             "title": layer_doc.title,
             "source_doctype": layer_doc.source_doctype,
+            "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
+            "location_link_field": getattr(layer_doc, "location_link_field", None) or "",
+            "location_doctype": getattr(layer_doc, "location_doctype", None) or "",
+            "location_reverse_link_field": getattr(layer_doc, "location_reverse_link_field", None) or "",
+            "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
             "click_action": layer_doc.click_action or "popup",
             "group_by_field": group_by_field,
             "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
             "popup_fields": popup_fields,
             "default_popup_fields": default_popup_fields,
+            "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
+            "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
             "field_labels": field_labels,
             "assignment_fields": assignment_fields,
             "style": response_style,
         },
+    }
+
+
+@frappe.whitelist()
+def preview_popup_template(
+    layer: str,
+    popup_template: str | None = None,
+    source_name: str | None = None,
+) -> dict[str, Any]:
+    """Render a draft popup template against a readable feature row."""
+    layer_doc = frappe.get_doc("Expedition Layer", layer)
+    assert_source_read(layer_doc.source_doctype)
+    _assert_location_read(layer_doc)
+
+    template = str(
+        popup_template
+        if popup_template is not None
+        else (layer_doc.popup_template or "")
+    ).strip()
+    if not template:
+        return {
+            "html": "",
+            "source_name": "",
+            "source_label": "",
+            "empty_template": True,
+        }
+
+    limit = 500 if source_name else 25
+    feature_collection = get_features(layer=layer, limit=limit, render_popup=False)
+    features = feature_collection.get("features") or []
+    selected = None
+    if source_name:
+        for feature in features:
+            props = feature.get("properties") or {}
+            if props.get("_name") == source_name:
+                selected = feature
+                break
+    else:
+        selected = features[0] if features else None
+    if not selected:
+        frappe.throw(
+            "No readable feature is available for popup preview",
+            frappe.DoesNotExistError,
+        )
+
+    props = selected.get("properties") or {}
+    row_name = props.get("_name")
+    ctx = _full_row_context(layer_doc.source_doctype, row_name, props)
+    ctx["metrics"] = frappe._dict(props.get("_metrics") or {})
+    ctx["location"] = frappe._dict(
+        props.get("_location") or {"name": props.get("_location_name")}
+    )
+    ctx["layer"] = frappe._dict(
+        {
+            "name": layer_doc.name,
+            "title": layer_doc.title,
+            "source_doctype": layer_doc.source_doctype,
+        }
+    )
+    return {
+        "html": _render_popup_template(template, ctx),
+        "source_name": row_name,
+        "source_label": props.get("_label") or row_name,
+        "empty_template": False,
     }
 
 
@@ -1516,6 +2904,14 @@ def _filter_hash(layer_doc) -> str:
     h = hashlib.sha1()
     h.update((layer_doc.source_doctype or "").encode("utf-8"))
     h.update(b"|")
+    h.update((getattr(layer_doc, "location_source", "") or "").encode("utf-8"))
+    h.update(b"|")
+    h.update((getattr(layer_doc, "location_link_field", "") or "").encode("utf-8"))
+    h.update(b"|")
+    h.update((getattr(layer_doc, "location_doctype", "") or "").encode("utf-8"))
+    h.update(b"|")
+    h.update((getattr(layer_doc, "location_reverse_link_field", "") or "").encode("utf-8"))
+    h.update(b"|")
     h.update((layer_doc.latitude_field or "").encode("utf-8"))
     h.update(b"|")
     h.update((layer_doc.longitude_field or "").encode("utf-8"))
@@ -1534,17 +2930,15 @@ def get_layer_bounds(layer: str) -> dict:
 
     Used by the client to fit the map to "all enabled data" without
     pulling the full feature set across the wire. Permission: the same
-    `assert_source_read(source_doctype)` gate as `get_features`. We
-    cannot apply `permission_query_conditions` to a raw MIN/MAX query
-    the way `frappe.get_all` does, so this endpoint returns the
-    *unrestricted* envelope for the source DocType — the client
-    re-applies its own per-layer permission check via `assert_source_read`
-    on the way in.
+    `assert_source_read(source_doctype)` gate as `get_features`, with
+    row-level permission query conditions preserved through
+    `frappe.get_all`.
     """
     layer_doc = frappe.get_doc("Expedition Layer", layer)
     if not layer_doc.enabled:
         return _empty_bounds()
     assert_source_read(layer_doc.source_doctype)
+    _assert_location_read(layer_doc)
 
     cache_key = f"expedition:layer_bounds:{layer_doc.name}:{_filter_hash(layer_doc)}"
     cached = frappe.cache.get_value(cache_key)
@@ -1552,92 +2946,209 @@ def get_layer_bounds(layer: str) -> dict:
         return cached
 
     filters = _coerce_filter(layer_doc.filter_json) or []
+    location_cfg = _location_config(layer_doc)
+    if location_cfg:
+        lat_f = location_cfg["latitude_field"]
+        lng_f = location_cfg["longitude_field"]
+        if location_cfg["mode"] == "reverse":
+            source_rows = frappe.get_all(
+                layer_doc.source_doctype,
+                fields=["name"],
+                filters=filters,
+                limit_page_length=10000,
+                order_by="name asc",
+            )
+            source_names = [row.get("name") for row in source_rows if row.get("name")]
+            if not source_names:
+                bounds = _empty_bounds()
+                frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+                return bounds
+            location_rows = frappe.get_all(
+                location_cfg["location_doctype"],
+                fields=[
+                    "name",
+                    location_cfg["reverse_link_field"],
+                    lat_f,
+                    lng_f,
+                ],
+                filters=[
+                    [location_cfg["reverse_link_field"], "in", source_names],
+                    [lat_f, "is", "set"],
+                    [lng_f, "is", "set"],
+                ],
+                limit_page_length=max(len(source_names) * 5, 1),
+                order_by="modified desc",
+            )
+            seen_sources = set()
+            points = []
+            for row in location_rows:
+                source_name = row.get(location_cfg["reverse_link_field"])
+                if source_name in seen_sources:
+                    continue
+                seen_sources.add(source_name)
+                points.append(row)
+            if not points:
+                bounds = _empty_bounds()
+            else:
+                lats = [float(point[lat_f]) for point in points]
+                lngs = [float(point[lng_f]) for point in points]
+                bounds = {
+                    "south": min(lats),
+                    "west": min(lngs),
+                    "north": max(lats),
+                    "east": max(lngs),
+                    "count": len(points),
+                }
+            frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+            return bounds
+        if location_cfg["mode"] == "dynamic":
+            source_rows = frappe.get_all(
+                layer_doc.source_doctype,
+                fields=["name"],
+                filters=filters,
+                limit_page_length=10000,
+                order_by="name asc",
+            )
+            source_names = [row.get("name") for row in source_rows if row.get("name")]
+            if not source_names:
+                bounds = _empty_bounds()
+                frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+                return bounds
+            dynamic_rows = frappe.get_all(
+                "Dynamic Link",
+                fields=["parent", "link_name"],
+                filters=[
+                    ["parenttype", "=", location_cfg["location_doctype"]],
+                    ["link_doctype", "=", layer_doc.source_doctype],
+                    ["link_name", "in", source_names],
+                ],
+                limit_page_length=max(len(source_names) * 10, 1),
+                order_by="modified desc",
+            )
+            parents = []
+            seen_parents = set()
+            for row in dynamic_rows:
+                parent = row.get("parent")
+                if parent and parent not in seen_parents:
+                    seen_parents.add(parent)
+                    parents.append(parent)
+            if not parents:
+                bounds = _empty_bounds()
+                frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+                return bounds
+            location_rows = frappe.get_all(
+                location_cfg["location_doctype"],
+                fields=["name", lat_f, lng_f],
+                filters=[
+                    ["name", "in", parents],
+                    [lat_f, "is", "set"],
+                    [lng_f, "is", "set"],
+                ],
+                limit_page_length=len(parents),
+            )
+            locations = {row.get("name"): row for row in location_rows}
+            seen_sources = set()
+            points = []
+            for row in dynamic_rows:
+                source_name = row.get("link_name")
+                parent = row.get("parent")
+                if source_name in seen_sources or parent not in locations:
+                    continue
+                seen_sources.add(source_name)
+                points.append(locations[parent])
+            if not points:
+                bounds = _empty_bounds()
+            else:
+                lats = [float(point[lat_f]) for point in points]
+                lngs = [float(point[lng_f]) for point in points]
+                bounds = {
+                    "south": min(lats),
+                    "west": min(lngs),
+                    "north": max(lats),
+                    "east": max(lngs),
+                    "count": len(points),
+                }
+            frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+            return bounds
+
+        rows = frappe.get_all(
+            layer_doc.source_doctype,
+            fields=["name", location_cfg["link_field"]],
+            filters=filters,
+            limit_page_length=10000,
+            order_by="name asc",
+        )
+        linked_names = []
+        seen = set()
+        for row in rows:
+            linked_name = row.get(location_cfg["link_field"])
+            if linked_name and linked_name not in seen:
+                seen.add(linked_name)
+                linked_names.append(linked_name)
+        if not linked_names:
+            bounds = _empty_bounds()
+            frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+            return bounds
+        location_rows = frappe.get_all(
+            location_cfg["location_doctype"],
+            fields=["name", lat_f, lng_f],
+            filters=[
+                ["name", "in", linked_names],
+                [lat_f, "is", "set"],
+                [lng_f, "is", "set"],
+            ],
+            limit_page_length=len(linked_names),
+        )
+        locations = {row.get("name"): row for row in location_rows}
+        points = [
+            locations[row.get(location_cfg["link_field"])]
+            for row in rows
+            if row.get(location_cfg["link_field"]) in locations
+        ]
+        if not points:
+            bounds = _empty_bounds()
+        else:
+            lats = [float(point[lat_f]) for point in points]
+            lngs = [float(point[lng_f]) for point in points]
+            bounds = {
+                "south": min(lats),
+                "west": min(lngs),
+                "north": max(lats),
+                "east": max(lngs),
+                "count": len(points),
+            }
+        frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
+        return bounds
+
     lat_f, lng_f = layer_doc.latitude_field, layer_doc.longitude_field
 
-    # Single MIN/MAX query. Lat/lng fieldnames are validated at layer
-    # save time (Float type), source_doctype is a Link to a real
-    # DocType, filter is parsed above — all safe to interpolate.
-    # The 5-min TTL covers filter edits: when a user changes a filter
-    # and saves, the filter_hash changes → fresh bounds on the next
-    # call. The OLD entry under the old hash lingers in cache but
-    # is no longer reachable.
-    where_clauses = [f"`{lat_f}` is not null", f"`{lng_f}` is not null"]
-    where_params: list = []
-    if filters:
-        # Build WHERE for the user-supplied filter list. We piggy-back
-        # on `frappe.db.sql`'s named-style parameter substitution for
-        # values; fieldnames are whitelisted via the same escape
-        # used elsewhere in this file.
-        #
-        # NOTE: composing the full Frappe filter spec into a
-        # MIN/MAX query (with joins, child-table lookups, etc.) is
-        # out of scope. Filters that need joins aren't supported
-        # here — they fall back to scanning the feature cache on
-        # the client, which already worked before this endpoint.
-        for fltr in filters:
-            if len(fltr) == 3:
-                field, op, val = fltr
-            else:
-                field, val = fltr
-                op = "="
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", field or ""):
-                # Skip illegal field names — don't fail the whole call.
-                continue
-            op_key = _operator_key(op)
-            if op in ("=", "=="):
-                where_clauses.append(f"`{field}` = %s")
-                where_params.append(val)
-            elif op_key == "!=":
-                where_clauses.append(f"`{field}` != %s")
-                where_params.append(val)
-            elif op_key in (">", ">=", "<", "<="):
-                where_clauses.append(f"`{field}` {op} %s")
-                where_params.append(val)
-            elif op_key in ("like", "not like"):
-                where_clauses.append(f"`{field}` {op_key} %s")
-                where_params.append(val)
-            elif op_key in ("in", "not in"):
-                values = _parse_multi_value(val)
-                if values:
-                    placeholders = ", ".join(["%s"] * len(values))
-                    where_clauses.append(f"`{field}` {op_key} ({placeholders})")
-                    where_params.extend(values)
-            elif op_key == "between":
-                values = _parse_multi_value(val)
-                if len(values) == 2:
-                    where_clauses.append(f"`{field}` between %s and %s")
-                    where_params.extend(values)
-            elif op_key == "is":
-                is_value = str(val or "").strip().lower()
-                if is_value == "set":
-                    where_clauses.append(f"`{field}` is not null")
-                    where_clauses.append(f"`{field}` != ''")
-                elif is_value == "not set":
-                    where_clauses.append(f"(`{field}` is null or `{field}` = '')")
+    direct_filters = list(filters)
+    direct_filters += [[lat_f, "is", "set"], [lng_f, "is", "set"]]
+    rows = frappe.get_all(
+        layer_doc.source_doctype,
+        fields=[lat_f, lng_f],
+        filters=direct_filters,
+        limit_page_length=0,
+        order_by="name asc",
+    )
+    points = []
+    for row in rows:
+        try:
+            points.append((float(row[lat_f]), float(row[lng_f])))
+        except (TypeError, ValueError):
+            continue
 
-    where_sql = " and ".join(where_clauses)
-    row = frappe.db.sql(
-        f"""
-        select min(`{lat_f}`) as south, min(`{lng_f}`) as west,
-               max(`{lat_f}`) as north, max(`{lng_f}`) as east,
-               count(*) as n
-        from `tab{layer_doc.source_doctype}`
-        where {where_sql}
-        """,
-        tuple(where_params),
-        as_dict=True,
-    )[0]
-
-    n = int(row.get("n") or 0)
-    if n == 0:
+    if not points:
         bounds = _empty_bounds()
     else:
+        lats = [point[0] for point in points]
+        lngs = [point[1] for point in points]
         bounds = {
-            "south": float(row["south"]),
-            "west": float(row["west"]),
-            "north": float(row["north"]),
-            "east": float(row["east"]),
-            "count": n,
+            "south": min(lats),
+            "west": min(lngs),
+            "north": max(lats),
+            "east": max(lngs),
+            "count": len(points),
         }
     frappe.cache.set_value(cache_key, bounds, expires_in_sec=300)
     return bounds
@@ -1665,6 +3176,11 @@ def list_for_map(map_name: str) -> list[dict]:
             "title",
             "map",
             "source_doctype",
+            "location_source",
+            "location_link_field",
+            "location_doctype",
+            "location_reverse_link_field",
+            "location_fields_json",
             "latitude_field",
             "longitude_field",
             "label_field",
@@ -1673,6 +3189,8 @@ def list_for_map(map_name: str) -> list[dict]:
             "group_config_json",
             "popup_template",
             "popup_fields_json",
+            "linked_metrics_json",
+            "linked_metric_filters_json",
             "click_action",
             "color",
             "icon",
@@ -1813,6 +3331,11 @@ def create(
     map_name: str,
     title: str,
     source_doctype: str,
+    location_source: str = "Direct Fields",
+    location_link_field: str | None = None,
+    location_doctype: str | None = None,
+    location_reverse_link_field: str | None = None,
+    location_fields_json: str | None = None,
     latitude_field: str = "latitude",
     longitude_field: str = "longitude",
     label_field: str | None = None,
@@ -1826,6 +3349,8 @@ def create(
     group_config_json: str | None = None,
     popup_template: str | None = None,
     popup_fields_json: str | None = None,
+    linked_metrics_json: str | None = None,
+    linked_metric_filters_json: str | None = None,
     click_action: str = "popup",
     heatmap: int = 0,
     heatmap_mode: str = "count",
@@ -1853,6 +3378,8 @@ def create(
         frappe.throw("Not permitted to create layers", frappe.PermissionError)
     assert_map_write(map_name)
     assert_source_read(source_doctype)
+    if location_source == "Linked DocType" and location_doctype:
+        assert_source_read(location_doctype)
     _assert_icons_readable(icon, group_config_json)
 
     # Next sequence for this map
@@ -1867,6 +3394,11 @@ def create(
             "title": title,
             "map": map_name,
             "source_doctype": source_doctype,
+            "location_source": location_source or "Direct Fields",
+            "location_link_field": location_link_field or "",
+            "location_doctype": location_doctype or "",
+            "location_reverse_link_field": location_reverse_link_field or "",
+            "location_fields_json": location_fields_json or "",
             "latitude_field": latitude_field,
             "longitude_field": longitude_field,
             "label_field": label_field or "",
@@ -1875,6 +3407,8 @@ def create(
             "group_config_json": group_config_json or "",
             "popup_template": popup_template or "",
             "popup_fields_json": popup_fields_json or "",
+            "linked_metrics_json": linked_metrics_json or "",
+            "linked_metric_filters_json": linked_metric_filters_json or "",
             "click_action": click_action or "popup",
             "color": color or "#3B82F6",
             "size": size,
@@ -1903,6 +3437,7 @@ def create(
         }
     )
     _sync_filter_child_table_from_json(doc, filter_json)
+    _assert_location_read(doc)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)
 
@@ -1929,6 +3464,11 @@ def update(layer_name: str, **fields) -> dict:
         "cluster",
         "enabled",
         "label_field",
+        "location_source",
+        "location_link_field",
+        "location_doctype",
+        "location_reverse_link_field",
+        "location_fields_json",
         "latitude_field",
         "longitude_field",
         "filter_json",
@@ -1936,6 +3476,8 @@ def update(layer_name: str, **fields) -> dict:
         "group_config_json",
         "popup_template",
         "popup_fields_json",
+        "linked_metrics_json",
+        "linked_metric_filters_json",
         "click_action",
         "icon",
         "heatmap",
@@ -1969,6 +3511,7 @@ def update(layer_name: str, **fields) -> dict:
         _sync_filter_child_table_from_json(doc, fields.get("filter_json"))
         changed = True
     if changed:
+        _assert_location_read(doc)
         doc.save(ignore_permissions=True)
     return _layer_to_dto(doc)
 
@@ -2038,6 +3581,213 @@ def get_filter_schema(source_doctype: str) -> dict:
 def list_source_fields(source_doctype: str) -> list[dict]:
     """Backward-compatible field list for existing callers."""
     return get_filter_schema(source_doctype).get("fields", [])
+
+
+def _metric_key_from_parts(*parts: Any) -> str:
+    key = "_".join(str(part or "") for part in parts)
+    key = re.sub(r"[^A-Za-z0-9_]+", "_", key).strip("_").lower()
+    key = re.sub(r"_+", "_", key)
+    if not key:
+        return "metric"
+    if not re.match(r"^[A-Za-z_]", key):
+        key = f"metric_{key}"
+    return key[:48]
+
+
+def _unique_metric_key(base_key: str, seen: set[str]) -> str:
+    key = base_key[:48] or "metric"
+    if key not in seen:
+        seen.add(key)
+        return key
+    suffix = 2
+    while True:
+        suffix_text = f"_{suffix}"
+        candidate = f"{key[:48 - len(suffix_text)]}{suffix_text}"
+        if candidate not in seen:
+            seen.add(candidate)
+            return candidate
+        suffix += 1
+
+
+def _money_metric_base_filters(meta: Any, fieldname: str | None = None) -> list[list[Any]]:
+    filters: list[list[Any]] = []
+    if int(getattr(meta, "is_submittable", 0) or 0):
+        filters.append(["docstatus", "=", 1])
+    if fieldname == "outstanding_amount":
+        filters.append(["outstanding_amount", ">", 0])
+    return filters
+
+
+def _money_metric_label(doctype: str, field_label: str | None, aggregate: str) -> str:
+    if aggregate == "count":
+        return f"{doctype} Count"
+    return f"{doctype} {field_label or 'Amount'}"
+
+
+def _money_doctype_priority(doctype: str) -> int:
+    try:
+        return MONEY_DOCTYPE_PRIORITY.index(doctype)
+    except ValueError:
+        return len(MONEY_DOCTYPE_PRIORITY)
+
+
+def _readable_doctype_candidates() -> list[str]:
+    priority = [dt for dt in MONEY_DOCTYPE_PRIORITY if frappe.db.exists("DocType", dt)]
+    priority_set = set(priority)
+    rows = frappe.get_all(
+        "DocType",
+        filters={"istable": 0, "issingle": 0},
+        fields=["name"],
+        order_by="name asc",
+        limit_page_length=0,
+    )
+    return priority + [row.name for row in rows if row.name not in priority_set]
+
+
+def _dynamic_link_can_target(field: Any, source_doctype: str) -> bool:
+    fieldtype = getattr(field, "fieldtype", "") or ""
+    options = str(getattr(field, "options", "") or "")
+    if fieldtype == "Select":
+        return source_doctype in {row.strip() for row in options.splitlines() if row.strip()}
+    if fieldtype == "Link" and options == "DocType":
+        return True
+    return fieldtype in {"Data", "Small Text", "Read Only"}
+
+
+def _money_link_fields(meta: Any, source_doctype: str) -> list[dict[str, str]]:
+    fields_by_name = {df.fieldname: df for df in meta.fields if df.fieldname}
+    links: list[dict[str, str]] = []
+    for df in meta.fields:
+        if not df.fieldname:
+            continue
+        if df.fieldtype == "Link" and df.options == source_doctype:
+            links.append({"link_field": df.fieldname, "dynamic_link_doctype_field": ""})
+        elif df.fieldtype == "Dynamic Link":
+            doctype_fieldname = str(df.options or "").strip()
+            doctype_field = fields_by_name.get(doctype_fieldname)
+            if doctype_field and _dynamic_link_can_target(doctype_field, source_doctype):
+                links.append(
+                    {
+                        "link_field": df.fieldname,
+                        "dynamic_link_doctype_field": doctype_fieldname,
+                    }
+                )
+    return links
+
+
+@frappe.whitelist()
+def suggest_money_metrics(source_doctype: str, limit: int = 12) -> dict:
+    """Suggest linked money metric rows for a layer source DocType."""
+    source_doctype = str(source_doctype or "").strip()
+    if not source_doctype:
+        return {"source_doctype": "", "suggestions": [], "truncated": False}
+    assert_source_read(source_doctype)
+
+    limit = min(max(int(limit or 12), 1), 50)
+    suggestions: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    try:
+        source_module = frappe.get_meta(source_doctype).module
+    except Exception:
+        source_module = ""
+
+    for doctype in _readable_doctype_candidates():
+        if doctype == source_doctype or not frappe.has_permission(doctype, "read"):
+            continue
+        try:
+            meta = frappe.get_meta(doctype)
+        except Exception:
+            continue
+
+        link_fields = _money_link_fields(meta, source_doctype)
+        if not link_fields:
+            continue
+        same_module_rank = 0 if getattr(meta, "module", "") == source_module else 1
+
+        fields_by_name = {df.fieldname: df for df in meta.fields if df.fieldname}
+        candidate_fields = [
+            (fieldname, default_label, aggregate)
+            for fieldname, default_label, aggregate in MONEY_FIELD_CANDIDATES
+            if fieldname in fields_by_name
+            and fields_by_name[fieldname].fieldtype in NUMERIC_FIELD_TYPES
+        ]
+        if not candidate_fields:
+            candidate_fields = [
+                (df.fieldname, df.label or df.fieldname, "sum")
+                for df in meta.fields
+                if df.fieldname and df.fieldtype == "Currency"
+            ][:3]
+
+        for link in link_fields:
+            link_fieldname = link["link_field"]
+            dynamic_link_doctype_field = link.get("dynamic_link_doctype_field") or ""
+            link_rank = 1 if dynamic_link_doctype_field else 0
+            base_rank = (
+                _money_doctype_priority(doctype),
+                same_module_rank,
+                link_rank,
+                doctype.lower(),
+                link_fieldname.lower(),
+            )
+            base_filters = _money_metric_base_filters(meta)
+            if dynamic_link_doctype_field:
+                base_filters = base_filters + [[dynamic_link_doctype_field, "=", source_doctype]]
+            count_key = _unique_metric_key(
+                _metric_key_from_parts(doctype, link_fieldname, "count"),
+                seen_keys,
+            )
+            suggestions.append(
+                {
+                    "key": count_key,
+                    "label": _money_metric_label(doctype, None, "count"),
+                    "source_doctype": doctype,
+                    "link_field": link_fieldname,
+                    "dynamic_link_doctype_field": dynamic_link_doctype_field,
+                    "aggregate": "count",
+                    "field": "",
+                    "filters": base_filters,
+                    "category": "count",
+                    "_rank": (*base_rank, 1, ""),
+                }
+            )
+
+            for fieldname, default_label, aggregate in candidate_fields[:4]:
+                field_meta = fields_by_name[fieldname]
+                label = field_meta.label or default_label
+                key = _unique_metric_key(
+                    _metric_key_from_parts(doctype, fieldname),
+                    seen_keys,
+                )
+                suggestions.append(
+                    {
+                        "key": key,
+                        "label": _money_metric_label(doctype, label, aggregate),
+                        "source_doctype": doctype,
+                        "link_field": link_fieldname,
+                        "dynamic_link_doctype_field": dynamic_link_doctype_field,
+                        "aggregate": aggregate,
+                        "field": fieldname,
+                        "filters": (
+                            _money_metric_base_filters(meta, fieldname)
+                            + (
+                                [[dynamic_link_doctype_field, "=", source_doctype]]
+                                if dynamic_link_doctype_field
+                                else []
+                            )
+                        ),
+                        "category": "money",
+                        "_rank": (*base_rank, 0, fieldname.lower()),
+                    }
+                )
+
+    suggestions.sort(key=lambda item: item.get("_rank") or ())
+    for suggestion in suggestions:
+        suggestion.pop("_rank", None)
+    return {
+        "source_doctype": source_doctype,
+        "suggestions": suggestions[:limit],
+        "truncated": len(suggestions) > limit,
+    }
 
 
 @frappe.whitelist()
@@ -2148,6 +3898,12 @@ def list_group_values(source_doctype: str, field: str, limit: int = 50) -> dict:
     assert_source_read(source_doctype)
     if not field or not source_doctype:
         return {"values": [], "truncated": False}
+    field_map = _filter_field_map(source_doctype)
+    if field not in field_map:
+        frappe.throw(
+            f"Field '{field}' is not groupable on {source_doctype}",
+            frappe.ValidationError,
+        )
     # Use frappe.qb.distinct so we get one row per value. For Link fields
     # this returns the link name (the value the user filters by); for
     # Select/Data it returns the raw value. ORDER BY so the UI list is
@@ -2168,7 +3924,13 @@ def list_group_values(source_doctype: str, field: str, limit: int = 50) -> dict:
 
 
 @frappe.whitelist()
-def list_group_tree(source_doctype: str, fields: list | str, limit: int = 1000) -> dict:
+def list_group_tree(
+    source_doctype: str,
+    fields: list | str,
+    limit: int = 1000,
+    linked_metrics_json: str | list | None = None,
+    filter_json: str | list | None = None,
+) -> dict:
     """Return distinct grouping paths for ordered `fields`.
 
     The response is intentionally path-based instead of a fully nested
@@ -2187,21 +3949,25 @@ def list_group_tree(source_doctype: str, fields: list | str, limit: int = 1000) 
         fields = []
 
     field_map = _filter_field_map(source_doctype)
+    metric_fields = linked_metric_property_names(linked_metrics_json)
     levels = []
     clean_fields = []
+    db_fields = []
     seen = set()
     for field in fields:
         raw_level = field if isinstance(field, dict) else {"field": field, "mode": "value"}
         fieldname = str(raw_level.get("field") or "").strip()
         if not fieldname or fieldname in seen:
             continue
-        if fieldname not in field_map:
+        if fieldname not in field_map and fieldname not in metric_fields:
             frappe.throw(
                 f"Field '{fieldname}' is not groupable on {source_doctype}",
                 frappe.ValidationError,
             )
         seen.add(fieldname)
         clean_fields.append(fieldname)
+        if not _is_linked_metric_field(fieldname):
+            db_fields.append(fieldname)
         mode = str(raw_level.get("mode") or "value").lower()
         level = {"field": fieldname, "mode": "bands" if mode == "bands" else "value"}
         if level["mode"] == "bands":
@@ -2228,16 +3994,33 @@ def list_group_tree(source_doctype: str, fields: list | str, limit: int = 1000) 
         return {"paths": [], "truncated": False}
 
     limit = min(max(int(limit or 1000), 1), 5000)
+    base_filters = _coerce_filter(filter_json) or []
+    fetch_fields = ["name", *db_fields]
+    order_by = ", ".join(f"{field} asc" for field in db_fields) if db_fields else "name asc"
     try:
         rows = frappe.get_all(
             source_doctype,
-            fields=clean_fields,
-            distinct=True,
-            order_by=", ".join(f"{field} asc" for field in clean_fields),
+            fields=fetch_fields,
+            filters=base_filters,
+            distinct=not metric_fields.intersection(clean_fields),
+            order_by=order_by,
             limit_page_length=limit,
         )
     except Exception:
         return {"paths": [], "truncated": False}
+    if metric_fields.intersection(clean_fields):
+        metric_layer = frappe._dict(
+            {
+                "source_doctype": source_doctype,
+                "linked_metrics_json": linked_metrics_json,
+            }
+        )
+        metrics_by_name = _linked_metrics_for_rows(metric_layer, rows)
+        for row in rows:
+            metrics = metrics_by_name.get(row.get("name"), {})
+            for fieldname in clean_fields:
+                if _is_linked_metric_field(fieldname):
+                    row[fieldname] = _linked_metric_group_value(metrics, fieldname)
 
     seen_paths = set()
     paths = []
@@ -2303,6 +4086,12 @@ def _layer_to_dto(doc) -> dict:
         "title": doc.title,
         "map": doc.map,
         "source_doctype": doc.source_doctype,
+        "location_source": getattr(doc, "location_source", None) or "Direct Fields",
+        "location_link_field": getattr(doc, "location_link_field", None) or "",
+        "location_doctype": getattr(doc, "location_doctype", None) or "",
+        "location_reverse_link_field": getattr(doc, "location_reverse_link_field", None) or "",
+        "location_fields_json": getattr(doc, "location_fields_json", None) or "",
+        "location_fields": _coerce_location_fields(getattr(doc, "location_fields_json", "") or ""),
         "latitude_field": doc.latitude_field,
         "longitude_field": doc.longitude_field,
         "label_field": doc.label_field,
@@ -2313,6 +4102,10 @@ def _layer_to_dto(doc) -> dict:
         "popup_template": doc.popup_template or "",
         "popup_fields": _coerce_popup_fields(doc.popup_fields_json),
         "popup_fields_json": doc.popup_fields_json or "",
+        "linked_metrics_json": getattr(doc, "linked_metrics_json", None) or "",
+        "linked_metrics": _coerce_linked_metrics(getattr(doc, "linked_metrics_json", "") or ""),
+        "linked_metric_filters_json": getattr(doc, "linked_metric_filters_json", None) or "",
+        "linked_metric_filters": _coerce_linked_metric_filters(getattr(doc, "linked_metric_filters_json", "") or ""),
         "click_action": doc.click_action or "popup",
         "color": doc.color,
         "icon": doc.icon,
@@ -2381,6 +4174,11 @@ def _layer_to_dto(doc) -> dict:
 def create_master(
     title: str,
     source_doctype: str,
+    location_source: str = "Direct Fields",
+    location_link_field: str | None = None,
+    location_doctype: str | None = None,
+    location_reverse_link_field: str | None = None,
+    location_fields_json: str | None = None,
     latitude_field: str = "latitude",
     longitude_field: str = "longitude",
     label_field: str | None = None,
@@ -2394,6 +4192,8 @@ def create_master(
     group_config_json: str | None = None,
     popup_template: str | None = None,
     popup_fields_json: str | None = None,
+    linked_metrics_json: str | None = None,
+    linked_metric_filters_json: str | None = None,
     click_action: str = "popup",
     heatmap: int = 0,
     heatmap_mode: str = "count",
@@ -2429,6 +4229,11 @@ def create_master(
             "title": title,
             "map": "",
             "source_doctype": source_doctype,
+            "location_source": location_source or "Direct Fields",
+            "location_link_field": location_link_field or "",
+            "location_doctype": location_doctype or "",
+            "location_reverse_link_field": location_reverse_link_field or "",
+            "location_fields_json": location_fields_json or "",
             "latitude_field": latitude_field,
             "longitude_field": longitude_field,
             "label_field": label_field or "",
@@ -2442,6 +4247,8 @@ def create_master(
             "group_config_json": group_config_json or "",
             "popup_template": popup_template or "",
             "popup_fields_json": popup_fields_json or "",
+            "linked_metrics_json": linked_metrics_json or "",
+            "linked_metric_filters_json": linked_metric_filters_json or "",
             "click_action": click_action or "popup",
             "use_source_permissions": 1,
             "heatmap": int(heatmap),
@@ -2464,6 +4271,7 @@ def create_master(
         }
     )
     _sync_filter_child_table_from_json(doc, filter_json)
+    _assert_location_read(doc)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)
 
@@ -2489,6 +4297,11 @@ def list_masters() -> list[dict]:
             "title",
             "map",
             "source_doctype",
+            "location_source",
+            "location_link_field",
+            "location_doctype",
+            "location_reverse_link_field",
+            "location_fields_json",
             "latitude_field",
             "longitude_field",
             "label_field",
@@ -2497,6 +4310,8 @@ def list_masters() -> list[dict]:
             "group_config_json",
             "popup_template",
             "popup_fields_json",
+            "linked_metrics_json",
+            "linked_metric_filters_json",
             "click_action",
             "color",
             "icon",
@@ -2579,6 +4394,11 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "title": master.title,
             "map": map_name,
             "source_doctype": master.source_doctype,
+            "location_source": getattr(master, "location_source", None) or "Direct Fields",
+            "location_link_field": getattr(master, "location_link_field", None) or "",
+            "location_doctype": getattr(master, "location_doctype", None) or "",
+            "location_reverse_link_field": getattr(master, "location_reverse_link_field", None) or "",
+            "location_fields_json": getattr(master, "location_fields_json", None) or "",
             "latitude_field": master.latitude_field,
             "longitude_field": master.longitude_field,
             "label_field": master.label_field,
@@ -2606,6 +4426,8 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "fill_opacity": master.fill_opacity,
             "popup_template": master.popup_template,
             "popup_fields_json": master.popup_fields_json,
+            "linked_metrics_json": getattr(master, "linked_metrics_json", None) or "",
+            "linked_metric_filters_json": getattr(master, "linked_metric_filters_json", None) or "",
             "group_by_field": master.group_by_field,
             "group_config_json": master.group_config_json,
             "click_action": master.click_action,

@@ -365,9 +365,12 @@ function resetLayoutPreference() {
 
 // Control handlers — write into the draft only. The watcher above
 // mirrors previewable keys into ui.prefs.
-function onSwitch(key, event) {
+function onSwitch(key, eventOrValue) {
   if (!draft.value) return
-  draft.value = { ...draft.value, [key]: event.target.checked }
+  const checked = typeof eventOrValue === 'boolean'
+    ? eventOrValue
+    : !!eventOrValue?.target?.checked
+  draft.value = { ...draft.value, [key]: checked }
 }
 function onSelect(key, value) {
   if (!draft.value) return
@@ -494,14 +497,16 @@ function registerRef(key, kind, el) {
             </div>
             <p class="us__hint">Applies on the next map you open.</p>
             <div class="us__row">
-              <label class="us__switch-label">
-                <input
-                  type="checkbox"
-                  :checked="draft.tiltJoystickInverted"
-                  @change="(e) => onSwitch('tiltJoystickInverted', e)"
-                />
+              <button
+                type="button"
+                class="us__switch-label"
+                :class="{ 'us__switch-label--on': draft.tiltJoystickInverted }"
+                :aria-pressed="draft.tiltJoystickInverted ? 'true' : 'false'"
+                @click="onSwitch('tiltJoystickInverted', !draft.tiltJoystickInverted)"
+              >
+                <span class="us__switch-dot" aria-hidden="true" />
                 <span class="us__row-title">Invert tilt joystick</span>
-              </label>
+              </button>
               <span class="us__row-help">Reverse horizontal and vertical joystick movement.</span>
             </div>
           </template>
@@ -529,15 +534,17 @@ function registerRef(key, kind, el) {
               :class="{ 'us__row--disabled': item.disabled }"
             >
               <template v-if="item.kind === 'switch'">
-                <label class="us__switch-label">
-                  <input
-                    type="checkbox"
-                    :checked="draft[item.key]"
-                    :disabled="item.disabled"
-                    @change="(e) => onSwitch(item.key, e)"
-                  />
+                <button
+                  type="button"
+                  class="us__switch-label"
+                  :class="{ 'us__switch-label--on': !!draft[item.key] }"
+                  :disabled="item.disabled"
+                  :aria-pressed="draft[item.key] ? 'true' : 'false'"
+                  @click="onSwitch(item.key, !draft[item.key])"
+                >
+                  <span class="us__switch-dot" aria-hidden="true" />
                   <span class="us__row-title">{{ item.label }}</span>
-                </label>
+                </button>
                 <span v-if="item.help" class="us__row-help">{{ item.help }}</span>
               </template>
               <template v-else-if="item.kind === 'select'">
@@ -939,10 +946,44 @@ function registerRef(key, kind, el) {
   white-space: nowrap;
 }
 .us__switch-label {
-  display: flex; align-items: center; gap: 8px;
-  cursor: pointer; min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.us__switch-label input { accent-color: #3B82F6; flex: none; }
+.us__switch-dot {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.us__switch-dot::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: rgba(230, 232, 236, 0.25);
+}
+.us__switch-label--on .us__switch-dot {
+  border-color: rgba(59, 130, 246, 0.64);
+  background: rgba(59, 130, 246, 0.16);
+}
+.us__switch-label--on .us__switch-dot::after {
+  background: #3B82F6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
 
 /* Custom select. The trigger is a button that looks like a normal
    input; the popover is a translucent list anchored under it. The

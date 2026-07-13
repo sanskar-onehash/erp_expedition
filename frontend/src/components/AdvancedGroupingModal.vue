@@ -12,6 +12,8 @@ const props = defineProps({
   groupByField: { type: String, default: '' },
   sourceDoctype: { type: String, default: '' },
   sourceFields: { type: Array, default: () => [] },
+  linkedMetricsJson: { type: String, default: '' },
+  filterJson: { type: String, default: '' },
   layerColor: { type: String, default: '#3B82F6' },
   layerIcon: { type: String, default: '' },
   colorPalette: { type: Array, default: () => [] },
@@ -29,6 +31,7 @@ const search = ref('')
 const expanded = ref(new Set())
 const treeTruncated = ref(false)
 const openIconMenuKey = ref('')
+const openLevelMenu = ref('')
 const bandEdgePicker = ref({ key: '', levelIndex: -1, bandIndex: -1, edge: '', month: '', top: 0, left: 0 })
 const bandEdgePickerOpen = computed(() => !!bandEdgePicker.value.key)
 const bandEdgePickerTitle = computed(() =>
@@ -101,6 +104,9 @@ watch(
 function onDocumentClick(e) {
   if (!e.target?.closest?.('.agm__band-date-menu') && !e.target?.closest?.('.agm__date-trigger')) {
     closeBandEdgePicker()
+  }
+  if (!e.target?.closest?.('.agm__select-menu') && !e.target?.closest?.('.agm__select-trigger')) {
+    openLevelMenu.value = ''
   }
 }
 
@@ -177,6 +183,8 @@ async function loadTree() {
     const resp = await call('expedition.api.layer.list_group_tree', {
       source_doctype: props.sourceDoctype,
       fields: levels.value.map(serializeLevel),
+      linked_metrics_json: props.linkedMetricsJson,
+      filter_json: props.filterJson,
     })
     paths.value = resp.paths || []
     treeTruncated.value = !!resp.truncated
@@ -322,6 +330,31 @@ function addLevel() {
   const field = availableFields.value[0]?.fieldname
   if (!field) return
   levels.value = [...levels.value, { field, mode: 'value' }]
+}
+
+function levelFieldOptions(level) {
+  const current = fieldByName.value.get(level.field)
+  const rows = []
+  if (current) rows.push(current)
+  for (const field of availableFields.value) {
+    if (field.fieldname !== level.field) rows.push(field)
+  }
+  return rows
+}
+
+function fieldLabel(fieldname) {
+  const field = fieldByName.value.get(fieldname)
+  return field ? `${field.label || field.fieldname}` : fieldname
+}
+
+function chooseLevelField(index, fieldname) {
+  updateLevel(index, fieldname)
+  openLevelMenu.value = ''
+}
+
+function chooseLevelMode(index, mode) {
+  setLevelMode(index, mode)
+  openLevelMenu.value = ''
 }
 
 function updateLevel(index, field) {
@@ -720,21 +753,52 @@ function clearGrouping() {
             <div class="agm__level-main">
               <div class="agm__level-config">
                 <div class="agm__level-pickers">
-                <select class="agm__input" :value="level.field" @change="updateLevel(index, $event.target.value)">
-                  <option :value="level.field">{{ fieldByName.get(level.field)?.label || level.field }}</option>
-                  <option v-for="field in availableFields" :key="field.fieldname" :value="field.fieldname">
-                    {{ field.label }} · {{ field.fieldname }}
-                  </option>
-                </select>
-                  <select
+                  <div class="agm__select">
+                    <button
+                      type="button"
+                      class="agm__input agm__select-trigger"
+                      @click="openLevelMenu = openLevelMenu === `field:${index}` ? '' : `field:${index}`"
+                    >
+                      <span>{{ fieldLabel(level.field) }}</span>
+                      <span class="agm__select-chevron">⌄</span>
+                    </button>
+                    <div v-if="openLevelMenu === `field:${index}`" class="agm__select-menu">
+                      <button
+                        v-for="field in levelFieldOptions(level)"
+                        :key="field.fieldname"
+                        type="button"
+                        class="agm__select-option"
+                        :data-active="level.field === field.fieldname"
+                        @mousedown.prevent="chooseLevelField(index, field.fieldname)"
+                      >
+                        <span>{{ field.label || field.fieldname }}</span>
+                        <small>{{ field.fieldname }} · {{ field.fieldtype }}</small>
+                      </button>
+                    </div>
+                  </div>
+                  <div
                     v-if="fieldSupportsBands(level.field)"
-                    class="agm__input agm__input--mode"
-                    :value="level.mode"
-                    @change="setLevelMode(index, $event.target.value)"
+                    class="agm__select agm__select--mode"
                   >
-                    <option value="value">Exact values</option>
-                    <option value="bands">Bands</option>
-                  </select>
+                    <button
+                      type="button"
+                      class="agm__input agm__input--mode agm__select-trigger"
+                      @click="openLevelMenu = openLevelMenu === `mode:${index}` ? '' : `mode:${index}`"
+                    >
+                      <span>{{ level.mode === 'bands' ? 'Bands' : 'Exact values' }}</span>
+                      <span class="agm__select-chevron">⌄</span>
+                    </button>
+                    <div v-if="openLevelMenu === `mode:${index}`" class="agm__select-menu agm__select-menu--right">
+                      <button type="button" class="agm__select-option" :data-active="level.mode !== 'bands'" @mousedown.prevent="chooseLevelMode(index, 'value')">
+                        <span>Exact values</span>
+                        <small>One group per distinct value</small>
+                      </button>
+                      <button type="button" class="agm__select-option" :data-active="level.mode === 'bands'" @mousedown.prevent="chooseLevelMode(index, 'bands')">
+                        <span>Bands</span>
+                        <small>Numeric/date ranges</small>
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <button type="button" class="agm__icon-btn" aria-label="Remove level" @click="removeLevel(index)">×</button>
               </div>
@@ -833,13 +897,6 @@ function clearGrouping() {
                           class="agm__input agm__color-code"
                           :value="row.override.color || row.style.color"
                           placeholder="#RRGGBB"
-                          @input="setGroupProp(row.key, 'color', $event.target.value)"
-                        />
-                        <input
-                          class="agm__color-picker"
-                          type="color"
-                          :value="row.override.color || row.style.color"
-                          title="Pick custom color"
                           @input="setGroupProp(row.key, 'color', $event.target.value)"
                         />
                       </div>
@@ -949,7 +1006,9 @@ function clearGrouping() {
         <span>Time</span>
         <input
           class="agm__input agm__time-input"
-          type="time"
+          type="text"
+          inputmode="numeric"
+          placeholder="HH:MM"
           :value="bandEdgeTime(bandEdgeValue(bandEdgePicker.levelIndex, bandEdgePicker.bandIndex, bandEdgePicker.edge))"
           @input="updateBandEdgeTime($event.target.value)"
         />
@@ -1229,6 +1288,85 @@ function clearGrouping() {
   padding: 0 10px;
 }
 .agm__input--mode { height: 28px; font-size: 11px; color: rgba(226, 232, 240, 0.82); }
+.agm__select {
+  position: relative;
+  min-width: 0;
+}
+.agm__select--mode {
+  flex: 0 0 116px;
+}
+.agm__select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.agm__select-trigger span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agm__select-chevron {
+  flex: none;
+  color: rgba(226, 232, 240, 0.48);
+}
+.agm__select-menu {
+  position: absolute;
+  z-index: 90;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 260px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+}
+.agm__select-menu--right {
+  left: auto;
+  right: 0;
+}
+.agm__select-option {
+  min-width: 156px;
+  display: grid;
+  gap: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(248, 250, 252, 0.88);
+  padding: 7px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.agm__select-option span,
+.agm__select-option small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agm__select-option small {
+  color: rgba(226, 232, 240, 0.48);
+  font-size: 10px;
+}
+.agm__select-option:hover,
+.agm__select-option[data-active="true"] {
+  background: rgba(59, 130, 246, 0.18);
+  color: #fff;
+}
 .agm__ghost, .agm__primary, .agm__danger, .agm__reset {
   height: 32px;
   border-radius: 6px;
@@ -1304,9 +1442,9 @@ function clearGrouping() {
   z-index: 30;
   left: 0;
   top: 34px;
-  width: 207px;
+  width: 164px;
   display: grid;
-  grid-template-columns: repeat(6, 20px) 40px;
+  grid-template-columns: repeat(6, 20px);
   gap: 6px;
   padding: 8px;
   border-radius: 8px;
@@ -1323,26 +1461,11 @@ function clearGrouping() {
 }
 .agm__color-chip--active { box-shadow: 0 0 0 2px #fff; }
 .agm__color-code {
-  grid-column: 1 / 7;
+  grid-column: 1 / -1;
   width: 100%;
   height: 28px;
   margin-top: 2px;
 }
-.agm__color-picker {
-  grid-column: 7;
-  grid-row: 1 / span 3;
-  width: 40px;
-  height: 40px;
-  margin-left: 10px;
-  align-self: stretch;
-  padding: 0;
-  border: 2px solid rgba(255, 255, 255, 0.82);
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-}
-.agm__color-picker::-webkit-color-swatch-wrapper { padding: 0; }
-.agm__color-picker::-webkit-color-swatch { border: 0; border-radius: 5px; }
 .agm__icon-trigger {
   width: 30px;
   height: 30px;

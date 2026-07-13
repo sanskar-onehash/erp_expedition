@@ -26,6 +26,7 @@ import BasemapPanel from './components/BasemapPanel.vue'
 import SearchBar from './components/SearchBar.vue'
 import Legend from './components/Legend.vue'
 import LayerPanel from './components/LayerPanel.vue'
+import EmbeddedListView from './components/EmbeddedListView.vue'
 import MapToolTray from './components/MapToolTray.vue'
 import CoordReadout from './components/CoordReadout.vue'
 import MeasureTool from './components/MeasureTool.vue'
@@ -41,6 +42,7 @@ const layers = useLayersStore()
 const zoneStore = useZonesStore()
 const iconStore = useIconsStore()
 const chromeRoot = ref(null)
+const embeddedListOpen = ref(false)
 const layoutItemEls = {}
 const layoutViewport = ref({ width: 0, height: 0 })
 const layoutItemSizes = ref({})
@@ -63,6 +65,7 @@ const LAYOUT_LABELS = {
   fit: 'Fit controls',
   tilt: 'Reset tilt',
   layout: 'Layout',
+  list: 'List',
   visibility: 'Hide UI',
   basemap: 'Basemap',
   coords: 'Coordinates',
@@ -85,6 +88,7 @@ function runShortcut(id) {
   else if (id === 'settings') ui.toggleSettingsTab('map')
   else if (id === 'hide-ui') ui.toggleChrome()
   else if (id === 'layout') ui.toggleLayoutCustomizing()
+  else if (id === 'list') onToolbarTrigger('list')
   else if (id === 'fit-all') onToolbarTrigger('fit-all')
   else if (id === 'fit-visible') onToolbarTrigger('fit-visible')
   else if (id === 'tilt-reset') onToolbarTrigger('tilt-reset')
@@ -122,7 +126,7 @@ function onGlobalKeydown(e) {
   if (e.key === '?') id = 'shortcuts'
   else if (key === 'm') id = 'layers'
   else if (key === 'h') id = 'hide-ui'
-  else if (key === 'l') id = 'layout'
+  else if (key === 'l') id = e.shiftKey ? 'list' : 'layout'
   else if (key === 'b') id = 'basemap'
   else if (key === 'f') id = e.shiftKey ? 'fit-all' : 'fit-visible'
   else if (e.key === '0') id = 'tilt-reset'
@@ -208,6 +212,7 @@ const GLYPHS = {
   // read as the same icon, just struck through.
   eyeOff: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l16 16',
   layout: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
+  list: 'M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01',
 }
 
 // Top-left: map workspace. The badge still shows enabled layers because
@@ -223,6 +228,9 @@ const trSearchButtons = computed(() => [
 ])
 const trSettingsButtons = computed(() => [
   { id: 'settings', label: 'Settings', glyph: GLYPHS.settings, active: ui.settingsOpen, shortcut: shortcutLabel('settings') },
+])
+const listButtons = computed(() => [
+  { id: 'list', label: 'List', glyph: GLYPHS.list, active: embeddedListOpen.value, shortcut: shortcutLabel('list') },
 ])
 // Bottom-right: two standard FloatingToolbars. The fit tray holds
 // both fit modes (fit-all + fit-visible) as buttons stacked
@@ -462,6 +470,7 @@ function resetTilt() {
 // effect; no state machine, no toggle-vs-action ambiguity.
 function onToolbarTrigger(id) {
   if (id === 'layers') ui.toggleLeftPanel('layers')
+  else if (id === 'list') embeddedListOpen.value = !embeddedListOpen.value
   else if (id === 'search') ui.toggleSearch()
   else if (id === 'settings') ui.toggleSettings()
   else if (id === 'fit-all') fitToData('all')
@@ -659,6 +668,24 @@ async function _fitAllBounds(m) {
     </Transition>
 
     <MapToolTray />
+
+    <Transition name="elv-slide">
+      <div v-if="embeddedListOpen && !ui.chromeHidden" class="expedition__embedded-list chrome-hideable">
+        <EmbeddedListView @close="embeddedListOpen = false" />
+      </div>
+    </Transition>
+
+    <div
+      v-if="!ui.chromeHidden"
+      :ref="(el) => registerLayoutItem('list', el)"
+      class="expedition__list expedition__layout-item chrome-hideable"
+      :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'list' }"
+      :style="layoutItemStyle('list')"
+      @pointerdown.capture="(e) => onLayoutPointerDown('list', e)"
+    >
+      <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.list }}</div>
+      <FloatingToolbar :buttons="listButtons" @trigger="onToolbarTrigger" />
+    </div>
 
     <!-- Top-left toolbar: layers -->
     <div
@@ -926,6 +953,27 @@ async function _fitAllBounds(m) {
 .lp-slide-enter-from { transform: translateX(-20px); opacity: 0; }
 .lp-slide-leave-to { transform: translateX(-20px); opacity: 0; }
 
+.expedition__embedded-list {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 36;
+  pointer-events: none;
+}
+.expedition__embedded-list > * {
+  pointer-events: auto;
+}
+.elv-slide-enter-active,
+.elv-slide-leave-active {
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 220ms ease;
+}
+.elv-slide-enter-from,
+.elv-slide-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
+}
+
 /* Right-edge panel placement + slide-in transition.
    Anchored to the center-right tools button (top: 25%, button is
    32px tall) so the panel "grows out" of the button that opened
@@ -945,7 +993,7 @@ async function _fitAllBounds(m) {
 
 /* Corner placements. pointer-events: none so the map stays pannable
    when the cursor is over the empty space around each toolbar. */
-.expedition__tl, .expedition__tr, .expedition__br, .expedition__bl, .expedition__bc, .expedition__cr {
+.expedition__tl, .expedition__tr, .expedition__br, .expedition__bl, .expedition__bc, .expedition__cr, .expedition__list {
   position: absolute;
   pointer-events: none;
   z-index: 20;
@@ -957,6 +1005,9 @@ async function _fitAllBounds(m) {
   transform: none;
   z-index: 22;
   transition: left 160ms cubic-bezier(0.16, 1, 0.3, 1), top 160ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 120ms ease;
+}
+.expedition__list {
+  z-index: 37;
 }
 .expedition__layout-handle {
   display: none;
@@ -1315,6 +1366,13 @@ async function _fitAllBounds(m) {
 }
 
 .expedition--chrome-hidden .chrome-hideable {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.expedition--chrome-hidden .mtt__layout,
+.expedition--chrome-hidden .mtt__pop {
   opacity: 0;
   pointer-events: none;
   transition: opacity 220ms ease;

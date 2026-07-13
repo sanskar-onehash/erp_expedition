@@ -77,6 +77,51 @@ const coverageTargetLayer = ref('')
 const coverageResult = ref(null)
 const coverageLoading = ref(false)
 const coverageError = ref('')
+const insightActionError = ref('')
+const menuOpen = ref('')
+
+const ACTIVITY_RANGE_OPTIONS = [
+  { v: '7d', label: 'Last 7 days' },
+  { v: '30d', label: 'Last 30 days' },
+  { v: '90d', label: 'Last 90 days' },
+  { v: 'all', label: 'All time' },
+]
+const ACTIVITY_TYPE_OPTIONS = [
+  { v: '', label: 'All types' },
+  { v: 'visit', label: 'Visits' },
+  { v: 'call', label: 'Calls' },
+  { v: 'demo', label: 'Demos' },
+  { v: 'follow_up', label: 'Follow-ups' },
+  { v: 'scheduled', label: 'Scheduled' },
+  { v: 'note', label: 'Notes' },
+]
+
+function optionLabel(options, value, fallback = 'Select') {
+  return options.find((option) => option.v === value)?.label || fallback
+}
+
+function layerLabel(layerName, fallback) {
+  const layer = layerOptions.value.find((item) => item.name === layerName)
+  return layer ? (layer.title || layer.name) : fallback
+}
+
+function chooseActivityRange(value) {
+  activityRange.value = value
+  menuOpen.value = ''
+  loadActivity()
+}
+
+function chooseActivityType(value) {
+  activityType.value = value
+  menuOpen.value = ''
+  loadActivity()
+}
+
+function chooseCoverageLayer(kind, value) {
+  if (kind === 'radius') coverageRadiusLayer.value = value
+  else coverageTargetLayer.value = value
+  menuOpen.value = ''
+}
 
 function rangeToDates(r) {
   const now = new Date()
@@ -170,6 +215,16 @@ async function runCoverage() {
   }
 }
 
+async function recomputeInsights() {
+  if (!activeMapName.value) return
+  insightActionError.value = ''
+  try {
+    await insights.recomputeFor(activeMapName.value)
+  } catch (e) {
+    insightActionError.value = e.message || String(e)
+  }
+}
+
 const SEVERITY_RING = {
   high: 'rgba(239, 68, 68, 0.55)',
   medium: 'rgba(245, 158, 11, 0.55)',
@@ -178,6 +233,92 @@ const SEVERITY_RING = {
 }
 function severityColor(s) { return SEVERITY_RING[s] || SEVERITY_RING.info }
 function severityLabel(s) { return ({ high: 'High', medium: 'Med', low: 'Low', info: 'Info' })[s] || s }
+function parseInsightDetail(ins) {
+  if (!ins?.detail_json) return null
+  if (typeof ins.detail_json === 'object') return ins.detail_json
+  try {
+    const parsed = JSON.parse(ins.detail_json)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+function moneyInsightMetrics(ins) {
+  const detail = parseInsightDetail(ins)
+  return Array.isArray(detail?.metrics) ? detail.metrics : []
+}
+function moneyInsightSourceCount(ins) {
+  const detail = parseInsightDetail(ins)
+  const count = Number(detail?.source_count)
+  return Number.isFinite(count) ? count : 0
+}
+function moneyInsightLayerLabel(ins) {
+  const detail = parseInsightDetail(ins)
+  return layerLabel(detail?.layer, detail?.source_doctype || ins.linked_doctype || 'Source')
+}
+function formatMetricValue(value) {
+  if (value == null || value === '') return '0'
+  const number = Number(value)
+  if (Number.isFinite(number)) return number.toLocaleString()
+  return String(value)
+}
+function metricVerb(metric) {
+  if (metric?.aggregate === 'count') return `${metric.row_count || 0} rows`
+  return `${metric?.aggregate || 'value'} · ${metric?.row_count || 0} rows`
+}
+function metricTopSources(metric) {
+  return Array.isArray(metric?.top_sources) ? metric.top_sources.slice(0, 3) : []
+}
+function formatPercent(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '0%'
+  return `${Math.round(n * 100)}%`
+}
+function metricSignalChips(metric) {
+  const chips = []
+  if (metric?.top_share != null) chips.push({ label: 'Top', value: formatPercent(metric.top_share) })
+  if (metric?.top_3_share != null) chips.push({ label: 'Top 3', value: formatPercent(metric.top_3_share) })
+  if (metric?.active_source_count != null) chips.push({ label: 'Active', value: formatMetricValue(metric.active_source_count) })
+  if (metric?.zero_source_count) chips.push({ label: 'Zero', value: formatMetricValue(metric.zero_source_count) })
+  for (const item of (Array.isArray(metric?.statuses) ? metric.statuses.slice(0, 3) : [])) {
+    chips.push({ label: item.label || 'Status', value: formatMetricValue(item.count) })
+  }
+  return chips
+}
+
+function focusMoneySource(ins, source) {
+  const detail = parseInsightDetail(ins)
+  const layerName = detail?.layer
+  if (!layerName || !source?.name) return
+  const fc = layerStore.features?.[layerName]
+  const feature = (fc?.features || []).find((item) => {
+    const props = item?.properties || {}
+    return props._name === source.name || props.name === source.name || item.id === source.name
+  })
+  if (!feature) return
+  const props = feature.properties || {}
+  const coords = Array.isArray(feature.geometry?.coordinates)
+    ? feature.geometry.coordinates
+    : null
+  const lng = coords?.[0]
+  const lat = coords?.[1]
+  const layer = layerStore.layers.find((item) => item.name === layerName) || fc?.layer || { name: layerName }
+  ui.clearSelectedZone()
+  ui.selectedFeature = {
+    layer,
+    properties: props,
+    _id: feature.id || props._id || props._name,
+    _lngLat: typeof lng === 'number' && typeof lat === 'number' ? { lng, lat } : null,
+  }
+  const map = window.expeditionMap?.getMap?.()
+  if (map && typeof lng === 'number' && typeof lat === 'number') {
+    map.easeTo({
+      center: [lng, lat],
+      zoom: Math.max(map.getZoom(), 13),
+      duration: 600,
+    })
+  }
+}
 
 function startDrawPolygon() { ui.startDrawPolygon() }
 function cancelDraw() { ui.cancelDraw() }
@@ -349,21 +490,38 @@ function onInsightClick(ins) {
         </div>
         <div v-if="openSections.activity" class="tp__activity">
           <div class="tp__activity-controls">
-            <select v-model="activityRange" class="tp__activity-select" @change="loadActivity">
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-              <option value="90d">Last 90 days</option>
-              <option value="all">All time</option>
-            </select>
-            <select v-model="activityType" class="tp__activity-select" @change="loadActivity">
-              <option value="">All types</option>
-              <option value="visit">Visits</option>
-              <option value="call">Calls</option>
-              <option value="demo">Demos</option>
-              <option value="follow_up">Follow-ups</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="note">Notes</option>
-            </select>
+            <div class="tp__menu">
+              <button type="button" class="tp__select" @click="menuOpen = menuOpen === 'activity_range' ? '' : 'activity_range'">
+                <span>{{ optionLabel(ACTIVITY_RANGE_OPTIONS, activityRange) }}</span>
+                <span class="tp__select-chevron">⌄</span>
+              </button>
+              <div v-if="menuOpen === 'activity_range'" class="tp__menu-pop">
+                <button
+                  v-for="option in ACTIVITY_RANGE_OPTIONS"
+                  :key="option.v"
+                  type="button"
+                  class="tp__menu-option"
+                  :data-active="activityRange === option.v"
+                  @mousedown.prevent="chooseActivityRange(option.v)"
+                >{{ option.label }}</button>
+              </div>
+            </div>
+            <div class="tp__menu">
+              <button type="button" class="tp__select" @click="menuOpen = menuOpen === 'activity_type' ? '' : 'activity_type'">
+                <span>{{ optionLabel(ACTIVITY_TYPE_OPTIONS, activityType) }}</span>
+                <span class="tp__select-chevron">⌄</span>
+              </button>
+              <div v-if="menuOpen === 'activity_type'" class="tp__menu-pop">
+                <button
+                  v-for="option in ACTIVITY_TYPE_OPTIONS"
+                  :key="option.v || 'all'"
+                  type="button"
+                  class="tp__menu-option"
+                  :data-active="activityType === option.v"
+                  @mousedown.prevent="chooseActivityType(option.v)"
+                >{{ option.label }}</button>
+              </div>
+            </div>
           </div>
           <button
             type="button" class="tp__activity-refresh" :disabled="activityLoading"
@@ -393,18 +551,40 @@ function onInsightClick(ins) {
         </div>
         <div v-if="openSections.coverage" class="tp__coverage">
           <div class="tp__coverage-controls">
-            <select v-model="coverageRadiusLayer" class="tp__activity-select">
-              <option value="">Radius layer</option>
-              <option v-for="layer in layerOptions" :key="'radius-' + layer.name" :value="layer.name">
-                {{ layer.title || layer.name }}
-              </option>
-            </select>
-            <select v-model="coverageTargetLayer" class="tp__activity-select">
-              <option value="">Target layer</option>
-              <option v-for="layer in layerOptions" :key="'target-' + layer.name" :value="layer.name">
-                {{ layer.title || layer.name }}
-              </option>
-            </select>
+            <div class="tp__menu">
+              <button type="button" class="tp__select" @click="menuOpen = menuOpen === 'coverage_radius' ? '' : 'coverage_radius'">
+                <span>{{ layerLabel(coverageRadiusLayer, 'Radius layer') }}</span>
+                <span class="tp__select-chevron">⌄</span>
+              </button>
+              <div v-if="menuOpen === 'coverage_radius'" class="tp__menu-pop">
+                <button type="button" class="tp__menu-option" :data-active="!coverageRadiusLayer" @mousedown.prevent="chooseCoverageLayer('radius', '')">Radius layer</button>
+                <button
+                  v-for="layer in layerOptions"
+                  :key="'radius-' + layer.name"
+                  type="button"
+                  class="tp__menu-option"
+                  :data-active="coverageRadiusLayer === layer.name"
+                  @mousedown.prevent="chooseCoverageLayer('radius', layer.name)"
+                >{{ layer.title || layer.name }}</button>
+              </div>
+            </div>
+            <div class="tp__menu">
+              <button type="button" class="tp__select" @click="menuOpen = menuOpen === 'coverage_target' ? '' : 'coverage_target'">
+                <span>{{ layerLabel(coverageTargetLayer, 'Target layer') }}</span>
+                <span class="tp__select-chevron">⌄</span>
+              </button>
+              <div v-if="menuOpen === 'coverage_target'" class="tp__menu-pop tp__menu-pop--right">
+                <button type="button" class="tp__menu-option" :data-active="!coverageTargetLayer" @mousedown.prevent="chooseCoverageLayer('target', '')">Target layer</button>
+                <button
+                  v-for="layer in layerOptions"
+                  :key="'target-' + layer.name"
+                  type="button"
+                  class="tp__menu-option"
+                  :data-active="coverageTargetLayer === layer.name"
+                  @mousedown.prevent="chooseCoverageLayer('target', layer.name)"
+                >{{ layer.title || layer.name }}</button>
+              </div>
+            </div>
           </div>
           <button
             type="button"
@@ -435,18 +615,27 @@ function onInsightClick(ins) {
       </section>
 
       <!-- Insights -->
-      <section v-if="insightList.length || insights.loading" class="tp__section">
+      <section class="tp__section">
         <div class="tp__section-bar">
           <button class="tp__section-toggle" type="button" @click="openSections.insights = !openSections.insights">
             <span>Insights</span>
             <span class="tp__chevron" :data-open="openSections.insights">▾</span>
           </button>
+          <button
+            type="button"
+            class="tp__mini-action"
+            :disabled="insights.recomputing || !activeMapName"
+            @click="recomputeInsights"
+          >
+            {{ insights.recomputing ? 'Working' : 'Refresh' }}
+          </button>
         </div>
-        <ul v-if="openSections.insights && insightList.length" class="tp__list">
-          <li v-for="ins in insightList" :key="ins.name" class="tp__item">
+        <ul v-if="openSections.insights && insightList.length" class="tp__list tp__insight-list">
+          <li v-for="ins in insightList" :key="ins.name" class="tp__item tp__insight-item">
             <button
               type="button"
               class="tp__chip"
+              :class="{ 'tp__chip--money': ins.insight_type === 'linked_money' }"
               :style="{ '--ring': severityColor(ins.severity) }"
               :title="ins.summary"
               @click="onInsightClick(ins)"
@@ -454,9 +643,50 @@ function onInsightClick(ins) {
               <span class="tp__chip-sev">{{ severityLabel(ins.severity) }}</span>
               <span class="tp__chip-title">{{ ins.title }}</span>
             </button>
+            <div v-if="ins.insight_type === 'linked_money'" class="tp__money-insight">
+              <div class="tp__money-head">
+                <span>{{ moneyInsightLayerLabel(ins) }}</span>
+                <strong>{{ moneyInsightSourceCount(ins).toLocaleString() }} mapped</strong>
+              </div>
+              <p class="tp__money-summary">{{ ins.summary }}</p>
+              <div v-if="moneyInsightMetrics(ins).length" class="tp__money-metrics">
+                <div
+                  v-for="metric in moneyInsightMetrics(ins)"
+                  :key="metric.key"
+                  class="tp__money-metric"
+                >
+                  <span class="tp__money-label">{{ metric.label || metric.key }}</span>
+                  <strong class="tp__money-value">{{ formatMetricValue(metric.value) }}</strong>
+                  <small>{{ metric.source_doctype }} · {{ metricVerb(metric) }}</small>
+                  <div v-if="metricSignalChips(metric).length" class="tp__money-signals">
+                    <span
+                      v-for="chip in metricSignalChips(metric)"
+                      :key="chip.label"
+                    >
+                      {{ chip.label }} <strong>{{ chip.value }}</strong>
+                    </span>
+                  </div>
+                  <div v-if="metricTopSources(metric).length" class="tp__money-top">
+                    <button
+                      v-for="source in metricTopSources(metric)"
+                      :key="source.name"
+                      type="button"
+                      class="tp__money-top-row"
+                      :title="'Focus ' + (source.label || source.name)"
+                      @click="focusMoneySource(ins, source)"
+                    >
+                      <span>{{ source.label || source.name }}</span>
+                      <strong>{{ formatMetricValue(source.value) }}</strong>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </li>
         </ul>
-        <p v-else-if="openSections.insights && !insights.loading" class="tp__empty">No active insights.</p>
+        <p v-if="openSections.insights && insightActionError" class="tp__error">{{ insightActionError }}</p>
+        <p v-else-if="openSections.insights && insights.loading" class="tp__empty">Loading insights.</p>
+        <p v-else-if="openSections.insights && !insights.loading && !insightList.length" class="tp__empty">No active insights.</p>
       </section>
 
       <!-- Drawing extras (Phase 2) -->
@@ -592,6 +822,27 @@ function onInsightClick(ins) {
 .tp__section-toggle[disabled] { cursor: not-allowed; opacity: 0.6; }
 .tp__chevron { font-size: 10px; transition: transform 150ms ease; opacity: 0.6; }
 .tp__chevron[data-open="true"] { transform: rotate(180deg); }
+.tp__mini-action {
+  flex: none;
+  min-height: 24px;
+  border: 1px solid rgba(59, 130, 246, 0.34);
+  border-radius: 7px;
+  background: rgba(59, 130, 246, 0.12);
+  color: rgba(191, 219, 254, 0.95);
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.tp__mini-action:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.2);
+  color: #fff;
+}
+.tp__mini-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .tp__badge {
   font-size: 9px; padding: 2px 6px; border-radius: 999px;
   background: rgba(245, 158, 11, 0.15); color: #F59E0B;
@@ -609,6 +860,12 @@ function onInsightClick(ins) {
 .tp__add:hover { background: rgba(59, 130, 246, 0.22); color: #fff; }
 
 .tp__list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 1px; }
+.tp__error {
+  margin: 6px 4px 0;
+  color: #FCA5A5;
+  font-size: 11px;
+  line-height: 1.4;
+}
 .tp__row {
   flex: 1; display: flex; align-items: center; gap: 10px;
   padding: 6px 8px; border-radius: 7px;
@@ -636,12 +893,170 @@ function onInsightClick(ins) {
   font-family: inherit; width: 100%; text-align: left;
 }
 .tp__chip:hover { background: rgba(255, 255, 255, 0.09); }
+.tp__chip--money {
+  border-radius: 8px 8px 6px 6px;
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(34, 197, 94, 0.08);
+}
 .tp__chip-sev {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px;
   color: #0b0e14; background: var(--ring);
 }
 .tp__chip-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp__insight-list {
+  gap: 6px;
+}
+.tp__insight-item {
+  min-width: 0;
+  display: grid;
+  gap: 0;
+}
+.tp__money-insight {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  margin-top: -1px;
+  padding: 8px;
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: rgba(34, 197, 94, 0.045);
+}
+.tp__money-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.tp__money-head span {
+  min-width: 0;
+  color: rgba(220, 252, 231, 0.82);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__money-head strong {
+  flex: none;
+  color: #BBF7D0;
+  font-size: 10px;
+  font-weight: 700;
+}
+.tp__money-summary {
+  margin: 0;
+  color: rgba(230, 232, 236, 0.62);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.tp__money-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.tp__money-metric {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tp__money-label,
+.tp__money-metric small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__money-label {
+  color: rgba(187, 247, 208, 0.68);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tp__money-value {
+  color: #DCFCE7;
+  font-size: 14px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.tp__money-metric small {
+  color: rgba(230, 232, 236, 0.46);
+  font-size: 10px;
+}
+.tp__money-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 3px;
+}
+.tp__money-signals span {
+  max-width: 100%;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.11);
+  color: rgba(187, 247, 208, 0.72);
+  padding: 2px 6px;
+  font-size: 9px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tp__money-signals strong {
+  color: #DCFCE7;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.tp__money-top {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+.tp__money-top-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  padding: 2px 3px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tp__money-top-row:hover,
+.tp__money-top-row:focus {
+  outline: 0;
+  background: rgba(34, 197, 94, 0.1);
+}
+.tp__money-top-row span,
+.tp__money-top-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__money-top-row span {
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 10px;
+}
+.tp__money-top-row strong {
+  color: #BBF7D0;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 
 .tp__empty { padding: 10px; font-size: 11px; color: rgba(230, 232, 236, 0.6); margin: 0; }
 .tp__item { display: flex; align-items: center; }
@@ -744,7 +1159,18 @@ function onInsightClick(ins) {
 }
 .tp__activity { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
 .tp__activity-controls { display: flex; gap: 4px; }
-.tp__activity-select {
+.tp__menu {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.tp__select {
+  width: 100%;
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   flex: 1;
   background: rgba(0, 0, 0, 0.32);
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -754,8 +1180,63 @@ function onInsightClick(ins) {
   font-size: 11px;
   font-family: inherit;
   outline: none;
+  cursor: pointer;
 }
-.tp__activity-select:focus { border-color: rgba(59, 130, 246, 0.6); }
+.tp__select span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__select:hover,
+.tp__select:focus { border-color: rgba(59, 130, 246, 0.6); }
+.tp__select-chevron {
+  flex: none;
+  color: rgba(230, 232, 236, 0.5);
+}
+.tp__menu-pop {
+  position: absolute;
+  z-index: 70;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 100%;
+  max-width: 260px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 20, 24, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+}
+.tp__menu-pop--right {
+  left: auto;
+  right: 0;
+}
+.tp__menu-option {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.86);
+  text-align: left;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp__menu-option:hover,
+.tp__menu-option[data-active="true"] {
+  background: rgba(59, 130, 246, 0.18);
+  color: #fff;
+}
 .tp__activity-refresh {
   background: rgba(59, 130, 246, 0.12);
   border: 1px solid rgba(59, 130, 246, 0.30);

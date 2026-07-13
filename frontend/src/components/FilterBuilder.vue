@@ -284,13 +284,19 @@ function isMulti(row) {
   return !!currentOperator(row)?.multi
 }
 
-function valueInputType(row) {
+function valueInputMode(row) {
   const ft = rowField(row).fieldtype
-  if (ft === 'Date') return 'date'
-  if (ft === 'Datetime') return 'datetime-local'
-  if (['Currency', 'Duration', 'Float', 'Int', 'Percent', 'Rating'].includes(ft)) return 'number'
-  if (ft === 'Time') return 'time'
+  if (['Currency', 'Duration', 'Float', 'Int', 'Percent', 'Rating'].includes(ft)) return 'decimal'
   return 'text'
+}
+
+function valuePlaceholder(row) {
+  const ft = rowField(row).fieldtype
+  if (ft === 'Date') return 'YYYY-MM-DD'
+  if (ft === 'Datetime') return 'YYYY-MM-DD HH:mm'
+  if (ft === 'Time') return 'HH:mm'
+  if (['Currency', 'Duration', 'Float', 'Int', 'Percent', 'Rating'].includes(ft)) return 'Number'
+  return isMulti(row) ? 'value, value...' : 'Value'
 }
 
 function selectOptions(row) {
@@ -456,13 +462,17 @@ function updateRange(index, row, rangeIndex, value) {
           <div v-if="isRange(row)" class="fb__range">
             <input
               class="fb__input"
-              :type="valueInputType(row)"
+              type="text"
+              :inputmode="valueInputMode(row)"
+              :placeholder="valuePlaceholder(row)"
               :value="Array.isArray(row.value) ? row.value[0] : ''"
               @input="updateRange(index, row, 0, $event.target.value)"
             />
             <input
               class="fb__input"
-              :type="valueInputType(row)"
+              type="text"
+              :inputmode="valueInputMode(row)"
+              :placeholder="valuePlaceholder(row)"
               :value="Array.isArray(row.value) ? row.value[1] : ''"
               @input="updateRange(index, row, 1, $event.target.value)"
             />
@@ -484,9 +494,10 @@ function updateRange(index, row, rangeIndex, value) {
           <div v-else class="fb__value-wrap">
             <input
               class="fb__input fb__value"
-              :type="isMulti(row) ? 'text' : valueInputType(row)"
+              type="text"
+              :inputmode="isMulti(row) ? 'text' : valueInputMode(row)"
               :value="Array.isArray(row.value) ? row.value.join(', ') : row.value"
-              :placeholder="isMulti(row) ? 'value, value...' : 'Value'"
+              :placeholder="valuePlaceholder(row)"
               autocomplete="off"
               @focus="openValueHints(index, row, $event)"
               @input="onValueInput(index, row, $event.target.value, $event)"

@@ -15,6 +15,7 @@ export const useInsightsStore = defineStore('insights', () => {
   /** @type {import('vue').Ref<Array<object>>} */
   const active = ref([])
   const loading = ref(false)
+  const recomputing = ref(false)
   const lastFetched = ref(0)
   const lastMapName = ref(null)
   const error = ref(null)
@@ -48,6 +49,27 @@ export const useInsightsStore = defineStore('insights', () => {
     }
   }
 
+  async function recomputeFor(mapName) {
+    if (!mapName) return 0
+    recomputing.value = true
+    error.value = null
+    try {
+      const result = await call(
+        'expedition.api.insight.recompute_map',
+        { map_name: mapName }
+      )
+      active.value = Array.isArray(result?.insights) ? result.insights : []
+      lastMapName.value = mapName
+      lastFetched.value = Date.now()
+      return Number(result?.written || 0)
+    } catch (e) {
+      error.value = e
+      throw e
+    } finally {
+      recomputing.value = false
+    }
+  }
+
   function clear() {
     active.value = []
     lastFetched.value = 0
@@ -55,5 +77,5 @@ export const useInsightsStore = defineStore('insights', () => {
     error.value = null
   }
 
-  return { active, loading, error, loadActiveFor, clear }
+  return { active, loading, recomputing, error, loadActiveFor, recomputeFor, clear }
 })

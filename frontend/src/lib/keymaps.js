@@ -5,6 +5,7 @@ export const SHORTCUTS = [
   { id: 'settings', label: 'Settings', keys: ['Ctrl', ','], macKeys: ['⌘', ','], group: 'Workspace', description: 'Open or close settings.' },
   { id: 'hide-ui', label: 'Hide UI', keys: ['H'], group: 'Workspace', description: 'Hide or show map chrome.' },
   { id: 'layout', label: 'Customize layout', keys: ['L'], group: 'Workspace', description: 'Move map controls on the snapped layout grid.' },
+  { id: 'list', label: 'Records list', keys: ['Shift', 'L'], group: 'Workspace', description: 'Open or close the embedded record list.' },
   { id: 'basemap', label: 'Basemap', keys: ['B'], group: 'Map view', description: 'Open or close the basemap picker.' },
   { id: 'fit-visible', label: 'Fit visible features', keys: ['F'], group: 'Map view', description: 'Fit to data currently in view.' },
   { id: 'fit-all', label: 'Fit all enabled data', keys: ['Shift', 'F'], group: 'Map view', description: 'Fit to all enabled layer data.' },

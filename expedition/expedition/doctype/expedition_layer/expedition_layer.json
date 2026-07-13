@@ -13,6 +13,11 @@
 
   "tab_source",
   "source_doctype",
+  "location_source",
+  "location_link_field",
+  "location_doctype",
+  "location_reverse_link_field",
+  "location_fields_json",
   "latitude_field",
   "longitude_field",
   "label_field",
@@ -65,6 +70,8 @@
   "click_action",
   "popup_template",
   "popup_fields_json",
+  "linked_metrics_json",
+  "linked_metric_filters_json",
 
   "tab_permissions",
   "permissions_section",
@@ -84,6 +91,8 @@
   {
    "fieldname": "map",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Map",
    "options": "Expedition Map",
    "description": "Leave empty for a master mapping. A master can be attached to any map to create an instance that inherits its display properties."
@@ -97,6 +106,8 @@
   {
    "fieldname": "enabled",
    "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Enabled",
    "default": "1"
   },
@@ -108,24 +119,67 @@
   {
    "fieldname": "source_doctype",
    "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Source DocType",
    "options": "DocType",
    "reqd": 1,
-   "description": "The DocType whose rows appear on the map. Must have latitude / longitude Float fields."
+   "description": "The DocType whose rows appear on the map."
+  },
+  {
+   "fieldname": "location_source",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Location Source",
+   "options": "Direct Fields\nLinked DocType\nReverse Linked DocType\nDynamic Link DocType",
+   "default": "Direct Fields",
+   "description": "Use latitude / longitude fields on the source row, or resolve coordinates through a linked document."
+  },
+  {
+   "fieldname": "location_link_field",
+   "fieldtype": "Data",
+   "depends_on": "eval:doc.location_source=='Linked DocType'",
+   "label": "Location Link Field",
+   "description": "Source DocType Link field that points to the document containing latitude / longitude."
+  },
+  {
+   "fieldname": "location_doctype",
+   "fieldtype": "Link",
+   "depends_on": "eval:doc.location_source!='Direct Fields'",
+   "in_standard_filter": 1,
+   "label": "Location DocType",
+   "options": "DocType",
+   "description": "Linked DocType that contains latitude / longitude fields."
+  },
+  {
+   "fieldname": "location_reverse_link_field",
+   "fieldtype": "Data",
+   "depends_on": "eval:doc.location_source=='Reverse Linked DocType'",
+   "label": "Reverse Link Field",
+   "description": "Field on the Location DocType that links back to the source DocType."
+  },
+  {
+   "fieldname": "location_fields_json",
+   "fieldtype": "Code",
+   "depends_on": "eval:doc.location_source!='Direct Fields'",
+   "label": "Location Fields",
+   "description": "JSON array of fields to include from the resolved location document. Example: [\"city\", \"state\", \"pincode\"]"
   },
   {
    "fieldname": "latitude_field",
    "fieldtype": "Data",
    "label": "Latitude Field",
    "default": "latitude",
-   "reqd": 1
+   "reqd": 1,
+   "description": "Direct mode: field on the source DocType. Linked-location modes: field on the Location DocType."
   },
   {
    "fieldname": "longitude_field",
    "fieldtype": "Data",
    "label": "Longitude Field",
    "default": "longitude",
-   "reqd": 1
+   "reqd": 1,
+   "description": "Direct mode: field on the source DocType. Linked-location modes: field on the Location DocType."
   },
   {
    "fieldname": "label_field",
@@ -257,8 +311,9 @@
   {
    "fieldname": "group_by_field",
    "fieldtype": "Data",
+   "in_standard_filter": 1,
    "label": "Group Pins By",
-   "description": "Source-DocType field to segment pins by (e.g. customer_type, status, division). Empty = single color."
+   "description": "Source field or linked metric field (_metric_key) used to segment pins. Empty = single color."
   },
   {
    "fieldname": "column_group_b",
@@ -267,6 +322,7 @@
   {
    "fieldname": "groups",
    "fieldtype": "Table",
+   "depends_on": "eval:doc.group_by_field",
    "label": "Groups",
    "options": "Expedition Layer Group"
   },
@@ -283,12 +339,14 @@
   {
    "fieldname": "heatmap",
    "fieldtype": "Check",
+   "in_standard_filter": 1,
    "label": "Heatmap",
    "default": "0"
   },
   {
    "fieldname": "heatmap_mode",
    "fieldtype": "Select",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Mode",
    "options": "count\nsum",
    "default": "count",
@@ -297,22 +355,26 @@
   {
    "fieldname": "heatmap_weight_field",
    "fieldtype": "Data",
+   "depends_on": "eval:doc.heatmap && doc.heatmap_mode=='sum'",
    "label": "Heatmap Metric Field",
-   "description": "Numeric source field used when Heatmap Mode is sum."
+   "description": "Numeric source field or linked metric field (_metric_key) used when Heatmap Mode is sum."
   },
   {
    "fieldname": "heatmap_weight_min",
    "fieldtype": "Float",
+   "depends_on": "eval:doc.heatmap && doc.heatmap_mode=='sum'",
    "label": "Heatmap Metric Min"
   },
   {
    "fieldname": "heatmap_weight_max",
    "fieldtype": "Float",
+   "depends_on": "eval:doc.heatmap && doc.heatmap_mode=='sum'",
    "label": "Heatmap Metric Max"
   },
   {
    "fieldname": "heatmap_weight_scale",
    "fieldtype": "Select",
+   "depends_on": "eval:doc.heatmap && doc.heatmap_mode=='sum'",
    "label": "Heatmap Metric Scale",
    "options": "linear\nlog",
    "default": "linear"
@@ -324,30 +386,35 @@
   {
    "fieldname": "heatmap_radius_min",
    "fieldtype": "Int",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Radius Min",
    "default": "10"
   },
   {
    "fieldname": "heatmap_radius_max",
    "fieldtype": "Int",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Radius",
    "default": "30"
   },
   {
    "fieldname": "heatmap_intensity_max",
    "fieldtype": "Float",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Intensity",
    "default": "2.5"
   },
   {
    "fieldname": "heatmap_opacity",
    "fieldtype": "Float",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Opacity",
    "default": "0.75"
   },
   {
    "fieldname": "heatmap_ramp_json",
    "fieldtype": "Code",
+   "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Color Ramp",
    "description": "Optional JSON array of {stop, color, alpha} ramp stops."
   },
@@ -364,6 +431,7 @@
   {
    "fieldname": "click_action",
    "fieldtype": "Select",
+   "in_standard_filter": 1,
    "label": "Click Action",
    "options": "popup\nopen_form\nnone",
    "default": "popup",
@@ -380,6 +448,19 @@
    "fieldtype": "Code",
    "label": "Popup Fields",
    "description": "JSON array of fieldnames to show in the default popup. Empty = shows key fields. Example: [\"name\", \"customer_name\", \"status\"]"
+  },
+  {
+   "fieldname": "linked_metrics_json",
+   "fieldtype": "Code",
+   "label": "Linked Metrics",
+   "description": "JSON array of aggregate metrics over linked DocTypes. Example: [{\"key\":\"outstanding\",\"source_doctype\":\"Sales Invoice\",\"link_field\":\"customer\",\"aggregate\":\"sum\",\"field\":\"outstanding_amount\"}]"
+  },
+  {
+   "fieldname": "linked_metric_filters_json",
+   "fieldtype": "Code",
+   "depends_on": "eval:doc.linked_metrics_json",
+   "label": "Linked Metric Filters",
+   "description": "JSON array of filters over linked metric values. Example: [{\"metric\":\"outstanding\",\"operator\":\">\",\"value\":0}]"
   },
   {
    "fieldname": "tab_permissions",

@@ -320,8 +320,8 @@ function editShareRow(row) {
   shareDraftCanWrite.value = !!row.canWrite
   shareDraftCanShare.value = !!row.canShare
 }
-function toggleLayer(layerName, event) {
-  layerStore.updateLayer(layerName, { enabled: event.target.checked ? 1 : 0 })
+function toggleLayer(layerName, enabled) {
+  layerStore.updateLayer(layerName, { enabled: enabled ? 1 : 0 })
 }
 function editLayer(layer) { ui.openLayerEditor(layer) }
 function createLayer() {
@@ -568,10 +568,16 @@ defineExpose({})
               aria-label="Blank map name"
               @keydown.enter.prevent="createBlankMap"
             />
-            <label class="lp__check-row">
-              <input v-model="newMapPublic" type="checkbox" />
+            <button
+              type="button"
+              class="lp__toggle-row"
+              :class="{ 'lp__toggle-row--on': newMapPublic }"
+              :aria-pressed="newMapPublic ? 'true' : 'false'"
+              @click="newMapPublic = !newMapPublic"
+            >
+              <span class="lp__toggle-knob" aria-hidden="true" />
               <span>Public</span>
-            </label>
+            </button>
             <button type="button" class="lp__wide-primary" :disabled="mapSaving" @click="createBlankMap">
               Create blank map
             </button>
@@ -587,9 +593,9 @@ defineExpose({})
               <div class="lp__share-head"></div>
 
               <div class="lp__share-person lp__share-person--everyone">Everyone</div>
-              <label class="lp__share-check"><input :checked="!!activeMap?.is_public" type="checkbox" @change="(e) => setEveryoneRead(e.target.checked)" /></label>
-              <label class="lp__share-check"><input :checked="activeMap?.is_public && activeMap?.public_access === 'Writable'" type="checkbox" @change="(e) => setEveryoneWrite(e.target.checked)" /></label>
-              <label class="lp__share-check"><input type="checkbox" disabled /></label>
+              <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': !!activeMap?.is_public }" :aria-pressed="activeMap?.is_public ? 'true' : 'false'" @click="setEveryoneRead(!activeMap?.is_public)"><span /></button>
+              <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': activeMap?.is_public && activeMap?.public_access === 'Writable' }" :aria-pressed="activeMap?.is_public && activeMap?.public_access === 'Writable' ? 'true' : 'false'" @click="setEveryoneWrite(!(activeMap?.is_public && activeMap?.public_access === 'Writable'))"><span /></button>
+              <button type="button" class="lp__share-check" disabled aria-pressed="false"><span /></button>
               <div></div>
 
               <div ref="userPickerRoot" class="lp__user-picker">
@@ -614,16 +620,16 @@ defineExpose({})
                   </p>
                 </div>
               </div>
-              <label class="lp__share-check"><input v-model="shareDraftCanRead" type="checkbox" /></label>
-              <label class="lp__share-check"><input v-model="shareDraftCanWrite" type="checkbox" /></label>
-              <label class="lp__share-check"><input v-model="shareDraftCanShare" type="checkbox" /></label>
+              <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': shareDraftCanRead }" :aria-pressed="shareDraftCanRead ? 'true' : 'false'" @click="shareDraftCanRead = !shareDraftCanRead"><span /></button>
+              <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': shareDraftCanWrite }" :aria-pressed="shareDraftCanWrite ? 'true' : 'false'" @click="shareDraftCanWrite = !shareDraftCanWrite"><span /></button>
+              <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': shareDraftCanShare }" :aria-pressed="shareDraftCanShare ? 'true' : 'false'" @click="shareDraftCanShare = !shareDraftCanShare"><span /></button>
               <button type="button" class="lp__add-share" :disabled="!shareDraftUser || !shareDraftCanRead" @click="upsertSharedUser">Add</button>
 
               <template v-for="user in shareUsers" :key="user.user">
                 <button type="button" class="lp__share-person" @click="editShareRow(user)">{{ user.label || user.user }}</button>
-                <label class="lp__share-check"><input :checked="user.canRead" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canRead', e.target.checked)" /></label>
-                <label class="lp__share-check"><input :checked="user.canWrite" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canWrite', e.target.checked)" /></label>
-                <label class="lp__share-check"><input :checked="user.canShare" type="checkbox" @change="(e) => updateShareFlag(user.user, 'canShare', e.target.checked)" /></label>
+                <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': user.canRead }" :aria-pressed="user.canRead ? 'true' : 'false'" @click="updateShareFlag(user.user, 'canRead', !user.canRead)"><span /></button>
+                <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': user.canWrite }" :aria-pressed="user.canWrite ? 'true' : 'false'" @click="updateShareFlag(user.user, 'canWrite', !user.canWrite)"><span /></button>
+                <button type="button" class="lp__share-check" :class="{ 'lp__share-check--on': user.canShare }" :aria-pressed="user.canShare ? 'true' : 'false'" @click="updateShareFlag(user.user, 'canShare', !user.canShare)"><span /></button>
                 <button type="button" class="lp__remove-user" aria-label="Remove user" @click="removeSharedUser(user.user)">×</button>
               </template>
             </div>
@@ -755,19 +761,24 @@ defineExpose({})
 
           <ul v-if="activeLayers.length" class="lp__list">
             <li v-for="layer in activeLayers" :key="layer.name" class="lp__item" :style="{ '--exp-layer-color': layer.color || '#F59E0B' }">
-              <label class="lp__row lp__row--layer">
-                <input
-                  type="checkbox"
-                  :checked="layer.enabled !== false && layer.enabled !== 0"
-                  @change="(e) => toggleLayer(layer.name, e)"
-                />
+              <div class="lp__row lp__row--layer">
+                <button
+                  type="button"
+                  class="lp__visibility-toggle"
+                  :class="{ 'lp__visibility-toggle--on': layer.enabled !== false && layer.enabled !== 0 }"
+                  :aria-pressed="layer.enabled !== false && layer.enabled !== 0 ? 'true' : 'false'"
+                  :aria-label="(layer.enabled !== false && layer.enabled !== 0 ? 'Hide' : 'Show') + ' ' + (layer.title || layer.name)"
+                  @click="toggleLayer(layer.name, !(layer.enabled !== false && layer.enabled !== 0))"
+                >
+                  <span />
+                </button>
                 <span class="lp__swatch" :style="{ background: layer.color || '#3B82F6' }">
                   <svg v-if="layer.icon" class="lp__swatch-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <path :d="iconPath(layer.icon)" fill="currentColor" />
                   </svg>
                 </span>
                 <span class="lp__label">{{ layer.title || layer.name }}</span>
-              </label>
+              </div>
               <div class="lp__row-actions">
                 <button
                   class="lp__row-icon"
@@ -1108,14 +1119,36 @@ defineExpose({})
   background: transparent;
   border: 0;
 }
-.lp__check-row {
+.lp__toggle-row {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-height: 28px;
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
   color: rgba(230, 232, 236, 0.82);
+  padding: 5px 9px;
   font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
 }
-.lp__check-row input { accent-color: #3B82F6; }
+.lp__toggle-row--on {
+  border-color: rgba(59, 130, 246, 0.62);
+  background: rgba(59, 130, 246, 0.14);
+  color: #fff;
+}
+.lp__toggle-knob {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(230, 232, 236, 0.38);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+.lp__toggle-row--on .lp__toggle-knob {
+  background: #3B82F6;
+}
 .lp__wide-primary {
   width: 100%;
   height: 26px;
@@ -1224,13 +1257,33 @@ defineExpose({})
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  justify-self: center;
+  width: 26px;
   height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 232, 236, 0.82);
+  padding: 0;
+  cursor: pointer;
 }
-.lp__share-check input {
-  width: 12px;
-  height: 12px;
-  margin: 0;
-  accent-color: #3B82F6;
+.lp__share-check span {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: rgba(230, 232, 236, 0.22);
+}
+.lp__share-check--on {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.14);
+}
+.lp__share-check--on span {
+  background: #3B82F6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+.lp__share-check:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .lp__share-input {
   width: 100%;
@@ -1421,8 +1474,31 @@ defineExpose({})
   text-align: left;
 }
 .lp__row--layer { cursor: default; }
-.lp__row--layer input[type="checkbox"] {
-  width: 14px; height: 14px; margin: 0; flex: none; accent-color: #3B82F6;
+.lp__visibility-toggle {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0;
+  cursor: pointer;
+}
+.lp__visibility-toggle span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(230, 232, 236, 0.28);
+}
+.lp__visibility-toggle--on {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.14);
+}
+.lp__visibility-toggle--on span {
+  background: #3B82F6;
 }
 .lp__row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .lp__row-title { font-size: 12px; color: #E6E8EC; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

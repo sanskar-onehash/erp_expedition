@@ -23,6 +23,7 @@ import { call } from '../api/client.js'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { wrapLng } from '../lib/geo.js'
+import { deskDocRoute, openDeskDoc } from '../lib/desk.js'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -38,17 +39,23 @@ const edge = ref('left')
 const history = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
+const linkedRecords = ref([])
+const linkedRecordsLoading = ref(false)
+const linkedRecordsError = ref('')
 // Aggregated stats: counts by year (active vs passive).
 const aggregate = ref(null)
 const aggregateLoading = ref(false)
 const actionError = ref('')
 const todoBusy = ref(false)
+const todoCreated = ref('')
 const assignBusy = ref(false)
+const copyBusy = ref(false)
 const assignField = ref('')
 const assignUser = ref('')
 const userOptions = ref([])
 const userSearchLoading = ref(false)
 const userSearchOpen = ref(false)
+const assignFieldOpen = ref(false)
 const activeTab = ref('details')
 const fieldSearch = ref('')
 const showMoreFields = ref(false)
@@ -69,6 +76,9 @@ const sourceName = computed(() => {
   const f = feature.value
   return f && f.properties && f.properties._name
 })
+const hasLinkedRecordConfig = computed(() =>
+  Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
+)
 
 function close() { ui.selectedFeature = null }
 function onKey(e) { if (e.key === 'Escape' && feature.value) close() }
@@ -161,16 +171,22 @@ watch(feature, async (v) => {
       : defaultAssignUser()
     userOptions.value = []
     userSearchOpen.value = false
+    assignFieldOpen.value = false
     actionError.value = ''
+    todoCreated.value = ''
     activeTab.value = 'details'
     fieldSearch.value = ''
     showMoreFields.value = false
     showAssignPanel.value = false
     loadHistory()
+    loadLinkedRecords()
   } else {
     screen.value = null
     history.value = []
+    linkedRecords.value = []
+    linkedRecordsError.value = ''
     actionError.value = ''
+    todoCreated.value = ''
   }
 })
 
@@ -181,6 +197,7 @@ watch(assignField, () => {
     : defaultAssignUser()
   userOptions.value = []
   userSearchOpen.value = false
+  assignFieldOpen.value = false
 })
 
 const title = computed(() => {
@@ -265,6 +282,11 @@ function defaultAssignUser() {
   return user && user !== 'Administrator' ? user : ''
 }
 
+function chooseAssignField(fieldname) {
+  assignField.value = fieldname || ''
+  assignFieldOpen.value = false
+}
+
 function rowObject([fieldname, value]) {
   return {
     fieldname,
@@ -286,6 +308,53 @@ function classifyField(row) {
 }
 
 const allRows = computed(() => propRows.value.map(rowObject))
+const metricRows = computed(() => {
+  const f = feature.value
+  const metrics = f?.properties?._metrics
+  if (!metrics || typeof metrics !== 'object') return []
+  const configured = Array.isArray(layer.value.linked_metrics) ? layer.value.linked_metrics : []
+  const rows = []
+  const seen = new Set()
+  for (const metric of configured) {
+    const key = metric?.key
+    if (!key || metrics[key] == null || metrics[key] === '') continue
+    seen.add(key)
+    rows.push({
+      key,
+      label: metric.label || key,
+      value: metrics[key],
+      formatted: formatValue(metrics[key]),
+    })
+  }
+  for (const [key, value] of Object.entries(metrics)) {
+    if (seen.has(key) || value == null || value === '') continue
+    rows.push({
+      key,
+      label: key.replace(/_/g, ' '),
+      value,
+      formatted: formatValue(value),
+    })
+  }
+  return rows
+})
+const locationRows = computed(() => {
+  const f = feature.value
+  const location = f?.properties?._location
+  if (!location || typeof location !== 'object') return []
+  return Object.entries(location)
+    .filter(([key, value]) =>
+      key !== 'name' &&
+      value != null &&
+      value !== '' &&
+      typeof value !== 'object'
+    )
+    .map(([key, value]) => ({
+      key,
+      label: key.replace(/_/g, ' '),
+      value,
+      formatted: formatValue(value),
+    }))
+})
 const primaryRows = computed(() => allRows.value.slice(0, 4))
 const secondaryRows = computed(() => allRows.value.slice(4))
 const filteredSecondaryRows = computed(() => {
@@ -317,6 +386,15 @@ const hiddenFieldCount = computed(() => {
   const visible = visibleGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
   return Math.max(0, filteredSecondaryRows.value.length - visible)
 })
+const linkedRecordGroups = computed(() =>
+  linkedRecords.value.filter((group) => Array.isArray(group.rows) && group.rows.length)
+)
+const linkedRecordCount = computed(() =>
+  linkedRecordGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
+)
+const linkedRecordTabVisible = computed(() =>
+  Boolean(sourceDoctype.value && sourceName.value)
+)
 const statusRow = computed(() =>
   allRows.value.find((row) => String(row.fieldname).toLowerCase().includes('status'))
 )
@@ -328,17 +406,40 @@ function formatValue(value) {
   return String(value)
 }
 
+function openDoc(doctype, name) {
+  openDeskDoc(doctype, name)
+}
+
+async function copyDocLink() {
+  const route = deskDocRoute(sourceDoctype.value, sourceName.value)
+  if (!route) return
+  copyBusy.value = true
+  actionError.value = ''
+  const url = new URL(route, window.location.origin).toString()
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url)
+    } else {
+      const input = document.createElement('input')
+      input.value = url
+      input.setAttribute('readonly', 'readonly')
+      input.style.position = 'fixed'
+      input.style.opacity = '0'
+      document.body.appendChild(input)
+      input.select()
+      document.execCommand('copy')
+      document.body.removeChild(input)
+    }
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    window.setTimeout(() => { copyBusy.value = false }, 700)
+  }
+}
+
 // Quick action: open the source DocType's form for this row.
 function openForm() {
-  if (!sourceDoctype.value || !sourceName.value) return
-  // Use Frappe's form route. If we're inside the Frappe Desk, the
-  // standard route works; on the public /expedition page, this opens
-  // a new tab to the standard form view.
-  const route = `/app/${encodeURIComponent(sourceDoctype.value.toLowerCase().replace(/ /g, '-'))}/${encodeURIComponent(sourceName.value)}`
-  if (window.frappe?.set_route) {
-    try { window.frappe.set_route(route); return } catch {}
-  }
-  window.open(route, '_blank')
+  openDoc(sourceDoctype.value, sourceName.value)
 }
 
 // Quick action: schedule a visit (Expedition Activity row, type=visit).
@@ -375,13 +476,16 @@ async function createTodo() {
   if (!sourceDoctype.value || !sourceName.value) return
   todoBusy.value = true
   actionError.value = ''
+  todoCreated.value = ''
   try {
-    await call('expedition.api.action.create_todo', {
+    const name = await call('expedition.api.action.create_todo', {
       source_doctype: sourceDoctype.value,
       source_name: sourceName.value,
       description: `Follow up on ${title.value}`,
       allocated_to: window.expeditionSession?.user || '',
     })
+    todoCreated.value = name || 'created'
+    window.frappe?.show_alert?.({ message: 'ToDo created', indicator: 'green' })
   } catch (e) {
     actionError.value = e.message || String(e)
   } finally {
@@ -507,6 +611,209 @@ async function loadHistory() {
   }
 }
 
+async function loadLinkedRecords() {
+  if (!layer.value?.name || !sourceName.value) {
+    linkedRecords.value = []
+    linkedRecordsError.value = ''
+    return
+  }
+  linkedRecordsLoading.value = true
+  linkedRecordsError.value = ''
+  try {
+    const result = await call('expedition.api.layer.get_linked_records', {
+      layer: layer.value.name,
+      source_name: sourceName.value,
+      limit: 8,
+    })
+    linkedRecords.value = Array.isArray(result?.groups) ? result.groups : []
+  } catch (e) {
+    linkedRecords.value = []
+    linkedRecordsError.value = e.message || String(e)
+  } finally {
+    linkedRecordsLoading.value = false
+  }
+}
+
+function linkedRecordStatus(row) {
+  if (row.status) return row.status
+  if (row.workflow_state) return row.workflow_state
+  if (row.docstatus === 1) return 'Submitted'
+  if (row.docstatus === 2) return 'Cancelled'
+  if (row.docstatus === 0) return 'Draft'
+  return ''
+}
+
+function linkedRecordAmount(row, group) {
+  const candidates = [
+    group?.field,
+    'grand_total',
+    'rounded_total',
+    'base_grand_total',
+    'outstanding_amount',
+    'paid_amount',
+    'advance_paid',
+  ].filter(Boolean)
+  for (const field of candidates) {
+    if (row[field] != null && row[field] !== '') return formatValue(row[field])
+  }
+  return ''
+}
+
+function linkedRecordGroupSummary(group) {
+  const serverTotals = Array.isArray(group?.summary?.totals) ? group.summary.totals : []
+  if (serverTotals.length) {
+    return serverTotals.slice(0, 3).map((item) => ({
+      field: item.field,
+      label: item.label || String(item.field || '').replace(/_/g, ' '),
+      value: formatValue(item.value),
+    }))
+  }
+  const rows = Array.isArray(group?.rows) ? group.rows : []
+  const labels = {
+    outstanding_amount: 'Outstanding',
+    paid_amount: 'Paid',
+    grand_total: 'Total',
+    rounded_total: 'Total',
+    base_grand_total: 'Base Total',
+    advance_paid: 'Advance',
+  }
+  const fields = [
+    group?.field,
+    'outstanding_amount',
+    'paid_amount',
+    'grand_total',
+    'rounded_total',
+    'base_grand_total',
+    'advance_paid',
+  ].filter(Boolean)
+  const seen = new Set()
+  const summary = []
+  for (const field of fields) {
+    if (seen.has(field)) continue
+    seen.add(field)
+    let total = 0
+    let count = 0
+    for (const row of rows) {
+      const value = Number(row?.[field])
+      if (!Number.isFinite(value)) continue
+      total += value
+      count += 1
+    }
+    if (!count) continue
+    summary.push({
+      field,
+      label: labels[field] || field.replace(/_/g, ' '),
+      value: formatValue(total),
+    })
+    if (summary.length >= 3) break
+  }
+  return summary
+}
+
+function linkedRecordStatusSummary(group) {
+  const statuses = Array.isArray(group?.summary?.statuses) ? group.summary.statuses : []
+  if (statuses.length) {
+    return statuses.slice(0, 3).map((item) => ({
+      label: item.label,
+      count: Number(item.count) || 0,
+    }))
+  }
+  const counts = new Map()
+  for (const row of group?.rows || []) {
+    const label = linkedRecordStatus(row) || 'Unknown'
+    counts.set(label, (counts.get(label) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([label, count]) => ({ label, count }))
+}
+
+function linkedRecordDate(row) {
+  const value = row.posting_date || row.transaction_date || row.due_date || row.modified
+  return value ? formatDate(value) : ''
+}
+
+function linkedRecordFields(group, row) {
+  const skip = new Set(['name', 'modified', 'docstatus', group?.link_field])
+  const priority = new Set([
+    group?.field,
+    'status',
+    'workflow_state',
+    'outstanding_amount',
+    'paid_amount',
+    'grand_total',
+    'posting_date',
+    'transaction_date',
+    'due_date',
+    'customer',
+    'lead',
+    'party',
+  ].filter(Boolean))
+  return (group.fields || [])
+    .filter((field) => {
+      const fieldname = field.fieldname
+      return !skip.has(fieldname) && row[fieldname] != null && row[fieldname] !== ''
+    })
+    .sort((a, b) => Number(priority.has(b.fieldname)) - Number(priority.has(a.fieldname)))
+    .slice(0, 4)
+    .map((field) => ({
+      fieldname: field.fieldname,
+      label: field.label || field.fieldname,
+      value: formatValue(row[field.fieldname]),
+    }))
+}
+
+function linkedRecordColumns(group) {
+  const rows = Array.isArray(group?.rows) ? group.rows : []
+  const available = new Set()
+  for (const row of rows) {
+    for (const [field, value] of Object.entries(row || {})) {
+      if (value != null && value !== '') available.add(field)
+    }
+  }
+  const fieldMeta = new Map((group?.fields || []).map((field) => [field.fieldname, field]))
+  const candidates = [
+    'status',
+    'workflow_state',
+    group?.field,
+    'grand_total',
+    'outstanding_amount',
+    'paid_amount',
+    'posting_date',
+    'transaction_date',
+    'due_date',
+    'customer',
+    'lead',
+    'party',
+  ].filter(Boolean)
+  const columns = [
+    { fieldname: 'name', label: 'Document', kind: 'name' },
+  ]
+  const seen = new Set(['name', 'modified', 'docstatus', group?.link_field])
+  for (const fieldname of candidates) {
+    if (seen.has(fieldname) || !available.has(fieldname)) continue
+    seen.add(fieldname)
+    const meta = fieldMeta.get(fieldname)
+    columns.push({
+      fieldname,
+      label: meta?.label || fieldname.replace(/_/g, ' '),
+      kind: fieldname.includes('date') ? 'date' : '',
+    })
+    if (columns.length >= 5) break
+  }
+  if (!columns.some((column) => column.fieldname === 'modified') && available.has('modified')) {
+    columns.push({ fieldname: 'modified', label: 'Modified', kind: 'date' })
+  }
+  return columns.slice(0, 6)
+}
+
+function linkedRecordCell(row, column) {
+  const value = row?.[column.fieldname]
+  if (column.kind === 'date') return formatDate(value)
+  return formatValue(value)
+}
+
 // "Active vs passive" signal: how long since the last interaction?
 const activityStatus = computed(() => {
   const a = aggregate.value
@@ -559,7 +866,7 @@ function formatDate(s) {
         <span>Open</span>
       </button>
       <button type="button" class="mp__action" :disabled="todoBusy" @click="createTodo" title="Create a ToDo linked to this record">
-        <span>{{ todoBusy ? 'Adding...' : 'ToDo' }}</span>
+        <span>{{ todoBusy ? 'Adding...' : (todoCreated ? 'Added' : 'ToDo') }}</span>
       </button>
       <button
         v-if="assignmentFields.length"
@@ -571,8 +878,8 @@ function formatDate(s) {
       >
         <span>Assign</span>
       </button>
-      <button type="button" class="mp__action mp__action--ghost" title="More actions">
-        <span>...</span>
+      <button type="button" class="mp__action mp__action--ghost" :disabled="copyBusy" @click="copyDocLink" title="Copy source document link">
+        <span>{{ copyBusy ? 'Copied' : 'Copy Link' }}</span>
       </button>
     </div>
 
@@ -590,15 +897,44 @@ function formatDate(s) {
         Activity
         <span v-if="aggregate && aggregate.total" class="mp__tab-count">{{ aggregate.total }}</span>
       </button>
+      <button
+        v-if="linkedRecordTabVisible"
+        type="button"
+        class="mp__tab"
+        :class="{ 'mp__tab--active': activeTab === 'records' }"
+        @click="activeTab = 'records'"
+      >
+        Records
+        <span v-if="linkedRecordCount" class="mp__tab-count">{{ linkedRecordCount }}</span>
+      </button>
     </nav>
 
     <div v-if="sourceDoctype && sourceName && assignmentFields.length && showAssignPanel" class="mp__assign-panel">
       <div class="mp__assign-row">
-        <select v-model="assignField" class="mp__assign-input" aria-label="Assignment field">
-          <option v-for="field in assignmentFields" :key="field.fieldname" :value="field.fieldname">
-            {{ field.label || field.fieldname }}
-          </option>
-        </select>
+        <div class="mp__assign-field">
+          <button
+            type="button"
+            class="mp__assign-input mp__assign-select"
+            aria-label="Assignment field"
+            @click="assignFieldOpen = !assignFieldOpen"
+          >
+            <span>{{ selectedAssignment?.label || selectedAssignment?.fieldname || 'Assign To' }}</span>
+            <span class="mp__assign-chevron">⌄</span>
+          </button>
+          <div v-if="assignFieldOpen" class="mp__assign-menu">
+            <button
+              v-for="field in assignmentFields"
+              :key="field.fieldname"
+              type="button"
+              class="mp__assign-option"
+              :data-active="assignField === field.fieldname"
+              @mousedown.prevent="chooseAssignField(field.fieldname)"
+            >
+              <span>{{ field.label || field.fieldname }}</span>
+              <small>{{ field.fieldname === '__frappe_assign' ? 'Frappe assignment' : field.fieldname }}</small>
+            </button>
+          </div>
+        </div>
         <div class="mp__user-picker">
           <input
             v-model="assignUser"
@@ -641,14 +977,88 @@ function formatDate(s) {
     <div class="mp__body">
       <section v-if="activeTab === 'details'" class="mp__section">
         <div v-if="feature.properties._popup_html" class="mp__custom" v-html="feature.properties._popup_html" />
-        <template v-else>
+
+        <div v-if="metricRows.length" class="mp__metric-grid" aria-label="Linked field metrics">
+          <div v-for="metric in metricRows" :key="metric.key" class="mp__metric-card">
+            <span class="mp__metric-label">{{ metric.label }}</span>
+            <strong class="mp__metric-value">{{ metric.formatted }}</strong>
+          </div>
+        </div>
+
+        <div v-if="locationRows.length" class="mp__location-card">
+          <div class="mp__location-head">
+            <span>Location</span>
+            <small v-if="feature.properties._location_name">{{ feature.properties._location_name }}</small>
+          </div>
+          <div class="mp__location-rows">
+            <div v-for="row in locationRows" :key="row.key" class="mp__location-row">
+              <span>{{ row.label }}</span>
+              <strong>{{ row.formatted }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="linkedRecordsLoading || linkedRecordGroups.length || linkedRecordsError"
+          class="mp__linked-records"
+        >
+          <div class="mp__linked-head">
+            <span>Linked Records</span>
+            <small v-if="linkedRecordCount">{{ linkedRecordCount }} rows</small>
+            <small v-else-if="linkedRecordsLoading">Loading</small>
+          </div>
+          <p v-if="linkedRecordsError" class="mp__linked-empty">Could not load linked records.</p>
+          <p v-else-if="linkedRecordsLoading && !linkedRecordGroups.length" class="mp__linked-empty">Loading linked records...</p>
+          <div v-else class="mp__linked-groups">
+            <section v-for="group in linkedRecordGroups" :key="group.key" class="mp__linked-group">
+              <div class="mp__linked-group-head">
+                <span>
+                  {{ group.label || group.source_doctype }}
+                  <em v-if="group.suggested">Suggested</em>
+                </span>
+                <small>{{ group.source_doctype }}</small>
+              </div>
+              <div v-if="linkedRecordGroupSummary(group).length" class="mp__linked-summary">
+                <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
+                  {{ item.label }} <strong>{{ item.value }}</strong>
+                </span>
+                <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
+                  {{ item.label }} <strong>{{ item.count }}</strong>
+                </span>
+              </div>
+              <button
+                v-for="row in group.rows"
+                :key="`${group.key}-${row.name}`"
+                type="button"
+                class="mp__linked-row"
+                @click="openDoc(group.source_doctype, row.name)"
+              >
+                <span class="mp__linked-row-main">
+                  <strong>{{ row.name }}</strong>
+                  <small v-if="linkedRecordStatus(row)">{{ linkedRecordStatus(row) }}</small>
+                </span>
+                <span class="mp__linked-row-meta">
+                  <strong v-if="linkedRecordAmount(row, group)">{{ linkedRecordAmount(row, group) }}</strong>
+                  <small>{{ linkedRecordDate(row) }}</small>
+                </span>
+                <span v-if="linkedRecordFields(group, row).length" class="mp__linked-fields">
+                  <span v-for="field in linkedRecordFields(group, row)" :key="field.fieldname">
+                    {{ field.label }}: {{ field.value }}
+                  </span>
+                </span>
+              </button>
+            </section>
+          </div>
+        </div>
+
+        <template v-if="!feature.properties._popup_html">
           <div v-if="primaryRows.length" class="mp__primary">
             <div v-for="row in primaryRows" :key="row.fieldname" class="mp__primary-row">
               <span class="mp__primary-label">{{ row.label }}</span>
               <span class="mp__primary-value">{{ row.formatted }}</span>
             </div>
           </div>
-          <p v-else class="mp__empty">No additional properties.</p>
+          <p v-else-if="!metricRows.length && !locationRows.length && !linkedRecordGroups.length" class="mp__empty">No additional properties.</p>
 
           <div v-if="secondaryRows.length" class="mp__more">
             <div class="mp__more-head">
@@ -738,6 +1148,72 @@ function formatDate(s) {
               <div v-if="h.notes" class="mp__history-notes">{{ h.notes }}</div>
             </li>
           </ul>
+        </div>
+      </section>
+
+      <section v-else-if="activeTab === 'records'" class="mp__section">
+        <div class="mp__records-head">
+          <div>
+            <div class="mp__records-title">Linked Records</div>
+            <div class="mp__records-subtitle">{{ linkedRecordCount || 0 }} matching business rows</div>
+          </div>
+          <button type="button" class="mp__records-refresh" :disabled="linkedRecordsLoading" @click="loadLinkedRecords">
+            {{ linkedRecordsLoading ? 'Loading...' : 'Refresh' }}
+          </button>
+        </div>
+        <p v-if="linkedRecordsError" class="mp__records-empty mp__records-err">Could not load linked records.</p>
+        <p v-else-if="linkedRecordsLoading && !linkedRecordGroups.length" class="mp__records-empty">Loading linked records...</p>
+        <p v-else-if="!linkedRecordGroups.length" class="mp__records-empty">No linked records found.</p>
+        <div v-else class="mp__record-groups">
+          <section v-for="group in linkedRecordGroups" :key="group.key" class="mp__record-group">
+            <div class="mp__record-group-head">
+              <div>
+                <span>
+                  {{ group.label || group.source_doctype }}
+                  <em v-if="group.suggested">Suggested</em>
+                </span>
+                <small>{{ group.source_doctype }}</small>
+              </div>
+              <small v-if="group.truncated">Showing latest {{ group.rows.length }}</small>
+              <small v-else>{{ group.rows.length }} rows</small>
+            </div>
+            <div v-if="linkedRecordGroupSummary(group).length" class="mp__record-summary">
+              <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
+                {{ item.label }} <strong>{{ item.value }}</strong>
+              </span>
+              <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
+                {{ item.label }} <strong>{{ item.count }}</strong>
+              </span>
+            </div>
+            <div class="mp__record-table-wrap">
+              <table class="mp__record-table">
+                <thead>
+                  <tr>
+                    <th v-for="column in linkedRecordColumns(group)" :key="column.fieldname">
+                      {{ column.label }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in group.rows"
+                    :key="row.name"
+                    tabindex="0"
+                    @click="openDoc(group.source_doctype, row.name)"
+                    @keydown.enter.prevent="openDoc(group.source_doctype, row.name)"
+                  >
+                    <td
+                      v-for="column in linkedRecordColumns(group)"
+                      :key="column.fieldname"
+                      :data-kind="column.kind"
+                    >
+                      <span>{{ linkedRecordCell(row, column) }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
     </div>
@@ -898,6 +1374,74 @@ function formatDate(s) {
   font-size: 11px;
   font-family: inherit;
 }
+.mp__assign-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.mp__assign-select {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.mp__assign-select span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__assign-chevron {
+  flex: none;
+  color: rgba(230, 232, 236, 0.5);
+}
+.mp__assign-menu {
+  position: absolute;
+  z-index: 260;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 178px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(11, 14, 20, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+}
+.mp__assign-option {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #E6E8EC;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 6px 7px;
+  text-align: left;
+}
+.mp__assign-option span,
+.mp__assign-option small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__assign-option small {
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 10px;
+}
+.mp__assign-option:hover,
+.mp__assign-option[data-active="true"] {
+  background: rgba(59, 130, 246, 0.18);
+}
 .mp__user-picker {
   position: relative;
   flex: 1;
@@ -985,6 +1529,380 @@ function formatDate(s) {
   margin: 6px 0 0;
   color: #FCA5A5;
   font-size: 11px;
+}
+
+.mp__metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 9px;
+}
+.mp__metric-card {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  background: rgba(34, 197, 94, 0.08);
+}
+.mp__metric-label {
+  color: rgba(187, 247, 208, 0.68);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__metric-value {
+  color: #DCFCE7;
+  font-size: 15px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.mp__location-card {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  background: rgba(59, 130, 246, 0.07);
+}
+.mp__location-head,
+.mp__location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.mp__location-head span {
+  color: rgba(191, 219, 254, 0.9);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mp__location-head small {
+  min-width: 0;
+  color: rgba(191, 219, 254, 0.5);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__location-rows {
+  display: grid;
+  gap: 4px;
+}
+.mp__location-row span {
+  color: rgba(230, 232, 236, 0.52);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.mp__location-row strong {
+  min-width: 0;
+  color: #E6E8EC;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.mp__linked-records {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.16);
+  background: rgba(245, 158, 11, 0.07);
+}
+.mp__linked-head,
+.mp__linked-group-head,
+.mp__linked-row-main,
+.mp__linked-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.mp__linked-head span {
+  color: rgba(253, 230, 138, 0.92);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mp__linked-head small,
+.mp__linked-group-head small,
+.mp__linked-row-main small,
+.mp__linked-row-meta small {
+  min-width: 0;
+  color: rgba(253, 230, 138, 0.54);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__linked-empty {
+  margin: 0;
+  color: rgba(230, 232, 236, 0.55);
+  font-size: 11px;
+}
+.mp__linked-groups {
+  display: grid;
+  gap: 7px;
+}
+.mp__linked-group {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.mp__linked-group-head span {
+  min-width: 0;
+  color: #FDE68A;
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__linked-group-head em,
+.mp__record-group-head em {
+  margin-left: 5px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  color: #BFDBFE;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mp__linked-summary,
+.mp__record-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+.mp__linked-summary span,
+.mp__record-summary span {
+  max-width: 100%;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.1);
+  color: rgba(253, 230, 138, 0.72);
+  padding: 3px 7px;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__linked-summary strong,
+.mp__record-summary strong {
+  color: #FEF3C7;
+  font-variant-numeric: tabular-nums;
+}
+.mp__linked-row {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.16);
+  color: #E6E8EC;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 7px 8px;
+  text-align: left;
+}
+.mp__linked-row:hover {
+  background: rgba(245, 158, 11, 0.13);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+.mp__linked-row-main strong,
+.mp__linked-row-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__linked-row-main strong {
+  font-size: 11px;
+  font-weight: 700;
+}
+.mp__linked-row-meta strong {
+  color: #FEF3C7;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.mp__linked-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.mp__linked-fields span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(230, 232, 236, 0.72);
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.mp__records-head,
+.mp__record-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.mp__records-head {
+  margin-bottom: 9px;
+}
+.mp__records-title {
+  color: #E6E8EC;
+  font-size: 13px;
+  font-weight: 700;
+}
+.mp__records-subtitle {
+  margin-top: 2px;
+  color: rgba(230, 232, 236, 0.55);
+  font-size: 11px;
+}
+.mp__records-refresh {
+  flex: none;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.12);
+  color: #FDE68A;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mp__records-refresh:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+.mp__records-refresh:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.mp__records-empty {
+  margin: 4px 0 0;
+  color: rgba(230, 232, 236, 0.55);
+  font-size: 11px;
+}
+.mp__records-err {
+  color: #FCA5A5;
+}
+.mp__record-groups {
+  display: grid;
+  gap: 10px;
+}
+.mp__record-group {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.mp__record-group-head {
+  padding: 0 1px;
+}
+.mp__record-group-head div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.mp__record-group-head span {
+  min-width: 0;
+  color: #FDE68A;
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__record-group-head small {
+  min-width: 0;
+  color: rgba(253, 230, 138, 0.55);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__record-table-wrap {
+  max-width: 100%;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(0, 0, 0, 0.16);
+}
+.mp__record-table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.mp__record-table th,
+.mp__record-table td {
+  min-width: 0;
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  text-align: left;
+  vertical-align: top;
+}
+.mp__record-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(16, 18, 24, 0.98);
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mp__record-table td {
+  color: #E6E8EC;
+  font-size: 11px;
+}
+.mp__record-table td[data-kind="name"] span {
+  color: #BFDBFE;
+  font-weight: 700;
+}
+.mp__record-table td[data-kind="date"] span {
+  color: rgba(230, 232, 236, 0.68);
+}
+.mp__record-table td span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__record-table tbody tr {
+  cursor: pointer;
+  outline: none;
+}
+.mp__record-table tbody tr:hover,
+.mp__record-table tbody tr:focus {
+  background: rgba(245, 158, 11, 0.12);
+}
+.mp__record-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .mp__primary {

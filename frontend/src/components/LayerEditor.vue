@@ -76,6 +76,10 @@ const form = ref({
   heatmap_intensity_max: 2.5,
   heatmap_opacity: 0.75,
   heatmap_ramp_json: '',
+  territory_enabled: 0,
+  territory_color: '',
+  territory_opacity: 0.18,
+  territory_padding_meters: 2500,
 })
 const saving = ref(false)
 const error = ref('')
@@ -243,6 +247,10 @@ watch(
         heatmap_intensity_max: 2.5,
         heatmap_opacity: 0.75,
         heatmap_ramp_json: '',
+        territory_enabled: 0,
+        territory_color: '',
+        territory_opacity: 0.18,
+        territory_padding_meters: 2500,
         radius_enabled: 0,
         radius_field: '',
         radius_meters: 5000,
@@ -303,6 +311,10 @@ watch(
         heatmap_intensity_max: l.heatmap_intensity_max ?? 2.5,
         heatmap_opacity: l.heatmap_opacity ?? 0.75,
         heatmap_ramp_json: l.heatmap_ramp_json || '',
+        territory_enabled: l.territory_enabled ? 1 : 0,
+        territory_color: l.territory_color || '',
+        territory_opacity: l.territory_opacity ?? 0.18,
+        territory_padding_meters: l.territory_padding_meters ?? 2500,
         radius_enabled: l.radius_enabled ? 1 : 0,
         radius_field: l.radius_field || '',
         radius_meters: l.radius_meters ?? 5000,
@@ -341,6 +353,10 @@ watch(
     heatmap_intensity_max: form.value.heatmap_intensity_max,
     heatmap_opacity: form.value.heatmap_opacity,
     heatmap_ramp_json: form.value.heatmap_ramp_json,
+    territory_enabled: form.value.territory_enabled,
+    territory_color: form.value.territory_color,
+    territory_opacity: form.value.territory_opacity,
+    territory_padding_meters: form.value.territory_padding_meters,
     radius_enabled: form.value.radius_enabled,
     radius_field: form.value.radius_field,
     radius_meters: form.value.radius_meters,
@@ -373,6 +389,10 @@ watch(
         heatmap_intensity_max: preview.heatmap_intensity_max,
         heatmap_opacity: preview.heatmap_opacity,
         heatmap_ramp_json: preview.heatmap_ramp_json,
+        territory_enabled: preview.territory_enabled,
+        territory_color: preview.territory_color || '',
+        territory_opacity: preview.territory_opacity,
+        territory_padding_meters: preview.territory_padding_meters,
         radius_enabled: preview.radius_enabled,
       radius_field: preview.radius_field || '',
       radius_meters: preview.radius_meters,
@@ -467,6 +487,13 @@ function setGroupColor(groupKey, color) {
   const key = String(groupKey)
   const cfg = form.value.group_config[key] || { color: '', icon: '', label: '' }
   cfg.color = color
+  form.value.group_config[key] = cfg
+}
+
+function setGroupTerritoryColor(groupKey, color) {
+  const key = String(groupKey)
+  const cfg = form.value.group_config[key] || { color: '', icon: '', label: '' }
+  cfg.territory_color = color
   form.value.group_config[key] = cfg
 }
 
@@ -718,6 +745,7 @@ function _serializeGroupConfig(obj) {
       if (!value || typeof value !== 'object') continue
       const item = {}
       if (value.color) item.color = value.color
+      if (value.territory_color) item.territory_color = value.territory_color
       if (Object.prototype.hasOwnProperty.call(value, 'icon')) item.icon = value.icon || ''
       if (value.label) item.label = value.label
       if (Object.keys(item).length) groups[key] = item
@@ -743,8 +771,8 @@ function _serializeGroupConfig(obj) {
           })),
         }
       }
-    } else if (v.color || v.icon || v.label) {
-      cleaned[k] = v
+    } else if (v.color || v.territory_color || v.icon || v.label) {
+      cleaned[k] = { ...v }
     }
   }
   return Object.keys(cleaned).length ? JSON.stringify(cleaned) : ''
@@ -1710,6 +1738,12 @@ async function save() {
       saving.value = false
       return
     }
+    form.value.territory_color = normalizeColorText(form.value.territory_color)
+    if (form.value.territory_color && !isValidCssColor(form.value.territory_color)) {
+      error.value = 'Enter a valid map color or leave it empty for automatic coloring.'
+      saving.value = false
+      return
+    }
     if (form.value.heatmap && form.value.heatmap_mode === 'sum') {
       if (!form.value.heatmap_weight_field) {
         error.value = 'Choose a numeric metric field for weighted heatmap mode.'
@@ -1791,6 +1825,10 @@ async function save() {
         heatmap_intensity_max: form.value.heatmap_intensity_max,
         heatmap_opacity: form.value.heatmap_opacity,
         heatmap_ramp_json: form.value.heatmap_ramp_json || '',
+        territory_enabled: form.value.territory_enabled,
+        territory_color: form.value.territory_color || '',
+        territory_opacity: form.value.territory_opacity,
+        territory_padding_meters: form.value.territory_padding_meters,
         radius_enabled: form.value.radius_enabled,
         radius_field: form.value.radius_field,
         radius_meters: form.value.radius_meters,
@@ -1846,6 +1884,10 @@ async function save() {
         heatmap_intensity_max: form.value.heatmap_intensity_max,
         heatmap_opacity: form.value.heatmap_opacity,
         heatmap_ramp_json: form.value.heatmap_ramp_json || '',
+        territory_enabled: form.value.territory_enabled,
+        territory_color: form.value.territory_color || '',
+        territory_opacity: form.value.territory_opacity,
+        territory_padding_meters: form.value.territory_padding_meters,
         radius_enabled: form.value.radius_enabled,
         radius_field: form.value.radius_field,
         radius_meters: form.value.radius_meters,
@@ -2185,6 +2227,47 @@ function close() {
           </div>
         </div>
 
+        <div class="le__filter">
+          <div class="le__filter-header">
+            <button
+              type="button"
+              class="le__toggle-row le__toggle-row--inline"
+              :class="{ 'le__toggle-row--on': !!form.territory_enabled }"
+              :aria-pressed="form.territory_enabled ? 'true' : 'false'"
+              @click="form.territory_enabled = form.territory_enabled ? 0 : 1"
+            >
+              <span class="le__toggle-dot" aria-hidden="true" />
+              <span>Map coloring <span class="le__hint">(territory background)</span></span>
+            </button>
+          </div>
+          <template v-if="form.territory_enabled">
+            <div class="le__row">
+              <label class="le__field le__field--half">
+                <span class="le__label">Map color</span>
+                <div class="le__color-row le__color-row--compact">
+                  <span class="le__color" :style="{ background: form.territory_color || safeLayerColor(form.color) }" aria-hidden="true" />
+                  <input
+                    v-model="form.territory_color"
+                    class="le__input le__input--sm"
+                    type="text"
+                    spellcheck="false"
+                    placeholder="Auto from pin color"
+                    @blur="form.territory_color = normalizeColorText(form.territory_color)"
+                  />
+                </div>
+              </label>
+              <label class="le__field le__field--half">
+                <span class="le__label">Spread meters</span>
+                <input v-model.number="form.territory_padding_meters" class="le__input le__input--sm" type="number" min="100" max="50000" step="100" />
+              </label>
+            </div>
+            <label class="le__field">
+              <span class="le__label">Map color opacity</span>
+              <input v-model.number="form.territory_opacity" class="le__input le__input--sm" type="number" min="0" max="1" step="0.05" />
+            </label>
+          </template>
+        </div>
+
         <!-- Icon glyph (optional). None = plain dot. Custom SVG icons
              are scoped personal/global by the server. -->
         <div class="le__row le__row--col">
@@ -2367,6 +2450,37 @@ function close() {
                   />
                 </div>
               </details>
+              <details class="le__group-color-menu">
+                <summary
+                  class="le__group-color-trigger le__group-color-trigger--territory"
+                  :style="{ background: form.group_config[String(band.key)]?.territory_color || form.group_config[String(band.key)]?.color || GROUP_PALETTE[i % GROUP_PALETTE.length] }"
+                  :title="'Map color for ' + (form.group_config[String(band.key)]?.label || band.label || band.key)"
+                />
+                <div class="le__group-color-popover">
+                  <button
+                    type="button"
+                    class="le__option le__option--compact"
+                    @click="setGroupTerritoryColor(band.key, '')"
+                  >
+                    <span>Auto from pin color</span>
+                  </button>
+                  <button
+                    v-for="c in GROUP_PALETTE"
+                    :key="'territory-' + c"
+                    type="button"
+                    class="le__color-chip"
+                    :class="{ 'le__color-chip--active': (form.group_config[String(band.key)]?.territory_color || '') === c }"
+                    :style="{ background: c }"
+                    @click="setGroupTerritoryColor(band.key, c)"
+                  />
+                  <input
+                    class="le__input le__input--xs le__group-color-code"
+                    :value="form.group_config[String(band.key)]?.territory_color || ''"
+                    @input="e => setGroupTerritoryColor(band.key, e.target.value)"
+                    placeholder="Auto"
+                  />
+                </div>
+              </details>
               <input
                 v-if="groupBandKind === 'number'"
                 class="le__input le__input--xs le__band-number"
@@ -2529,6 +2643,37 @@ function close() {
                       :value="form.group_config[String(val)]?.color || GROUP_PALETTE[0]"
                       @input="e => setGroupColor(val, e.target.value)"
                       placeholder="#RRGGBB"
+                    />
+                  </div>
+                </details>
+                <details class="le__group-color-menu">
+                  <summary
+                    class="le__group-color-trigger le__group-color-trigger--territory"
+                    :style="{ background: form.group_config[String(val)]?.territory_color || form.group_config[String(val)]?.color || GROUP_PALETTE[0] }"
+                    :title="'Map color for ' + val"
+                  />
+                  <div class="le__group-color-popover">
+                    <button
+                      type="button"
+                      class="le__option le__option--compact"
+                      @click="setGroupTerritoryColor(val, '')"
+                    >
+                      <span>Auto from pin color</span>
+                    </button>
+                    <button
+                      v-for="c in GROUP_PALETTE"
+                      :key="'territory-' + c"
+                      type="button"
+                      class="le__color-chip"
+                      :class="{ 'le__color-chip--active': (form.group_config[String(val)]?.territory_color || '') === c }"
+                      :style="{ background: c }"
+                      @click="setGroupTerritoryColor(val, c)"
+                    />
+                    <input
+                      class="le__input le__input--xs le__group-color-code"
+                      :value="form.group_config[String(val)]?.territory_color || ''"
+                      @input="e => setGroupTerritoryColor(val, e.target.value)"
+                      placeholder="Auto"
                     />
                   </div>
                 </details>
@@ -3317,6 +3462,11 @@ function close() {
   align-items: flex-start;
   flex-wrap: wrap;
 }
+.le__color-row--compact .le__color {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+}
 .le__color {
   width: 36px; height: 36px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -3967,6 +4117,15 @@ function close() {
   border: 2px solid rgba(255, 255, 255, 0.82);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   cursor: pointer;
+}
+.le__group-color-trigger--territory {
+  border-style: dashed;
+  opacity: 0.82;
+}
+.le__option--compact {
+  grid-column: 1 / -1;
+  min-height: 28px;
+  padding: 5px 7px;
 }
 .le__group-color-popover {
   position: absolute;

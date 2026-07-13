@@ -22,6 +22,7 @@ export const useLayersStore = defineStore('layers', () => {
   const layers = ref([])            // array of {name, title, style, ...}
   const masters = ref([])           // Expedition Layer rows with map=NULL (master mappings)
   const features = ref({})          // layer.name -> GeoJSON FeatureCollection
+  const territoryFeatures = ref({}) // layer/group cache for territory drawing; unbounded by viewport
   const unfilteredFeatures = ref({}) // layer.name -> original GeoJSON while search is active
   const loading = ref({})           // layer.name -> bool
   const lastFetched = ref({})       // layer.name -> timestamp (for debugging + future cache busting)
@@ -119,6 +120,7 @@ export const useLayersStore = defineStore('layers', () => {
 
   function replaceMapLayers(dtos) {
     layers.value = []
+    territoryFeatures.value = {}
     for (const dto of dtos || []) _replaceLayer(dto)
     _emitLayersChanged()
   }
@@ -212,6 +214,10 @@ export const useLayersStore = defineStore('layers', () => {
       color: d.color, icon: d.icon, size: d.size,
       cluster: d.cluster, heatmap: d.heatmap,
       heatmap_config: d.heatmap_config,
+      territory_enabled: d.territory_enabled,
+      territory_color: d.territory_color,
+      territory_opacity: d.territory_opacity,
+      territory_padding_meters: d.territory_padding_meters,
       stroke_color: d.stroke_color, stroke_width: d.stroke_width,
       fill_opacity: d.fill_opacity,
     }
@@ -532,6 +538,7 @@ export const useLayersStore = defineStore('layers', () => {
 
   function clearFeatures(layerName) {
     delete features.value[layerName]
+    delete territoryFeatures.value[layerName]
     delete unfilteredFeatures.value[layerName]
     delete loading.value[layerName]
     delete lastFetched.value[layerName]
@@ -539,11 +546,57 @@ export const useLayersStore = defineStore('layers', () => {
     for (const key of Object.keys(features.value)) {
       if (!key.startsWith(groupPrefix)) continue
       delete features.value[key]
+      delete territoryFeatures.value[key]
       delete unfilteredFeatures.value[key]
       delete loading.value[key]
       delete lastFetched.value[key]
     }
     _emitFeaturesUpdated(layerName)
+  }
+
+  async function fetchTerritoryFeatures(layerName, options = {}) {
+    const force = !!options.force
+    const cacheKey = `territory:${layerName}`
+    if (!force && territoryFeatures.value[layerName]) return territoryFeatures.value[layerName]
+    if (loading.value[cacheKey]) return territoryFeatures.value[layerName] || null
+    loading.value[cacheKey] = true
+    try {
+      const fc = await _callFeatures(layerName, null, { groupKey: options.groupKey })
+      _promoteIds(fc)
+      territoryFeatures.value = { ...territoryFeatures.value, [layerName]: fc }
+      _emitFeaturesUpdated(layerName)
+      return fc
+    } finally {
+      loading.value[cacheKey] = false
+    }
+  }
+
+  async function fetchVirtualGroupTerritoryFeatures(layerName, groups, options = {}) {
+    const items = (Array.isArray(groups) ? groups : [])
+      .filter((item) => item?.groupKey != null && item?.cacheKey)
+      .filter((item) => options.force || !territoryFeatures.value[item.cacheKey])
+    if (!items.length) return
+    const batchKey = `territory:${layerName}:groups`
+    if (loading.value[batchKey]) return
+    loading.value[batchKey] = true
+    try {
+      const resp = await call('expedition.api.layer.get_virtual_group_features', {
+        layer: layerName,
+        bounds: null,
+        group_keys: items.map((item) => item.groupKey),
+      })
+      const next = { ...territoryFeatures.value }
+      for (const item of items) {
+        const fc = resp?.groups?.[item.groupKey]
+        if (!fc) continue
+        _promoteIds(fc)
+        next[item.cacheKey] = fc
+      }
+      territoryFeatures.value = next
+      _emitFeaturesUpdated(layerName)
+    } finally {
+      loading.value[batchKey] = false
+    }
   }
 
   /**
@@ -692,6 +745,7 @@ export const useLayersStore = defineStore('layers', () => {
     layers,
     masters,
     features,
+    territoryFeatures,
     unfilteredFeatures,
     loading,
     lastFetched,
@@ -701,6 +755,8 @@ export const useLayersStore = defineStore('layers', () => {
     clearSearch,
     fetchFeatures,
     fetchVirtualGroupFeatures,
+    fetchTerritoryFeatures,
+    fetchVirtualGroupTerritoryFeatures,
     refetchLayer,
     getLayerStyle,
     clearFeatures,

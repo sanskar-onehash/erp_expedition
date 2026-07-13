@@ -88,6 +88,10 @@ function clusterLayerId(layerName) { return `lyr-${layerName}-clusters` }
 function clusterCountId(layerName) { return `lyr-${layerName}-cluster-count` }
 function iconLayerId(layerName) { return `lyr-${layerName}-icon` }
 function heatmapLayerId(layerName) { return `lyr-${layerName}-heatmap` }
+function territorySourceId(layerName) { return `src-${layerName}-territory` }
+function territoryLayerId(layerName) { return `lyr-${layerName}-territory` }
+function territorySurfaceSourceId() { return 'src-territory-surface' }
+function territorySurfaceLayerId() { return 'lyr-territory-surface' }
 function haloSourceId(layerName) { return `src-${layerName}-halo` }
 function haloLayerId(layerName) { return `lyr-${layerName}-halo` }
 function haloStrokeLayerId(layerName) { return `lyr-${layerName}-halo-stroke` }
@@ -168,6 +172,7 @@ function _removeRenderArtifacts(renderName) {
   if (!map) return
   for (const id of [
     heatmapLayerId(renderName),
+    territoryLayerId(renderName),
     haloStrokeLayerId(renderName),
     haloLayerId(renderName),
     extrusionLayerId(renderName),
@@ -181,7 +186,7 @@ function _removeRenderArtifacts(renderName) {
     if (map.getLayer(id)) map.removeLayer(id)
     _interactivePointLayers.delete(id)
   }
-  for (const id of [extrusionSourceId(renderName), haloSourceId(renderName), sourceId(renderName)]) {
+  for (const id of [extrusionSourceId(renderName), territorySourceId(renderName), haloSourceId(renderName), sourceId(renderName)]) {
     if (map.getSource(id)) map.removeSource(id)
     delete _sourceClusterState[id]
   }
@@ -193,6 +198,7 @@ function _pruneGroupedArtifacts(layerName, activeRenderNames) {
   const activeSources = new Set()
   for (const name of activeRenderNames) {
     activeSources.add(sourceId(name))
+    activeSources.add(territorySourceId(name))
     activeSources.add(haloSourceId(name))
     activeSources.add(extrusionSourceId(name))
   }
@@ -221,7 +227,7 @@ function _pruneGroupedArtifacts(layerName, activeRenderNames) {
 }
 
 function layerNameFromRenderedLayerId(id) {
-  const grouped = id.match(/^lyr-(.+)-grp-[^-]+(?:-(shadow|ring|icon|clusters|cluster-count|halo))?$/)
+  const grouped = id.match(/^lyr-(.+)-grp-[^-]+(?:-(shadow|ring|icon|clusters|cluster-count|halo|territory))?$/)
   if (grouped) return grouped[1]
   let name = String(id || '').replace(/^lyr-/, '')
   for (const suffix of [
@@ -229,6 +235,7 @@ function layerNameFromRenderedLayerId(id) {
     '-halo-stroke',
     '-clusters',
     '-heatmap',
+    '-territory',
     '-extrude',
     '-shadow',
     '-ring',
@@ -473,6 +480,15 @@ function featureGroupLabel(feature, fallback) {
   return props._group_label || props._group_value || fallback
 }
 
+function groupConfigForKey(layerDoc, key) {
+  const config = layerDoc?.group_config
+  if (!config || typeof config !== 'object') return null
+  if (config.__grouping?.version >= 2) {
+    return config.groups?.[String(key)] || null
+  }
+  return config[String(key)] || null
+}
+
 function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
   if (Array.isArray(fc?.virtual_groups) && fc.virtual_groups.length) {
     return fc.virtual_groups.map((group) => {
@@ -504,6 +520,7 @@ function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
   return [...groups.entries()].map(([key, features]) => {
     const first = features[0]
     const groupColor = featureDisplayColor(first, color)
+    const groupCfg = groupConfigForKey(layerDoc, key)
     const inheritedIcon = style.icon || layerDoc.icon || ''
     const groupIcon = featureDisplayIcon(first, inheritedIcon)
     const renderName = virtualGroupName(layerName, key)
@@ -526,6 +543,7 @@ function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
       style: {
         ...style,
         color: groupColor,
+        territory_color: groupCfg?.territory_color || '',
         icon: groupIcon,
       },
     }
@@ -800,6 +818,350 @@ function haloFeatureCollection(features, layerName) {
   }
 }
 
+function clamp01(value, fallback) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+}
+
+function territoryEnabled(layerDoc, style) {
+  return !!(style?.territory_enabled ?? layerDoc?.territory_enabled)
+}
+
+function territoryOpacity(layerDoc, style) {
+  return clamp01(style?.territory_opacity ?? layerDoc?.territory_opacity, 0.18)
+}
+
+function territoryPaddingMeters(layerDoc, style) {
+  const n = Number(style?.territory_padding_meters ?? layerDoc?.territory_padding_meters)
+  return Number.isFinite(n) && n > 0 ? n : 2500
+}
+
+function territoryPaintColor(color, layerDoc, style) {
+  return style?.territory_color || layerDoc?.territory_color || color || FALLBACK_COLOR
+}
+
+function territoryWaterBeforeId() {
+  const layers = map?.getStyle?.()?.layers || []
+  const exact = layers.find((layer) => layer.id === 'water')
+  if (exact) return exact.id
+  const fillWater = layers.find((layer) =>
+    layer.type === 'fill' && String(layer.id || '').toLowerCase().includes('water')
+  )
+  return fillWater?.id || null
+}
+
+function collectTerritoryCandidates() {
+  const candidates = []
+  for (const layerDoc of layerStore.layers || []) {
+    const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
+    const baseStyle = layerStore.getLayerStyle(layerDoc.name) || {}
+    if (!enabled || !territoryEnabled(layerDoc, baseStyle)) continue
+    const layerColor = baseStyle.color || layerDoc.color || FALLBACK_COLOR
+    const groupPrefix = `${layerDoc.name}${VIRTUAL_GROUP_SEPARATOR}`
+    const groupEntries = Object.entries(layerStore.territoryFeatures || layerStore.features || {})
+      .filter(([key, fc]) => key.startsWith(groupPrefix) && Array.isArray(fc?.features) && fc.features.length)
+
+    if (groupEntries.length) {
+      const allGroupFeatures = []
+      for (const [, fc] of groupEntries) allGroupFeatures.push(...(fc.features || []))
+      if (allGroupFeatures.length) {
+        candidates.push({
+          key: `${layerDoc.name}:base`,
+          features: allGroupFeatures,
+          color: territoryPaintColor(layerColor, layerDoc, baseStyle),
+          opacity: territoryOpacity(layerDoc, baseStyle),
+          radius: territoryPaddingMeters(layerDoc, baseStyle),
+          priority: 0,
+        })
+      }
+      for (const [key, fc] of groupEntries) {
+        const style = fc?.layer?.style || {}
+        const color = style.color || layerColor
+        candidates.push({
+          key,
+          features: fc.features || [],
+          color: territoryPaintColor(color, layerDoc, style),
+          opacity: territoryOpacity(layerDoc, style),
+          radius: territoryPaddingMeters(layerDoc, style),
+          priority: 1000000,
+        })
+      }
+      continue
+    }
+
+    const fc = layerStore.territoryFeatures?.[layerDoc.name] || layerStore.features?.[layerDoc.name]
+    if (!Array.isArray(fc?.features) || !fc.features.length) continue
+    candidates.push({
+      key: layerDoc.name,
+      features: fc.features,
+      color: territoryPaintColor(layerColor, layerDoc, baseStyle),
+      opacity: territoryOpacity(layerDoc, baseStyle),
+      radius: territoryPaddingMeters(layerDoc, baseStyle),
+      priority: 500000,
+    })
+  }
+  return candidates
+}
+
+function featureCoord(feature) {
+  const coord = feature?.geometry?.coordinates
+  const lng = Number(coord?.[0])
+  const lat = Number(coord?.[1])
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+  return [lng, lat]
+}
+
+function meterScalesForLat(lat) {
+  const latScale = 110540
+  const lngScale = Math.max(1, 111320 * Math.cos((Number(lat) * Math.PI) / 180))
+  return { lngScale, latScale }
+}
+
+function projectedPoint(coord, center) {
+  const { lngScale, latScale } = meterScalesForLat(center[1])
+  return {
+    lng: coord[0],
+    lat: coord[1],
+    x: shortestLngDelta(center[0], coord[0]) * lngScale,
+    y: (coord[1] - center[1]) * latScale,
+  }
+}
+
+function unprojectedPoint(point, center) {
+  const { lngScale, latScale } = meterScalesForLat(center[1])
+  return [center[0] + point.x / lngScale, center[1] + point.y / latScale]
+}
+
+function convexHull(points) {
+  const sorted = [...points].sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x)
+  if (sorted.length <= 1) return sorted
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+  const lower = []
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop()
+    lower.push(p)
+  }
+  const upper = []
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const p = sorted[i]
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop()
+    upper.push(p)
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1))
+}
+
+function polygonAreaMeters(ring, center) {
+  if (!Array.isArray(ring) || ring.length < 4) return 0
+  const projected = ring.slice(0, -1).map((coord) => projectedPoint(coord, center))
+  let area = 0
+  for (let i = 0; i < projected.length; i += 1) {
+    const a = projected[i]
+    const b = projected[(i + 1) % projected.length]
+    area += a.x * b.y - b.x * a.y
+  }
+  return Math.abs(area / 2)
+}
+
+function circlePolygonAround(center, radiusMeters, steps = 48) {
+  return haloPolygon(center[0], center[1], Math.max(1, radiusMeters), steps)
+}
+
+function lineCapsulePolygon(a, b, radiusMeters) {
+  const center = [(a[0] + shortestLngDelta(a[0], b[0]) / 2), (a[1] + b[1]) / 2]
+  const pa = projectedPoint(a, center)
+  const pb = projectedPoint(b, center)
+  const dx = pb.x - pa.x
+  const dy = pb.y - pa.y
+  const len = Math.sqrt(dx * dx + dy * dy) || 1
+  const nx = -dy / len
+  const ny = dx / len
+  const ring = [
+    unprojectedPoint({ x: pa.x + nx * radiusMeters, y: pa.y + ny * radiusMeters }, center),
+    unprojectedPoint({ x: pb.x + nx * radiusMeters, y: pb.y + ny * radiusMeters }, center),
+    unprojectedPoint({ x: pb.x - nx * radiusMeters, y: pb.y - ny * radiusMeters }, center),
+    unprojectedPoint({ x: pa.x - nx * radiusMeters, y: pa.y - ny * radiusMeters }, center),
+  ]
+  ring.push(ring[0])
+  return { type: 'Polygon', coordinates: [ring] }
+}
+
+function territoryPolygonForCoords(coords, fallbackRadiusMeters) {
+  const clean = (coords || [])
+    .map((coord) => [Number(coord?.[0]), Number(coord?.[1])])
+    .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat))
+  if (!clean.length) return null
+  const center = [
+    clean.reduce((sum, coord) => sum + coord[0], 0) / clean.length,
+    clean.reduce((sum, coord) => sum + coord[1], 0) / clean.length,
+  ]
+  if (clean.length === 1) return circlePolygonAround(center, Math.min(Math.max(250, fallbackRadiusMeters), 2500))
+  if (clean.length === 2) return lineCapsulePolygon(clean[0], clean[1], Math.min(Math.max(180, fallbackRadiusMeters / 3), 1800))
+  const hull = convexHull(clean.map((coord) => projectedPoint(coord, center)))
+  if (hull.length < 3) return circlePolygonAround(center, Math.min(Math.max(250, fallbackRadiusMeters), 2500))
+  const ring = hull.map((point) => unprojectedPoint(point, center))
+  ring.push(ring[0])
+  return {
+    type: 'Polygon',
+    coordinates: [ring],
+  }
+}
+
+function territoryComponents(coords, spreadMeters) {
+  const clean = (coords || [])
+    .map((coord) => [Number(coord?.[0]), Number(coord?.[1])])
+    .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat))
+  if (clean.length <= 1) return clean.length ? [clean] : []
+  const center = [
+    clean.reduce((sum, coord) => sum + coord[0], 0) / clean.length,
+    clean.reduce((sum, coord) => sum + coord[1], 0) / clean.length,
+  ]
+  const { lngScale, latScale } = meterScalesForLat(center[1])
+  const radius = Math.max(1, Number(spreadMeters) || 2500)
+  const buckets = new Map()
+  const parent = clean.map((_, idx) => idx)
+  const find = (idx) => {
+    while (parent[idx] !== idx) {
+      parent[idx] = parent[parent[idx]]
+      idx = parent[idx]
+    }
+    return idx
+  }
+  const unite = (a, b) => {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra !== rb) parent[rb] = ra
+  }
+  const bucketKey = (x, y) => `${x},${y}`
+  const projected = clean.map((coord, idx) => {
+    const point = {
+      x: shortestLngDelta(center[0], coord[0]) * lngScale,
+      y: (coord[1] - center[1]) * latScale,
+      coord,
+      idx,
+    }
+    const bx = Math.floor(point.x / radius)
+    const by = Math.floor(point.y / radius)
+    for (let ox = -1; ox <= 1; ox += 1) {
+      for (let oy = -1; oy <= 1; oy += 1) {
+        const nearby = buckets.get(bucketKey(bx + ox, by + oy)) || []
+        for (const other of nearby) {
+          const dx = point.x - other.x
+          const dy = point.y - other.y
+          if ((dx * dx + dy * dy) <= radius * radius) unite(idx, other.idx)
+        }
+      }
+    }
+    const key = bucketKey(bx, by)
+    buckets.set(key, [...(buckets.get(key) || []), point])
+    return point
+  })
+  const groups = new Map()
+  for (const point of projected) {
+    const root = find(point.idx)
+    if (!groups.has(root)) groups.set(root, [])
+    groups.get(root).push(point.coord)
+  }
+  return [...groups.values()]
+}
+
+function expandHex(hex) {
+  const raw = String(hex || '').trim()
+  const match = raw.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (!match) return null
+  const value = match[1]
+  const full = value.length === 3
+    ? value.split('').map((c) => c + c).join('')
+    : value
+  return [
+    parseInt(full.slice(0, 2), 16),
+    parseInt(full.slice(2, 4), 16),
+    parseInt(full.slice(4, 6), 16),
+  ]
+}
+
+function territorySolidColor(color, opacity) {
+  const rgb = expandHex(color)
+  if (!rgb) return color || FALLBACK_COLOR
+  const mix = 1 - clamp01(opacity, 0.18)
+  const channels = rgb.map((value) => Math.round(value * (1 - mix) + 255 * mix))
+  return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`
+}
+
+function buildTerritorySurfaceFeatureCollection() {
+  const features = []
+  for (const candidate of collectTerritoryCandidates()) {
+    const coords = (candidate.features || []).map(featureCoord).filter(Boolean)
+    for (const component of territoryComponents(coords, candidate.radius)) {
+      const geometry = territoryPolygonForCoords(component, candidate.radius)
+      if (!geometry) continue
+      const center = [
+        component.reduce((sum, coord) => sum + coord[0], 0) / component.length,
+        component.reduce((sum, coord) => sum + coord[1], 0) / component.length,
+      ]
+      const area = polygonAreaMeters(geometry.coordinates?.[0], center)
+      features.push({
+        type: 'Feature',
+        geometry,
+        properties: {
+          color: territorySolidColor(candidate.color, candidate.opacity),
+          sort_key: candidate.priority - area / 1000000,
+        },
+      })
+    }
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+let territoryRebuildFrame = 0
+function scheduleTerritorySurfaceRebuild() {
+  if (!map || !map.getStyle()) return
+  if (territoryRebuildFrame) return
+  territoryRebuildFrame = window.requestAnimationFrame(() => {
+    territoryRebuildFrame = 0
+    syncTerritorySurface()
+  })
+}
+
+function syncTerritorySurface() {
+  if (!map || !map.getStyle()) return
+  const sid = territorySurfaceSourceId()
+  const lid = territorySurfaceLayerId()
+  const data = buildTerritorySurfaceFeatureCollection()
+  if (!data.features.length) {
+    if (map.getLayer(lid)) map.removeLayer(lid)
+    if (map.getSource(sid)) map.removeSource(sid)
+    return
+  }
+  const src = map.getSource(sid)
+  if (src && src.type === 'geojson') {
+    src.setData(data)
+  } else {
+    map.addSource(sid, { type: 'geojson', data })
+  }
+  const paint = {
+    'fill-color': ['get', 'color'],
+    'fill-opacity': 1,
+  }
+  const beforeId = territoryWaterBeforeId()
+  if (!map.getLayer(lid)) {
+    map.addLayer({
+      id: lid,
+      type: 'fill',
+      source: sid,
+      layout: {
+        'fill-sort-key': ['coalesce', ['to-number', ['get', 'sort_key']], 0],
+      },
+      paint,
+    }, beforeId || undefined)
+  } else {
+    map.setLayoutProperty(lid, 'fill-sort-key', ['coalesce', ['to-number', ['get', 'sort_key']], 0])
+    for (const [key, value] of Object.entries(paint)) map.setPaintProperty(lid, key, value)
+    if (beforeId) {
+      try { map.moveLayer(lid, beforeId) } catch (_) {}
+    }
+  }
+}
+
 function _addLayerOnMap(layerName, renderContext = null) {
   // `isStyleLoaded()` returns false when basemap tile sources are
   // still loading, which can take 1-2s after a `setStyle`. But
@@ -828,6 +1190,16 @@ function _addLayerOnMap(layerName, renderContext = null) {
     const virtualGroups = buildVirtualGroupLayers(layerName, fc, layerDoc, style, color)
     if (virtualGroups.length) {
       _removeBasePointArtifacts(layerName)
+      if (enabled && territoryEnabled(layerDoc, style)) {
+        layerStore.fetchVirtualGroupTerritoryFeatures(layerName, virtualGroups.map((group) => ({
+          cacheKey: group.renderName,
+          groupKey: group.groupKey,
+        }))).then(() => {
+          scheduleTerritorySurfaceRebuild()
+        }).catch((e) => {
+          console.warn('[expedition] territory group fetch failed', layerName, e)
+        })
+      }
       const activeRenderNames = new Set()
       const groupsToFetch = []
       for (const group of virtualGroups) {
@@ -859,6 +1231,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
         })
       }
       _pruneGroupedArtifacts(layerName, activeRenderNames)
+      scheduleTerritorySurfaceRebuild()
       lastLoadedFeatures[layerName] = fc
       return
     }
@@ -928,6 +1301,15 @@ function _addLayerOnMap(layerName, renderContext = null) {
   }
   _sourceClusterState[sid] = wantsCluster
   lastLoadedFeatures[layerName] = fc
+
+  if (!renderContext && enabled && territoryEnabled(layerDoc, style)) {
+    layerStore.fetchTerritoryFeatures(layerName).then(() => {
+      scheduleTerritorySurfaceRebuild()
+    }).catch((e) => {
+      console.warn('[expedition] territory fetch failed', layerName, e)
+    })
+  }
+  scheduleTerritorySurfaceRebuild()
 
   // Z-order: shadow → ring → pin. Shadow first so it renders behind.
   // 1. Shadow
@@ -1246,6 +1628,7 @@ function _removeLayerFromMap(layerName) {
     if (key.startsWith(groupPrefix)) delete _virtualGroupFetchKeys[key]
   }
   _removeRenderArtifacts(layerName)
+  scheduleTerritorySurfaceRebuild()
 }
 
 function _fetchAllVisibleBounds() {
@@ -1278,6 +1661,7 @@ function _reAddAllLayers() {
       _addLayerOnMap(layer.name)
     }
   }
+  scheduleTerritorySurfaceRebuild()
 }
 
 // -------- Zones (drawn regions) --------
@@ -2315,6 +2699,10 @@ onBeforeUnmount(() => {
     clearTimeout(_homeFitTimer)
     _homeFitTimer = null
   }
+  if (territoryRebuildFrame) {
+    window.cancelAnimationFrame(territoryRebuildFrame)
+    territoryRebuildFrame = 0
+  }
   if (unsubscribeFeatures) unsubscribeFeatures()
   if (unsubscribeZones) unsubscribeZones()
   if (unsubscribeZoneTags) unsubscribeZoneTags()
@@ -2351,6 +2739,10 @@ watch(
     heatmap_intensity_max: l.heatmap_intensity_max ?? null,
     heatmap_opacity: l.heatmap_opacity ?? null,
     heatmap_ramp_json: l.heatmap_ramp_json || '',
+    territory_enabled: !!(l.territory_enabled || l.style?.territory_enabled),
+    territory_color: l.territory_color || l.style?.territory_color || '',
+    territory_opacity: l.territory_opacity ?? l.style?.territory_opacity ?? null,
+    territory_padding_meters: l.territory_padding_meters ?? l.style?.territory_padding_meters ?? null,
     iconVersion: iconStore.version,
   })),
   () => {

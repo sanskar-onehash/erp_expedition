@@ -39,6 +39,10 @@
   "stroke_color",
   "stroke_width",
   "fill_opacity",
+  "territory_enabled",
+  "territory_color",
+  "territory_opacity",
+  "territory_padding_meters",
   "radius_enabled",
   "radius_field",
   "radius_meters",
@@ -273,6 +277,34 @@
    "fieldtype": "Float",
    "label": "Fill Opacity",
    "default": "0.6"
+  },
+  {
+   "fieldname": "territory_enabled",
+   "fieldtype": "Check",
+   "label": "Map Coloring",
+   "default": "0",
+   "description": "Draw a translucent territory background behind this layer's pins."
+  },
+  {
+   "fieldname": "territory_color",
+   "fieldtype": "Color",
+   "depends_on": "eval:doc.territory_enabled",
+   "label": "Map Color",
+   "description": "Leave empty to use a lighter shade of the pin color."
+  },
+  {
+   "fieldname": "territory_opacity",
+   "fieldtype": "Float",
+   "depends_on": "eval:doc.territory_enabled",
+   "label": "Map Color Opacity",
+   "default": "0.18"
+  },
+  {
+   "fieldname": "territory_padding_meters",
+   "fieldtype": "Int",
+   "depends_on": "eval:doc.territory_enabled",
+   "label": "Map Color Spread (meters)",
+   "default": "2500"
   },
   {
    "fieldname": "radius_enabled",

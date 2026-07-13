@@ -1126,6 +1126,8 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
         entry = {}
         if isinstance(cfg.get("color"), str) and cfg["color"].startswith("#"):
             entry["color"] = cfg["color"]
+        if isinstance(cfg.get("territory_color"), str) and cfg["territory_color"].startswith("#"):
+            entry["territory_color"] = cfg["territory_color"]
         if isinstance(cfg.get("icon"), str) and cfg["icon"]:
             entry["icon"] = cfg["icon"]
         if isinstance(cfg.get("label"), str):
@@ -1175,6 +1177,8 @@ def _coerce_grouping_rules(raw: str | dict | None) -> dict:
             item["label"] = band["label"]
         if isinstance(band.get("color"), str) and band["color"].startswith("#"):
             item["color"] = band["color"]
+        if isinstance(band.get("territory_color"), str) and band["territory_color"].startswith("#"):
+            item["territory_color"] = band["territory_color"]
         if isinstance(band.get("icon"), str) and band["icon"]:
             item["icon"] = band["icon"]
         bands.append(item)
@@ -1288,6 +1292,8 @@ def _resolve_multi_group_style(
             continue
         if isinstance(override.get("color"), str) and override.get("color"):
             effective["color"] = override["color"]
+        if isinstance(override.get("territory_color"), str) and override.get("territory_color"):
+            effective["territory_color"] = override["territory_color"]
         if isinstance(override.get("icon"), str):
             effective["icon"] = override["icon"]
         if isinstance(override.get("label"), str) and override.get("label"):
@@ -1300,6 +1306,7 @@ def _resolve_multi_group_style(
         "label": " / ".join(path_values),
         "values": group_values,
         "color": effective.get("color") or "",
+        "territory_color": effective.get("territory_color") or "",
         "icon": effective.get("icon") or "",
     }
 
@@ -1348,7 +1355,7 @@ def _resolve_group_band(value: Any, rules: dict) -> tuple[str | None, dict | Non
         if max_value is not None and comparable >= max_value:
             continue
         return str(band["key"]), {
-            k: band[k] for k in ("color", "icon", "label") if band.get(k)
+            k: band[k] for k in ("color", "territory_color", "icon", "label") if band.get(k)
         }
     return "__unmatched", {"label": "Other"}
 
@@ -1491,6 +1498,7 @@ def _virtual_group_style(
     override = group_config.get(str(key)) if isinstance(group_config, dict) else None
     return {
         "color": (override or {}).get("color") or _auto_group_color(key),
+        "territory_color": (override or {}).get("territory_color") or "",
         "icon": (override or {}).get("icon") if override and "icon" in override else (layer_icon or ""),
         "label": (override or {}).get("label") or label,
     }
@@ -1545,6 +1553,8 @@ def _virtual_groups_for_layer(
                     continue
                 if override.get("color"):
                     style["color"] = override["color"]
+                if override.get("territory_color"):
+                    style["territory_color"] = override["territory_color"]
                 if "icon" in override:
                     style["icon"] = override.get("icon") or ""
                 if override.get("label"):
@@ -1564,6 +1574,7 @@ def _virtual_groups_for_layer(
                 "label": label,
                 "style": {
                     "color": band.get("color") or _auto_group_color(key),
+                    "territory_color": band.get("territory_color") or "",
                     "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
                 },
             })
@@ -1588,7 +1599,7 @@ def _virtual_groups_for_layer(
             continue
         seen.add(key)
         style = _virtual_group_style(key, key, layer_doc.color, layer_doc.icon, group_config)
-        out.append({"key": key, "label": style["label"], "style": {"color": style["color"], "icon": style["icon"]}})
+        out.append({"key": key, "label": style["label"], "style": {"color": style["color"], "territory_color": style.get("territory_color") or "", "icon": style["icon"]}})
     return out
 
 
@@ -1600,7 +1611,7 @@ def _style_for_virtual_group_key(
     multi_grouping: dict,
 ) -> dict:
     if not group_key:
-        return {"color": layer_doc.color, "icon": layer_doc.icon}
+        return {"color": layer_doc.color, "territory_color": getattr(layer_doc, "territory_color", "") or "", "icon": layer_doc.icon}
     if multi_grouping:
         parts = str(group_key).split(GROUP_PATH_SEPARATOR)
         groups = multi_grouping.get("groups") or {}
@@ -1611,6 +1622,8 @@ def _style_for_virtual_group_key(
                 continue
             if override.get("color"):
                 style["color"] = override["color"]
+            if override.get("territory_color"):
+                style["territory_color"] = override["territory_color"]
             if "icon" in override:
                 style["icon"] = override.get("icon") or ""
         return style
@@ -1620,9 +1633,10 @@ def _style_for_virtual_group_key(
                 continue
             return {
                 "color": band.get("color") or _auto_group_color(group_key),
+                "territory_color": band.get("territory_color") or "",
                 "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
             }
-        return {"color": _auto_group_color(group_key), "icon": layer_doc.icon or ""}
+        return {"color": _auto_group_color(group_key), "territory_color": "", "icon": layer_doc.icon or ""}
     style = _virtual_group_style(
         str(group_key),
         str(group_key),
@@ -1630,7 +1644,7 @@ def _style_for_virtual_group_key(
         layer_doc.icon,
         group_config,
     )
-    return {"color": style["color"], "icon": style["icon"]}
+    return {"color": style["color"], "territory_color": style.get("territory_color") or "", "icon": style["icon"]}
 
 
 def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
@@ -2128,6 +2142,10 @@ def get_features(
                     "size": layer_doc.size,
                     "cluster": layer_doc.cluster,
                     "heatmap": layer_doc.heatmap,
+                    "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
+                    "territory_color": getattr(layer_doc, "territory_color", "") or "",
+                    "territory_opacity": getattr(layer_doc, "territory_opacity", None),
+                    "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
                     "stroke_color": layer_doc.stroke_color,
                     "stroke_width": layer_doc.stroke_width,
                     "fill_opacity": layer_doc.fill_opacity,
@@ -2503,6 +2521,10 @@ def get_features(
             "size": layer_doc.size,
             "cluster": layer_doc.cluster,
             "heatmap": layer_doc.heatmap,
+            "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
+            "territory_color": getattr(layer_doc, "territory_color", "") or "",
+            "territory_opacity": getattr(layer_doc, "territory_opacity", None),
+            "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
             "stroke_color": layer_doc.stroke_color,
             "stroke_width": layer_doc.stroke_width,
             "fill_opacity": layer_doc.fill_opacity,
@@ -2739,6 +2761,10 @@ def get_features(
         "size": layer_doc.size,
         "cluster": layer_doc.cluster,
         "heatmap": layer_doc.heatmap,
+        "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
+        "territory_color": getattr(layer_doc, "territory_color", "") or "",
+        "territory_opacity": getattr(layer_doc, "territory_opacity", None),
+        "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
         "stroke_color": layer_doc.stroke_color,
         "stroke_width": layer_doc.stroke_width,
         "fill_opacity": layer_doc.fill_opacity,
@@ -3209,6 +3235,10 @@ def list_for_map(map_name: str) -> list[dict]:
             "heatmap_intensity_max",
             "heatmap_opacity",
             "heatmap_ramp_json",
+            "territory_enabled",
+            "territory_color",
+            "territory_opacity",
+            "territory_padding_meters",
             "stroke_color",
             "stroke_width",
             "fill_opacity",
@@ -3365,6 +3395,10 @@ def create(
     heatmap_intensity_max: float = 2.5,
     heatmap_opacity: float = 0.75,
     heatmap_ramp_json: str | None = None,
+    territory_enabled: int = 0,
+    territory_color: str | None = None,
+    territory_opacity: float = 0.18,
+    territory_padding_meters: int = 2500,
     radius_enabled: int = 0,
     radius_field: str | None = None,
     radius_meters: int = 5000,
@@ -3430,6 +3464,10 @@ def create(
             "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
             "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
             "heatmap_ramp_json": heatmap_ramp_json or "",
+            "territory_enabled": int(territory_enabled),
+            "territory_color": territory_color or "",
+            "territory_opacity": float(territory_opacity if territory_opacity is not None else 0.18),
+            "territory_padding_meters": int(territory_padding_meters or 2500),
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
             "radius_meters": int(radius_meters),
@@ -3493,6 +3531,10 @@ def update(layer_name: str, **fields) -> dict:
         "heatmap_intensity_max",
         "heatmap_opacity",
         "heatmap_ramp_json",
+        "territory_enabled",
+        "territory_color",
+        "territory_opacity",
+        "territory_padding_meters",
         "stroke_color",
         "stroke_width",
         "fill_opacity",
@@ -4074,6 +4116,10 @@ def _layer_style_dict(layer: dict) -> dict:
         "cluster": layer.get("cluster"),
         "heatmap": layer.get("heatmap"),
         "heatmap_config": _heatmap_config_dict(layer),
+        "territory_enabled": layer.get("territory_enabled"),
+        "territory_color": layer.get("territory_color"),
+        "territory_opacity": layer.get("territory_opacity"),
+        "territory_padding_meters": layer.get("territory_padding_meters"),
         "stroke_color": layer.get("stroke_color"),
         "stroke_width": layer.get("stroke_width"),
         "fill_opacity": layer.get("fill_opacity"),
@@ -4125,6 +4171,10 @@ def _layer_to_dto(doc) -> dict:
         "heatmap_opacity": doc.heatmap_opacity,
         "heatmap_ramp_json": doc.heatmap_ramp_json or "",
         "heatmap_config": _heatmap_config_dict(doc),
+        "territory_enabled": getattr(doc, "territory_enabled", 0),
+        "territory_color": getattr(doc, "territory_color", None) or "",
+        "territory_opacity": getattr(doc, "territory_opacity", None),
+        "territory_padding_meters": getattr(doc, "territory_padding_meters", None),
         "stroke_color": doc.stroke_color,
         "stroke_width": doc.stroke_width,
         "fill_opacity": doc.fill_opacity,
@@ -4153,6 +4203,10 @@ def _layer_to_dto(doc) -> dict:
                 "heatmap_intensity_max": doc.heatmap_intensity_max,
                 "heatmap_opacity": doc.heatmap_opacity,
                 "heatmap_ramp_json": doc.heatmap_ramp_json,
+                "territory_enabled": getattr(doc, "territory_enabled", 0),
+                "territory_color": getattr(doc, "territory_color", None) or "",
+                "territory_opacity": getattr(doc, "territory_opacity", None),
+                "territory_padding_meters": getattr(doc, "territory_padding_meters", None),
                 "stroke_color": doc.stroke_color,
                 "stroke_width": doc.stroke_width,
                 "fill_opacity": doc.fill_opacity,
@@ -4208,6 +4262,10 @@ def create_master(
     heatmap_intensity_max: float = 2.5,
     heatmap_opacity: float = 0.75,
     heatmap_ramp_json: str | None = None,
+    territory_enabled: int = 0,
+    territory_color: str | None = None,
+    territory_opacity: float = 0.18,
+    territory_padding_meters: int = 2500,
     radius_enabled: int = 0,
     radius_field: str | None = None,
     radius_meters: int = 5000,
@@ -4264,6 +4322,10 @@ def create_master(
             "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
             "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
             "heatmap_ramp_json": heatmap_ramp_json or "",
+            "territory_enabled": int(territory_enabled),
+            "territory_color": territory_color or "",
+            "territory_opacity": float(territory_opacity if territory_opacity is not None else 0.18),
+            "territory_padding_meters": int(territory_padding_meters or 2500),
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
             "radius_meters": int(radius_meters),
@@ -4330,6 +4392,10 @@ def list_masters() -> list[dict]:
             "heatmap_intensity_max",
             "heatmap_opacity",
             "heatmap_ramp_json",
+            "territory_enabled",
+            "territory_color",
+            "territory_opacity",
+            "territory_padding_meters",
             "stroke_color",
             "stroke_width",
             "fill_opacity",
@@ -4419,6 +4485,10 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "heatmap_intensity_max": master.heatmap_intensity_max or 2.5,
             "heatmap_opacity": master.heatmap_opacity if master.heatmap_opacity is not None else 0.75,
             "heatmap_ramp_json": master.heatmap_ramp_json or "",
+            "territory_enabled": getattr(master, "territory_enabled", 0),
+            "territory_color": getattr(master, "territory_color", None) or "",
+            "territory_opacity": getattr(master, "territory_opacity", None) if getattr(master, "territory_opacity", None) is not None else 0.18,
+            "territory_padding_meters": getattr(master, "territory_padding_meters", None) or 2500,
             "enabled": 1,
             "filter_json": master.filter_json,
             "stroke_color": master.stroke_color,

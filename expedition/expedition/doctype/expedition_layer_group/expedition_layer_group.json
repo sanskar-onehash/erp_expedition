@@ -8,6 +8,7 @@
  "field_order": [
   "group_value",
   "color",
+  "territory_color",
   "label",
   "icon"
  ],
@@ -25,6 +26,13 @@
    "in_list_view": 1,
    "label": "Color",
    "reqd": 1
+  },
+  {
+   "fieldname": "territory_color",
+   "fieldtype": "Color",
+   "in_list_view": 1,
+   "label": "Map Color",
+   "description": "Optional territory background color for this group. Leave empty to use a lighter shade of the group pin color."
   },
   {
    "fieldname": "label",

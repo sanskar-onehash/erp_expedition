@@ -297,6 +297,7 @@ const treeRows = computed(() => {
       style,
       displayLabel: override.label || row.label,
       colorInheritance: inheritanceLabel(row, 'color'),
+      territoryInheritance: inheritanceLabel(row, 'territory_color'),
       iconInheritance: inheritanceLabel(row, 'icon'),
       triggerIconKey: triggerIconFromStyle(row, style, override),
     }
@@ -629,10 +630,11 @@ function groupOverride(key) {
 }
 
 function effectiveStyle(row) {
-  const style = { color: props.layerColor || '#3B82F6', icon: props.layerIcon || '' }
+  const style = { color: props.layerColor || '#3B82F6', territory_color: '', icon: props.layerIcon || '' }
   for (let i = 0; i < row.values.length; i++) {
     const override = groupOverride(pathKey(row.values.slice(0, i + 1)))
     if (override.color) style.color = override.color
+    if (override.territory_color) style.territory_color = override.territory_color
     if (Object.prototype.hasOwnProperty.call(override, 'icon')) style.icon = override.icon || ''
   }
   return style
@@ -651,7 +653,7 @@ function setGroupProp(key, prop, value) {
   const next = { ...(nextGroups[key] || {}) }
   if (value === '' && prop !== 'icon') delete next[prop]
   else next[prop] = value
-  if (!next.color && !next.icon && !next.label) delete nextGroups[key]
+  if (!next.color && !next.territory_color && !next.icon && !next.label) delete nextGroups[key]
   else nextGroups[key] = next
   localConfig.value = {
     __grouping: { version: 2, levels: levels.value },
@@ -663,7 +665,7 @@ function resetGroupProp(key, prop) {
   const nextGroups = { ...groups.value }
   const next = { ...(nextGroups[key] || {}) }
   delete next[prop]
-  if (!next.color && !next.icon && !next.label) delete nextGroups[key]
+  if (!next.color && !next.territory_color && !next.icon && !next.label) delete nextGroups[key]
   else nextGroups[key] = next
   localConfig.value = {
     __grouping: { version: 2, levels: levels.value },
@@ -710,6 +712,7 @@ function save() {
     if (!value || typeof value !== 'object') continue
     const item = {}
     if (value.color) item.color = value.color
+    if (value.territory_color) item.territory_color = value.territory_color
     if (Object.prototype.hasOwnProperty.call(value, 'icon')) item.icon = value.icon || ''
     if (value.label) item.label = value.label
     if (Object.keys(item).length) cleanGroups[key] = item
@@ -902,6 +905,39 @@ function clearGrouping() {
                       </div>
                     </details>
                     <button type="button" class="agm__reset" @click="resetGroupProp(row.key, 'color')">Reset</button>
+                  </div>
+                  <div class="agm__prop">
+                    <span>{{ row.territoryInheritance }}</span>
+                    <details class="agm__color-menu">
+                      <summary
+                        class="agm__color-trigger agm__color-trigger--territory"
+                        :style="{ background: row.override.territory_color || row.style.territory_color || row.style.color }"
+                        :title="'Map color for ' + row.fullLabel"
+                      />
+                      <div class="agm__color-popover">
+                        <button
+                          type="button"
+                          class="agm__reset agm__reset--wide"
+                          @click="resetGroupProp(row.key, 'territory_color'); closeRowMenu($event)"
+                        >Auto from pin color</button>
+                        <button
+                          v-for="color in colorPalette"
+                          :key="'territory-' + color"
+                          type="button"
+                          class="agm__color-chip"
+                          :class="{ 'agm__color-chip--active': row.override.territory_color === color }"
+                          :style="{ background: color }"
+                          @click="setGroupProp(row.key, 'territory_color', color); closeRowMenu($event)"
+                        />
+                        <input
+                          class="agm__input agm__color-code"
+                          :value="row.override.territory_color || ''"
+                          placeholder="Auto"
+                          @input="setGroupProp(row.key, 'territory_color', $event.target.value)"
+                        />
+                      </div>
+                    </details>
+                    <button type="button" class="agm__reset" @click="resetGroupProp(row.key, 'territory_color')">Reset</button>
                   </div>
                   <div class="agm__prop">
                     <span>{{ row.iconInheritance }}</span>
@@ -1436,6 +1472,14 @@ function clearGrouping() {
   border: 2px solid rgba(255, 255, 255, 0.82);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   cursor: pointer;
+}
+.agm__color-trigger--territory {
+  border-style: dashed;
+  opacity: 0.82;
+}
+.agm__reset--wide {
+  grid-column: 1 / -1;
+  min-height: 24px;
 }
 .agm__color-popover {
   position: absolute;

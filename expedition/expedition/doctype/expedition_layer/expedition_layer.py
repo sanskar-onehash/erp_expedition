@@ -93,6 +93,8 @@ class ExpeditionLayer(Document):
             entry = {}
             if g.color:
                 entry["color"] = g.color
+            if getattr(g, "territory_color", None):
+                entry["territory_color"] = g.territory_color
             if g.icon:
                 entry["icon"] = g.icon
             if g.label:

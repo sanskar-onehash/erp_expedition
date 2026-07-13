@@ -1,8 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { openDeskDoc } from '../lib/desk.js'
+import { call } from '../api/client.js'
 
 defineEmits(['close'])
 
@@ -85,7 +86,40 @@ const metricKeys = computed(() => {
   return [...keys].sort((a, b) => metricLabel(a).localeCompare(metricLabel(b)))
 })
 
-const tableMinWidth = computed(() => `${560 + metricKeys.value.length * 116}px`)
+const layerColumns = ref({})
+
+watch(visibleLayerOptions, {
+  immediate: true,
+  handler: async (options) => {
+    if (!options) return
+    for (const opt of options) {
+      const layer = layerByName.value.get(opt.name)
+      if (layer && layer.source_doctype && !layerColumns.value[opt.name]) {
+        try {
+          const fields = await call('expedition.api.layer.get_list_view_fields', {
+            source_doctype: layer.source_doctype
+          })
+          layerColumns.value[opt.name] = fields || []
+        } catch (e) {
+          console.warn('[expedition] failed to load list view fields for', layer.source_doctype, e)
+        }
+      }
+    }
+  }
+})
+
+const currentColumns = computed(() => {
+  if (activeLayer.value) {
+    return layerColumns.value[activeLayer.value] || []
+  }
+  return [
+    { fieldname: 'city', label: 'Location' },
+    { fieldname: 'modified_by', label: 'Modified By' },
+    { fieldname: 'modified', label: 'Modified' }
+  ]
+})
+
+const tableMinWidth = computed(() => `${360 + currentColumns.value.length * 110 + metricKeys.value.length * 116}px`)
 
 const metricRowCount = computed(() =>
   filteredRows.value.filter((row) => Object.keys(row.metrics || {}).length).length
@@ -132,8 +166,41 @@ function sortLabel(key) {
   if (key === 'record') return 'Record'
   if (key === 'layer') return 'Layer'
   if (key === 'location') return 'Location'
+  if (key.startsWith('field:')) {
+    const fieldname = key.slice(6)
+    for (const cols of Object.values(layerColumns.value)) {
+      const found = cols.find(c => c.fieldname === fieldname)
+      if (found) return found.label
+    }
+    if (fieldname === 'modified_by') return 'Modified By'
+    if (fieldname === 'modified') return 'Modified'
+    return fieldname.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  }
   if (key.startsWith('metric:')) return metricLabel(key.slice(7))
   return key
+}
+
+function formatCellValue(row, col) {
+  if (col.fieldname === 'city') return row.city || '-'
+  const val = row.props[col.fieldname]
+  if (val == null || val === '') return '-'
+  if (col.fieldtype === 'Datetime' || col.fieldname === 'modified') {
+    try {
+      const d = new Date(val)
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      }
+    } catch (e) {}
+  }
+  if (col.fieldtype === 'Date') {
+    try {
+      const d = new Date(val)
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      }
+    } catch (e) {}
+  }
+  return String(val)
 }
 
 function metricNumber(value) {
@@ -148,6 +215,15 @@ function compareText(a, b) {
 function compareRows(a, b, key) {
   if (key === 'layer') return compareText(a.layer.title || a.layer.name, b.layer.title || b.layer.name)
   if (key === 'location') return compareText(a.city, b.city)
+  if (key.startsWith('field:')) {
+    const fieldname = key.slice(6)
+    const av = a.props[fieldname]
+    const bv = b.props[fieldname]
+    const an = metricNumber(av)
+    const bn = metricNumber(bv)
+    if (an != null && bn != null) return an - bn
+    return compareText(av, bv)
+  }
   if (key.startsWith('metric:')) {
     const metric = key.slice(7)
     const av = metricNumber(a.metrics?.[metric])
@@ -167,7 +243,7 @@ function setSort(key) {
     return
   }
   sortKey.value = key
-  sortDir.value = key.startsWith('metric:') ? 'desc' : 'asc'
+  sortDir.value = (key.startsWith('metric:') || key === 'field:modified') ? 'desc' : 'asc'
 }
 
 function focusTopMetric() {
@@ -313,10 +389,10 @@ function onRowKeydown(event, row) {
                 <small v-if="sortKey === 'layer'">{{ sortDir === 'asc' ? '↑' : '↓' }}</small>
               </button>
             </th>
-            <th>
-              <button type="button" class="elv__sort" @click="setSort('location')">
-                <span>Location</span>
-                <small v-if="sortKey === 'location'">{{ sortDir === 'asc' ? '↑' : '↓' }}</small>
+            <th v-for="col in currentColumns" :key="col.fieldname">
+              <button type="button" class="elv__sort" @click="setSort('field:' + col.fieldname)">
+                <span>{{ col.label }}</span>
+                <small v-if="sortKey === 'field:' + col.fieldname">{{ sortDir === 'asc' ? '↑' : '↓' }}</small>
               </button>
             </th>
             <th v-for="key in metricKeys" :key="key">
@@ -345,18 +421,24 @@ function onRowKeydown(event, row) {
               <span class="elv__layer-dot" :style="{ background: layerColor(row.layer) }" />
               <span>{{ row.layer.title || row.layer.name }}</span>
             </td>
-            <td>{{ row.city || '-' }}</td>
+            <td v-for="col in currentColumns" :key="col.fieldname">
+              {{ formatCellValue(row, col) }}
+            </td>
             <td v-for="key in metricKeys" :key="key" class="elv__number">{{ formatMetric(row.metrics?.[key]) }}</td>
             <td class="elv__action-cell">
               <button
                 type="button"
-                class="elv__open-btn"
+                class="elv__open-icon-btn"
                 :disabled="!(row.props._doctype || row.layer.source_doctype) || !(row.props._name || row.feature.id)"
                 title="Open in Desk"
                 :aria-label="'Open ' + (row.label || row.props._name || 'record') + ' in Desk'"
                 @click.stop="openRow(row)"
               >
-                Open
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                  <polyline points="15 3 21 3 21 9"></polyline>
+                  <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
               </button>
             </td>
           </tr>
@@ -369,7 +451,7 @@ function onRowKeydown(event, row) {
 
 <style scoped>
 .elv {
-  width: min(646px, calc(100vw - 38px));
+  width: min(480px, calc(100vw - 38px));
   height: 100%;
   max-height: none;
   display: flex;
@@ -662,29 +744,33 @@ function onRowKeydown(event, row) {
 }
 .elv__action-head,
 .elv__action-cell {
-  width: 74px;
-  text-align: right;
+  width: 52px;
+  text-align: center;
 }
-.elv__open-btn {
-  min-width: 54px;
+.elv__open-icon-btn {
+  width: 26px;
   height: 26px;
-  border: 1px solid rgba(147, 197, 253, 0.22);
-  border-radius: 7px;
-  background: rgba(59, 130, 246, 0.13);
-  color: rgba(219, 234, 254, 0.92);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 680;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(244, 247, 251, 0.65);
   cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+  padding: 0;
 }
-.elv__open-btn:hover {
-  border-color: rgba(147, 197, 253, 0.5);
-  background: rgba(59, 130, 246, 0.22);
+.elv__open-icon-btn:hover {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.15);
   color: #fff;
 }
-.elv__open-btn:disabled {
-  opacity: 0.44;
-  cursor: default;
+.elv__open-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  border-color: transparent;
+  background: transparent;
 }
 .elv__empty {
   padding: 24px 8px 28px;

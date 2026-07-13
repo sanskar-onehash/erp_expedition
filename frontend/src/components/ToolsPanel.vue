@@ -16,6 +16,7 @@ import { useInsightsStore } from '../state/insights.js'
 import { useLayersStore } from '../state/layers.js'
 import { call } from '../api/client.js'
 import { viewportBoundsForServer } from '../lib/geo.js'
+import UiNumberInput from './ui/UiNumberInput.vue'
 
 const mapStore = useMapStore()
 const ui = useUiStore()
@@ -758,16 +759,18 @@ function onInsightClick(ins) {
               class="tp__slider"
               aria-label="Pitch degrees"
             />
-						<div>
-							<input
-								type="number" min="0" max="80" step="1"
-								:value="ui.pitchDegrees"
-								@change="(e) => ui.setPitch(e.target.value)"
-								class="tp__num"
-								aria-label="Pitch degrees (type)"
-							/>
-							<span class="tp__row-suffix">°</span>
-						</div>
+            <div class="tp__num-wrap">
+              <UiNumberInput
+                :model-value="ui.pitchDegrees"
+                min="0"
+                max="80"
+                step="1"
+                compact
+                aria-label="Pitch degrees (type)"
+                @update:model-value="value => ui.setPitch(value)"
+              />
+              <span class="tp__row-suffix">°</span>
+            </div>
           </div>
           <p class="tp__hint">Pins extrude as 3D columns while tilt is above 0°. Each layer's height defaults to 200m; pick a numeric field in the layer row for per-feature heights.</p>
         </div>

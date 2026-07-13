@@ -19,6 +19,9 @@ import { useIconsStore } from '../state/icons.js'
 import { ICON_PATHS } from '../api/icons.js'
 import FilterBuilder from './FilterBuilder.vue'
 import AdvancedGroupingModal from './AdvancedGroupingModal.vue'
+import UiColorInput from './ui/UiColorInput.vue'
+import UiNumberInput from './ui/UiNumberInput.vue'
+import UiSelect from './ui/UiSelect.vue'
 import { parseFilterRows, serializeFilterRows } from '../lib/filters.js'
 import { RAMP_PRESETS, serializeRamp } from '../api/heatmap.js'
 
@@ -541,38 +544,6 @@ function normalizeColorText(value) {
 function safeLayerColor(value, fallback = '#3B82F6') {
   const color = normalizeColorText(value)
   return isValidCssColor(color) ? color : fallback
-}
-
-function expandHexColor(value) {
-  const color = normalizeColorText(value)
-  if (!HEX_COLOR_RE.test(color)) return ''
-  const hex = color.slice(1)
-  if (hex.length === 3 || hex.length === 4) {
-    return '#' + hex.slice(0, 3).split('').map((c) => c + c).join('')
-  }
-  return '#' + hex.slice(0, 6)
-}
-
-function componentToHex(value) {
-  return Number(value).toString(16).padStart(2, '0')
-}
-
-function colorPickerValue(value) {
-  const hex = expandHexColor(value)
-  if (hex) return hex
-  const rgb = normalizeColorText(value).match(RGB_COLOR_RE)
-  if (rgb) {
-    return `#${componentToHex(rgb[1])}${componentToHex(rgb[2])}${componentToHex(rgb[3])}`
-  }
-  return '#3B82F6'
-}
-
-function setPresetColor(value) {
-  form.value.color = value
-}
-
-function isActivePreset(value) {
-  return colorPickerValue(form.value.color).toLowerCase() === value.toLowerCase()
 }
 
 function isSvgFile(file) {
@@ -1201,20 +1172,10 @@ function optionLabel(options, value, fallback = 'None') {
   return option?.label || fallback
 }
 
-function chooseFormOption(field, value) {
-  form.value[field] = value
-  fieldPickerOpen.value = ''
-}
-
 async function chooseLocationSource(value) {
   form.value.location_source = value
   fieldPickerOpen.value = ''
   await onLocationSourceChange()
-}
-
-function chooseUploadScope(value) {
-  uploadScope.value = value
-  fieldPickerOpen.value = ''
 }
 
 function chooseHeatmapRamp(key) {
@@ -1640,12 +1601,6 @@ async function loadMetricFields(metric) {
   }
 }
 
-function openMetricFieldPicker(index, kind, metric) {
-  const key = `metric_field:${index}:${kind}`
-  fieldPickerOpen.value = fieldPickerOpen.value === key ? '' : key
-  if (fieldPickerOpen.value === key) loadMetricFields(metric)
-}
-
 function metricFieldChoiceLabel(metric, fieldname, fallback) {
   if (metricFieldsBusy(metric)) return 'Loading fields...'
   const field = metricFields(metric).find((f) => f.fieldname === fieldname)
@@ -2027,47 +1982,32 @@ function close() {
 
         <div class="le__field le__link-field">
           <span class="le__label">Location source</span>
-          <button
-            type="button"
-            class="le__field-select"
-            @click="fieldPickerOpen = fieldPickerOpen === 'location_source' ? '' : 'location_source'"
-          >
-            <span>{{ optionLabel(LOCATION_SOURCE_OPTIONS, form.location_source, 'Direct fields') }}</span>
-            <span class="le__chevron">⌄</span>
-          </button>
-          <div v-if="fieldPickerOpen === 'location_source'" class="le__option-pop">
-            <button
-              v-for="option in LOCATION_SOURCE_OPTIONS"
-              :key="option.v"
-              type="button"
-              class="le__option"
-              :data-active="form.location_source === option.v"
-              @mousedown.prevent="chooseLocationSource(option.v)"
-            >
-              <span>{{ option.label }}</span>
-              <small>{{ option.hint }}</small>
-            </button>
-          </div>
+          <UiSelect
+            :model-value="form.location_source"
+            :options="LOCATION_SOURCE_OPTIONS"
+            value-key="v"
+            label-key="label"
+            meta-key="hint"
+            placeholder="Direct fields"
+            :selected-label="optionLabel(LOCATION_SOURCE_OPTIONS, form.location_source, 'Direct fields')"
+            @select="option => chooseLocationSource(option.v)"
+          />
         </div>
 
         <div v-if="form.location_source === 'Linked DocType'" class="le__field le__link-field">
           <span class="le__label">Location link field</span>
-          <button
-            type="button"
-            class="le__field-select"
+          <UiSelect
+            :model-value="form.location_link_field"
+            :options="linkFields"
+            value-key="fieldname"
+            label-key="label"
+            meta-key="fieldname"
             :disabled="!form.source_doctype || sourceFieldsLoading"
-            @click="fieldPickerOpen = fieldPickerOpen === 'location_link_field' ? '' : 'location_link_field'"
-          >
-            <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.location_link_field, linkFields) }}</span>
-            <span class="le__chevron">⌄</span>
-          </button>
-          <div v-if="fieldPickerOpen === 'location_link_field'" class="le__option-pop">
-            <button v-for="f in linkFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLocationLinkField(f.fieldname)">
-              <span>{{ f.label }}</span>
-              <small>{{ f.fieldname }} → {{ f.options }}</small>
-            </button>
-            <p v-if="!linkFields.length" class="le__option-empty">No Link fields found.</p>
-          </div>
+            :placeholder="sourceFieldsLoading ? 'Loading fields...' : 'Choose link field'"
+            :selected-label="sourceFieldsLoading ? 'Loading fields...' : fieldChoiceLabel(form.location_link_field, linkFields)"
+            empty-text="No Link fields found."
+            @select="field => chooseLocationLinkField(field.fieldname)"
+          />
         </div>
 
         <div v-if="form.location_source === 'Reverse Linked DocType' || form.location_source === 'Dynamic Link DocType'" class="le__field le__link-field">
@@ -2101,62 +2041,52 @@ function close() {
 
         <div v-if="form.location_source === 'Reverse Linked DocType'" class="le__field le__link-field">
           <span class="le__label">Reverse link field</span>
-          <button
-            type="button"
-            class="le__field-select"
+          <UiSelect
+            :model-value="form.location_reverse_link_field"
+            :options="reverseLinkFields"
+            value-key="fieldname"
+            label-key="label"
+            meta-key="fieldname"
             :disabled="!form.location_doctype || locationFieldsLoading"
-            @click="fieldPickerOpen = fieldPickerOpen === 'location_reverse_link_field' ? '' : 'location_reverse_link_field'"
-          >
-            <span>{{ locationFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.location_reverse_link_field, reverseLinkFields) }}</span>
-            <span class="le__chevron">⌄</span>
-          </button>
-          <div v-if="fieldPickerOpen === 'location_reverse_link_field'" class="le__option-pop">
-            <button v-for="f in reverseLinkFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseReverseLinkField(f.fieldname)">
-              <span>{{ f.label }}</span>
-              <small>{{ f.fieldname }} → {{ f.options }}</small>
-            </button>
-            <p v-if="!reverseLinkFields.length" class="le__option-empty">No Link fields point to the source DocType.</p>
-          </div>
+            :placeholder="locationFieldsLoading ? 'Loading fields...' : 'Choose reverse link'"
+            :selected-label="locationFieldsLoading ? 'Loading fields...' : fieldChoiceLabel(form.location_reverse_link_field, reverseLinkFields)"
+            empty-text="No Link fields point to the source DocType."
+            @select="field => chooseReverseLinkField(field.fieldname)"
+          />
         </div>
 
         <div v-if="isCreate" class="le__row">
           <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lat field</span>
-            <button
-              type="button"
-              class="le__field-select"
+            <UiSelect
+              :model-value="form.latitude_field"
+              :options="activeCoordinateFields"
+              value-key="fieldname"
+              label-key="label"
+              meta-key="fieldname"
+              compact
               :disabled="!form.source_doctype || activeCoordinateLoading"
-              @click="fieldPickerOpen = fieldPickerOpen === 'latitude_field' ? '' : 'latitude_field'"
-            >
-              <span>{{ activeCoordinateLoading ? 'Loading fields…' : fieldChoiceLabel(form.latitude_field, activeCoordinateFields) }}</span>
-              <span class="le__chevron">⌄</span>
-            </button>
-            <div v-if="fieldPickerOpen === 'latitude_field'" class="le__option-pop">
-              <button v-for="f in activeCoordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('latitude_field', f.fieldname)">
-                <span>{{ f.label }}</span>
-                <small>{{ f.fieldname }}</small>
-              </button>
-              <p v-if="!activeCoordinateFields.length" class="le__option-empty">No Float fields found.</p>
-            </div>
+              :placeholder="activeCoordinateLoading ? 'Loading fields...' : 'Choose lat field'"
+              :selected-label="activeCoordinateLoading ? 'Loading fields...' : fieldChoiceLabel(form.latitude_field, activeCoordinateFields)"
+              empty-text="No Float fields found."
+              @select="field => chooseLayerField('latitude_field', field.fieldname)"
+            />
           </div>
           <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lng field</span>
-            <button
-              type="button"
-              class="le__field-select"
+            <UiSelect
+              :model-value="form.longitude_field"
+              :options="activeCoordinateFields"
+              value-key="fieldname"
+              label-key="label"
+              meta-key="fieldname"
+              compact
               :disabled="!form.source_doctype || activeCoordinateLoading"
-              @click="fieldPickerOpen = fieldPickerOpen === 'longitude_field' ? '' : 'longitude_field'"
-            >
-              <span>{{ activeCoordinateLoading ? 'Loading fields…' : fieldChoiceLabel(form.longitude_field, activeCoordinateFields) }}</span>
-              <span class="le__chevron">⌄</span>
-            </button>
-            <div v-if="fieldPickerOpen === 'longitude_field'" class="le__option-pop">
-              <button v-for="f in activeCoordinateFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('longitude_field', f.fieldname)">
-                <span>{{ f.label }}</span>
-                <small>{{ f.fieldname }}</small>
-              </button>
-              <p v-if="!activeCoordinateFields.length" class="le__option-empty">No Float fields found.</p>
-            </div>
+              :placeholder="activeCoordinateLoading ? 'Loading fields...' : 'Choose lng field'"
+              :selected-label="activeCoordinateLoading ? 'Loading fields...' : fieldChoiceLabel(form.longitude_field, activeCoordinateFields)"
+              empty-text="No Float fields found."
+              @select="field => chooseLayerField('longitude_field', field.fieldname)"
+            />
           </div>
         </div>
 
@@ -2188,48 +2118,30 @@ function close() {
         <!-- Label field (uses source row's text) -->
         <div class="le__field le__link-field">
           <span class="le__label">Label field <span class="le__hint">(used as the pin popup title)</span></span>
-          <button
-            type="button"
-            class="le__field-select"
+          <UiSelect
+            :model-value="form.label_field"
+            :options="[{ fieldname: '', label: 'None', meta: 'Use default title' }, ...sourceFields]"
+            value-key="fieldname"
+            label-key="label"
+            meta-key="fieldname"
             :disabled="!form.source_doctype || sourceFieldsLoading"
-            @click="fieldPickerOpen = fieldPickerOpen === 'label_field' ? '' : 'label_field'"
-          >
-            <span>{{ sourceFieldsLoading ? 'Loading fields…' : fieldChoiceLabel(form.label_field) }}</span>
-            <span class="le__chevron">⌄</span>
-          </button>
-          <div v-if="fieldPickerOpen === 'label_field'" class="le__option-pop">
-            <button type="button" class="le__option" @mousedown.prevent="chooseLayerField('label_field', '')">
-              <span>None</span>
-              <small>Use default title</small>
-            </button>
-            <button v-for="f in sourceFields" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="chooseLayerField('label_field', f.fieldname)">
-              <span>{{ f.label }}</span>
-              <small>{{ f.fieldname }}</small>
-            </button>
-          </div>
+            :placeholder="sourceFieldsLoading ? 'Loading fields...' : 'Choose label field'"
+            :selected-label="sourceFieldsLoading ? 'Loading fields...' : fieldChoiceLabel(form.label_field)"
+            @select="field => chooseLayerField('label_field', field.fieldname)"
+          />
         </div>
 
         <!-- Color + Size -->
         <div class="le__row">
           <div class="le__field le__field--half">
             <span class="le__label">Color</span>
-            <div class="le__color-row le__color-row--custom">
-              <span class="le__color" :style="{ background: safeLayerColor(form.color) }" aria-hidden="true" />
-              <input
-                v-model="form.color"
-                class="le__input le__color-code"
-                :class="{ 'le__input--invalid': colorInputInvalid }"
-                type="text"
-                spellcheck="false"
-                placeholder="#3B82F6 or rgba(59,130,246,0.8)"
-                @blur="form.color = normalizeColorText(form.color)"
-              />
-              <div class="le__color-presets">
-                <button v-for="c in COLOR_PRESETS" :key="c" type="button"
-                        class="le__color-chip" :class="{ 'le__color-chip--active': isActivePreset(c) }"
-                        :style="{ background: c }" @click="setPresetColor(c)" />
-              </div>
-            </div>
+            <UiColorInput
+              v-model="form.color"
+              :presets="COLOR_PRESETS"
+              :invalid="colorInputInvalid"
+              placeholder="#3B82F6 or rgba(59,130,246,0.8)"
+              @blur="form.color = normalizeColorText(form.color)"
+            />
           </div>
           <div class="le__field le__field--half">
             <span class="le__label">Size</span>
@@ -2243,7 +2155,7 @@ function close() {
         <div class="le__row">
           <label class="le__field le__field--half">
             <span class="le__label">Show pins from zoom</span>
-            <input v-model.number="form.pin_min_zoom" class="le__input le__input--sm" type="number" min="0" max="24" step="0.5" />
+            <UiNumberInput v-model="form.pin_min_zoom" min="0" max="24" step="0.5" compact />
           </label>
           <p class="le__field-note">Use 0 to keep pins visible while zoomed out.</p>
         </div>
@@ -2265,26 +2177,22 @@ function close() {
             <div class="le__row">
               <label class="le__field le__field--half">
                 <span class="le__label">Map color</span>
-                <div class="le__color-row le__color-row--compact">
-                  <span class="le__color" :style="{ background: form.territory_color || safeLayerColor(form.color) }" aria-hidden="true" />
-                  <input
-                    v-model="form.territory_color"
-                    class="le__input le__input--sm"
-                    type="text"
-                    spellcheck="false"
-                    placeholder="Auto from pin color"
-                    @blur="form.territory_color = normalizeColorText(form.territory_color)"
-                  />
-                </div>
+                <UiColorInput
+                  v-model="form.territory_color"
+                  :presets="COLOR_PRESETS"
+                  compact
+                  placeholder="Auto from pin color"
+                  @blur="form.territory_color = normalizeColorText(form.territory_color)"
+                />
               </label>
               <label class="le__field le__field--half">
                 <span class="le__label">Spread meters</span>
-                <input v-model.number="form.territory_padding_meters" class="le__input le__input--sm" type="number" min="100" max="50000" step="100" />
+                <UiNumberInput v-model="form.territory_padding_meters" min="100" max="50000" step="100" compact />
               </label>
             </div>
             <label class="le__field">
               <span class="le__label">Map color opacity</span>
-              <input v-model.number="form.territory_opacity" class="le__input le__input--sm" type="number" min="0" max="1" step="0.05" />
+              <UiNumberInput v-model="form.territory_opacity" min="0" max="1" step="0.05" compact />
             </label>
           </template>
         </div>
@@ -2325,15 +2233,14 @@ function close() {
             <div v-if="iconStore.canCreate" class="le__icon-manager">
               <input v-model="uploadTitle" class="le__input le__input--sm" type="text" placeholder="Icon name" />
               <div v-if="iconStore.canManageGlobal" class="le__field le__field--scope le__link-field">
-                <button type="button" class="le__field-select le__field-select--xs" @click="fieldPickerOpen = fieldPickerOpen === 'upload_scope' ? '' : 'upload_scope'">
-                  <span>{{ optionLabel(UPLOAD_SCOPE_OPTIONS, uploadScope, 'Personal') }}</span>
-                  <span class="le__chevron">⌄</span>
-                </button>
-                <div v-if="fieldPickerOpen === 'upload_scope'" class="le__option-pop">
-                  <button v-for="option in UPLOAD_SCOPE_OPTIONS" :key="option.v" type="button" class="le__option" :data-active="uploadScope === option.v" @mousedown.prevent="chooseUploadScope(option.v)">
-                    <span>{{ option.label }}</span>
-                  </button>
-                </div>
+                <UiSelect
+                  v-model="uploadScope"
+                  :options="UPLOAD_SCOPE_OPTIONS"
+                  value-key="v"
+                  label-key="label"
+                  :searchable="false"
+                  compact
+                />
               </div>
               <label class="le__btn le__btn--ghost" :class="{ 'le__btn--disabled': iconBusy }">
                 Upload Image
@@ -2400,34 +2307,16 @@ function close() {
             </div>
             <button type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">Edit groups</button>
           </div>
-          <details v-if="!isAdvancedGrouping" class="le__group-field-menu">
-            <summary class="le__field-picker-trigger">
-              <span>{{ selectedGroupFieldLabel }}</span>
-              <span class="le__chevron">⌄</span>
-            </summary>
-            <div class="le__field-picker">
-              <button
-                type="button"
-                class="le__field-option"
-                :data-active="!form.group_by_field"
-                @click="chooseGroupField('')"
-              >
-                <span>None</span>
-                <small>No grouping</small>
-              </button>
-              <button
-                v-for="f in groupFieldOptions"
-                :key="f.fieldname"
-                type="button"
-                class="le__field-option"
-                :data-active="form.group_by_field === f.fieldname"
-                @click="chooseGroupField(f.fieldname)"
-              >
-                <span>{{ f.label }}</span>
-                <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
-              </button>
-            </div>
-          </details>
+          <UiSelect
+            v-if="!isAdvancedGrouping"
+            v-model="form.group_by_field"
+            :options="[{ fieldname: '', label: 'None', meta: 'No grouping' }, ...groupFieldOptions]"
+            value-key="fieldname"
+            label-key="label"
+            meta-key="fieldname"
+            :selected-label="selectedGroupFieldLabel"
+            @update:model-value="chooseGroupField"
+          />
 
           <div v-if="!isAdvancedGrouping && form.group_by_field && groupBySupportsBands" class="le__group-mode">
             <button
@@ -2454,20 +2343,12 @@ function close() {
                   :title="'Color for ' + (form.group_config[String(band.key)]?.label || band.label || band.key)"
                 />
                 <div class="le__group-color-popover">
-                  <button
-                    v-for="c in GROUP_PALETTE"
-                    :key="c"
-                    type="button"
-                    class="le__color-chip"
-                    :class="{ 'le__color-chip--active': (form.group_config[String(band.key)]?.color || '') === c }"
-                    :style="{ background: c }"
-                    @click="setGroupColor(band.key, c)"
-                  />
-                  <input
-                    class="le__input le__input--xs le__group-color-code"
-                    :value="form.group_config[String(band.key)]?.color || GROUP_PALETTE[i % GROUP_PALETTE.length]"
-                    @input="e => setGroupColor(band.key, e.target.value)"
+                  <UiColorInput
+                    :model-value="form.group_config[String(band.key)]?.color || GROUP_PALETTE[i % GROUP_PALETTE.length]"
+                    :presets="GROUP_PALETTE"
+                    compact
                     placeholder="#RRGGBB"
+                    @update:model-value="value => setGroupColor(band.key, value)"
                   />
                 </div>
               </details>
@@ -2485,30 +2366,21 @@ function close() {
                   >
                     <span>Auto from pin color</span>
                   </button>
-                  <button
-                    v-for="c in GROUP_PALETTE"
-                    :key="'territory-' + c"
-                    type="button"
-                    class="le__color-chip"
-                    :class="{ 'le__color-chip--active': (form.group_config[String(band.key)]?.territory_color || '') === c }"
-                    :style="{ background: c }"
-                    @click="setGroupTerritoryColor(band.key, c)"
-                  />
-                  <input
-                    class="le__input le__input--xs le__group-color-code"
-                    :value="form.group_config[String(band.key)]?.territory_color || ''"
-                    @input="e => setGroupTerritoryColor(band.key, e.target.value)"
+                  <UiColorInput
+                    :model-value="form.group_config[String(band.key)]?.territory_color || ''"
+                    :presets="GROUP_PALETTE"
+                    compact
                     placeholder="Auto"
+                    @update:model-value="value => setGroupTerritoryColor(band.key, value)"
                   />
                 </div>
               </details>
-              <input
+              <UiNumberInput
                 v-if="groupBandKind === 'number'"
-                class="le__input le__input--xs le__band-number"
-                type="number"
                 placeholder="From"
-                :value="band.min"
-                @input="e => updateBand(i, { min: e.target.value })"
+                :model-value="band.min"
+                compact
+                @update:model-value="value => updateBand(i, { min: value })"
               />
               <button
                 v-else
@@ -2516,13 +2388,12 @@ function close() {
                 class="le__date-trigger"
                 @click="openBandEdgePicker(i, 'min')"
               >{{ formatBandEdgeValue(band.min, 'From') }}</button>
-              <input
+              <UiNumberInput
                 v-if="groupBandKind === 'number'"
-                class="le__input le__input--xs le__band-number"
-                type="number"
                 placeholder="To"
-                :value="band.max"
-                @input="e => updateBand(i, { max: e.target.value })"
+                :model-value="band.max"
+                compact
+                @update:model-value="value => updateBand(i, { max: value })"
               />
               <button
                 v-else
@@ -2650,20 +2521,12 @@ function close() {
                     :title="'Color for ' + val"
                   />
                   <div class="le__group-color-popover">
-                    <button
-                      v-for="c in GROUP_PALETTE"
-                      :key="c"
-                      type="button"
-                      class="le__color-chip"
-                      :class="{ 'le__color-chip--active': (form.group_config[String(val)]?.color || '') === c }"
-                      :style="{ background: c }"
-                      @click="setGroupColor(val, c)"
-                    />
-                    <input
-                      class="le__input le__input--xs le__group-color-code"
-                      :value="form.group_config[String(val)]?.color || GROUP_PALETTE[0]"
-                      @input="e => setGroupColor(val, e.target.value)"
+                    <UiColorInput
+                      :model-value="form.group_config[String(val)]?.color || GROUP_PALETTE[0]"
+                      :presets="GROUP_PALETTE"
+                      compact
                       placeholder="#RRGGBB"
+                      @update:model-value="value => setGroupColor(val, value)"
                     />
                   </div>
                 </details>
@@ -2681,20 +2544,12 @@ function close() {
                     >
                       <span>Auto from pin color</span>
                     </button>
-                    <button
-                      v-for="c in GROUP_PALETTE"
-                      :key="'territory-' + c"
-                      type="button"
-                      class="le__color-chip"
-                      :class="{ 'le__color-chip--active': (form.group_config[String(val)]?.territory_color || '') === c }"
-                      :style="{ background: c }"
-                      @click="setGroupTerritoryColor(val, c)"
-                    />
-                    <input
-                      class="le__input le__input--xs le__group-color-code"
-                      :value="form.group_config[String(val)]?.territory_color || ''"
-                      @input="e => setGroupTerritoryColor(val, e.target.value)"
+                    <UiColorInput
+                      :model-value="form.group_config[String(val)]?.territory_color || ''"
+                      :presets="GROUP_PALETTE"
+                      compact
                       placeholder="Auto"
+                      @update:model-value="value => setGroupTerritoryColor(val, value)"
                     />
                   </div>
                 </details>
@@ -2790,21 +2645,19 @@ function close() {
           <div class="le__filter-header">
             <span class="le__label">Popup fields <span class="le__hint">(default popup)</span></span>
             <div class="le__link-field le__add-field-menu">
-              <button
-                type="button"
-                class="le__mini-btn"
+              <UiSelect
+                class="le__inline-select"
+                model-value=""
+                :options="popupFieldOptions"
+                value-key="fieldname"
+                label-key="label"
+                meta-key="fieldname"
+                placeholder="Add field"
+                compact
                 :disabled="!popupFieldOptions.length"
-                @click="fieldPickerOpen = fieldPickerOpen === 'popup_field' ? '' : 'popup_field'"
-              >
-                Add field
-              </button>
-              <div v-if="fieldPickerOpen === 'popup_field'" class="le__option-pop le__option-pop--right">
-                <button v-for="f in popupFieldOptions" :key="f.fieldname" type="button" class="le__option" @mousedown.prevent="addPopupField(f.fieldname); fieldPickerOpen = ''">
-                  <span>{{ f.label }}</span>
-                  <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
-                </button>
-                <p v-if="!popupFieldOptions.length" class="le__option-empty">All fields already added.</p>
-              </div>
+                empty-text="All fields already added."
+                @select="field => addPopupField(field.fieldname)"
+              />
             </div>
           </div>
           <div v-if="form.popup_fields.length" class="le__popup-fields">
@@ -2819,16 +2672,14 @@ function close() {
         <!-- Click Action -->
         <div class="le__field le__link-field">
           <span class="le__label">Click action</span>
-          <button type="button" class="le__field-select" @click="fieldPickerOpen = fieldPickerOpen === 'click_action' ? '' : 'click_action'">
-            <span>{{ optionLabel(CLICK_ACTION_OPTIONS, form.click_action, 'Show popup') }}</span>
-            <span class="le__chevron">⌄</span>
-          </button>
-          <div v-if="fieldPickerOpen === 'click_action'" class="le__option-pop">
-            <button v-for="option in CLICK_ACTION_OPTIONS" :key="option.v" type="button" class="le__option" :data-active="form.click_action === option.v" @mousedown.prevent="chooseFormOption('click_action', option.v)">
-              <span>{{ option.label }}</span>
-              <small>{{ option.hint }}</small>
-            </button>
-          </div>
+          <UiSelect
+            v-model="form.click_action"
+            :options="CLICK_ACTION_OPTIONS"
+            value-key="v"
+            label-key="label"
+            meta-key="hint"
+            :selected-label="optionLabel(CLICK_ACTION_OPTIONS, form.click_action, 'Show popup')"
+          />
         </div>
 
         <div class="le__filter">
@@ -2865,20 +2716,15 @@ function close() {
               <div class="le__row">
                 <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Metric field</span>
-                  <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'heatmap_weight_field' ? '' : 'heatmap_weight_field'">
-                    <span>{{ form.heatmap_weight_field ? fieldChoiceLabel(form.heatmap_weight_field, numericFields) : 'Choose metric' }}</span>
-                    <span class="le__chevron">⌄</span>
-                  </button>
-                  <div v-if="fieldPickerOpen === 'heatmap_weight_field'" class="le__option-pop">
-                    <button type="button" class="le__option" @mousedown.prevent="chooseFormOption('heatmap_weight_field', '')">
-                      <span>Choose metric</span>
-                      <small>No weighted metric</small>
-                    </button>
-                    <button v-for="f in numericFields" :key="f.fieldname" type="button" class="le__option" :data-active="form.heatmap_weight_field === f.fieldname" @mousedown.prevent="chooseFormOption('heatmap_weight_field', f.fieldname)">
-                      <span>{{ f.label }}</span>
-                      <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
-                    </button>
-                  </div>
+                  <UiSelect
+                    v-model="form.heatmap_weight_field"
+                    :options="[{ fieldname: '', label: 'Choose metric', meta: 'No weighted metric' }, ...numericFields]"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
+                    :selected-label="form.heatmap_weight_field ? fieldChoiceLabel(form.heatmap_weight_field, numericFields) : 'Choose metric'"
+                  />
                 </div>
                 <div class="le__field le__field--half">
                   <span class="le__label">Scale</span>
@@ -2899,44 +2745,41 @@ function close() {
               <div class="le__row">
                 <label class="le__field le__field--half">
                   <span class="le__label">Metric min</span>
-                  <input v-model.number="form.heatmap_weight_min" class="le__input le__input--sm" type="number" />
+                  <UiNumberInput v-model="form.heatmap_weight_min" compact />
                 </label>
                 <label class="le__field le__field--half">
                   <span class="le__label">Metric max</span>
-                  <input v-model.number="form.heatmap_weight_max" class="le__input le__input--sm" type="number" />
+                  <UiNumberInput v-model="form.heatmap_weight_max" compact />
                 </label>
               </div>
             </template>
             <div class="le__row">
               <label class="le__field le__field--half">
                 <span class="le__label">Radius</span>
-                <input v-model.number="form.heatmap_radius_max" class="le__input le__input--sm" type="number" min="8" max="80" step="1" />
+                <UiNumberInput v-model="form.heatmap_radius_max" min="8" max="80" step="1" compact />
               </label>
               <label class="le__field le__field--half">
                 <span class="le__label">Intensity</span>
-                <input v-model.number="form.heatmap_intensity_max" class="le__input le__input--sm" type="number" min="0.5" max="8" step="0.25" />
+                <UiNumberInput v-model="form.heatmap_intensity_max" min="0.5" max="8" step="0.25" compact />
               </label>
             </div>
             <div class="le__row">
               <label class="le__field le__field--half">
                 <span class="le__label">Opacity</span>
-                <input v-model.number="form.heatmap_opacity" class="le__input le__input--sm" type="number" min="0.1" max="1" step="0.05" />
+                <UiNumberInput v-model="form.heatmap_opacity" min="0.1" max="1" step="0.05" compact />
               </label>
               <div class="le__field le__field--half le__link-field">
                 <span class="le__label">Ramp</span>
-                <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'heatmap_ramp' ? '' : 'heatmap_ramp'">
-                  <span>Choose ramp</span>
-                  <span class="le__chevron">⌄</span>
-                </button>
-                <div v-if="fieldPickerOpen === 'heatmap_ramp'" class="le__option-pop">
-                  <button type="button" class="le__option" @mousedown.prevent="chooseHeatmapRamp('')">
-                    <span>Layer color</span>
-                    <small>Use the current layer color</small>
-                  </button>
-                  <button v-for="r in heatmapRampOptions" :key="r.key" type="button" class="le__option" @mousedown.prevent="chooseHeatmapRamp(r.key)">
-                    <span>{{ r.label }}</span>
-                  </button>
-                </div>
+                <UiSelect
+                  model-value=""
+                  :options="[{ key: '', label: 'Layer color', meta: 'Use the current layer color' }, ...heatmapRampOptions]"
+                  value-key="key"
+                  label-key="label"
+                  meta-key="meta"
+                  placeholder="Choose ramp"
+                  compact
+                  @select="ramp => chooseHeatmapRamp(ramp.key)"
+                />
               </div>
             </div>
           </template>
@@ -2962,30 +2805,25 @@ function close() {
           <template v-if="form.radius_enabled">
             <div class="le__row">
               <div class="le__field le__field--half le__link-field">
-                <span class="le__label">Radius field (optional)</span>
-                <button type="button" class="le__field-select le__field-select--sm" @click="fieldPickerOpen = fieldPickerOpen === 'radius_field' ? '' : 'radius_field'">
-                  <span>{{ form.radius_field ? fieldChoiceLabel(form.radius_field, numericFields) : 'Use default meters' }}</span>
-                  <span class="le__chevron">⌄</span>
-                </button>
-                <div v-if="fieldPickerOpen === 'radius_field'" class="le__option-pop">
-                  <button type="button" class="le__option" @mousedown.prevent="chooseFormOption('radius_field', '')">
-                    <span>Use default meters</span>
-                    <small>No per-feature radius field</small>
-                  </button>
-                  <button v-for="f in numericFields" :key="f.fieldname" type="button" class="le__option" :data-active="form.radius_field === f.fieldname" @mousedown.prevent="chooseFormOption('radius_field', f.fieldname)">
-                    <span>{{ f.label }}</span>
-                    <small>{{ f.fieldname }} · {{ f.fieldtype }}</small>
-                  </button>
+                  <span class="le__label">Radius field (optional)</span>
+                  <UiSelect
+                    v-model="form.radius_field"
+                    :options="[{ fieldname: '', label: 'Use default meters', meta: 'No per-feature radius field' }, ...numericFields]"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
+                    :selected-label="form.radius_field ? fieldChoiceLabel(form.radius_field, numericFields) : 'Use default meters'"
+                  />
                 </div>
-              </div>
-              <label class="le__field le__field--half">
-                <span class="le__label">Default meters</span>
-                <input v-model.number="form.radius_meters" class="le__input le__input--sm" type="number" min="100" max="50000" step="100" />
-              </label>
+                <label class="le__field le__field--half">
+                  <span class="le__label">Default meters</span>
+                  <UiNumberInput v-model="form.radius_meters" min="100" max="50000" step="100" compact />
+                </label>
             </div>
             <label class="le__field">
               <span class="le__label">Halo opacity</span>
-              <input v-model.number="form.radius_opacity" class="le__input le__input--sm" type="number" min="0" max="1" step="0.05" />
+              <UiNumberInput v-model="form.radius_opacity" min="0" max="1" step="0.05" compact />
             </label>
           </template>
         </div>
@@ -3088,95 +2926,56 @@ function close() {
               <div class="le__row">
                 <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Link field</span>
-                  <button
-                    type="button"
-                    class="le__field-select le__field-select--sm"
+                  <UiSelect
+                    :model-value="metric.link_field"
+                    :options="metricLinkFields(metric)"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
                     :disabled="!metric.source_doctype"
-                    @click="openMetricFieldPicker(index, 'link', metric)"
-                  >
-                    <span>{{ metricFieldChoiceLabel(metric, metric.link_field, 'Choose link field') }}</span>
-                    <span class="le__chevron">⌄</span>
-                  </button>
-                  <div v-if="fieldPickerOpen === `metric_field:${index}:link`" class="le__option-pop">
-                    <button
-                      v-for="field in metricLinkFields(metric)"
-                      :key="field.fieldname"
-                      type="button"
-                      class="le__option"
-                      :data-active="metric.link_field === field.fieldname"
-                      @mousedown.prevent="chooseMetricLinkField(index, metric, field.fieldname)"
-                    >
-                      <span>{{ field.label || field.fieldname }}</span>
-                      <small>{{ field.fieldname }} · {{ field.fieldtype }}{{ field.options ? ` · ${field.options}` : '' }}</small>
-                    </button>
-                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
-                    <p v-else-if="!metricLinkFields(metric).length" class="le__option-empty">No Link or Dynamic Link fields found.</p>
-                  </div>
+                    :placeholder="metricFieldsMessage(metric) || 'Choose link field'"
+                    :selected-label="metricFieldChoiceLabel(metric, metric.link_field, 'Choose link field')"
+                    :empty-text="metricFieldsMessage(metric) || 'No Link or Dynamic Link fields found.'"
+                    @open="loadMetricFields(metric)"
+                    @select="field => chooseMetricLinkField(index, metric, field.fieldname)"
+                  />
                 </div>
                 <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Dynamic selector</span>
-                  <button
-                    type="button"
-                    class="le__field-select le__field-select--sm"
+                  <UiSelect
+                    :model-value="metric.dynamic_link_doctype_field"
+                    :options="[{ fieldname: '', label: 'No selector', meta: 'Use this for normal Link fields' }, ...metricDynamicSelectorFields(metric)]"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
                     :disabled="!metric.source_doctype"
-                    @click="openMetricFieldPicker(index, 'dynamic', metric)"
-                  >
-                    <span>{{ metricFieldChoiceLabel(metric, metric.dynamic_link_doctype_field, 'Optional selector') }}</span>
-                    <span class="le__chevron">⌄</span>
-                  </button>
-                  <div v-if="fieldPickerOpen === `metric_field:${index}:dynamic`" class="le__option-pop">
-                    <button
-                      type="button"
-                      class="le__option"
-                      :data-active="!metric.dynamic_link_doctype_field"
-                      @mousedown.prevent="chooseMetricField(index, '', 'dynamic_link_doctype_field')"
-                    >
-                      <span>No selector</span>
-                      <small>Use this for normal Link fields</small>
-                    </button>
-                    <button
-                      v-for="field in metricDynamicSelectorFields(metric)"
-                      :key="field.fieldname"
-                      type="button"
-                      class="le__option"
-                      :data-active="metric.dynamic_link_doctype_field === field.fieldname"
-                      @mousedown.prevent="chooseMetricField(index, field.fieldname, 'dynamic_link_doctype_field')"
-                    >
-                      <span>{{ field.label || field.fieldname }}</span>
-                      <small>{{ field.fieldname }} · {{ field.fieldtype }}{{ field.options ? ` · ${field.options}` : '' }}</small>
-                    </button>
-                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
-                    <p v-else-if="!metricDynamicSelectorFields(metric).length" class="le__option-empty">No selector-like fields found.</p>
-                  </div>
+                    :placeholder="metricFieldsMessage(metric) || 'Optional selector'"
+                    :selected-label="metricFieldChoiceLabel(metric, metric.dynamic_link_doctype_field, 'Optional selector')"
+                    :empty-text="metricFieldsMessage(metric) || 'No selector-like fields found.'"
+                    @open="loadMetricFields(metric)"
+                    @select="field => chooseMetricField(index, field.fieldname, 'dynamic_link_doctype_field')"
+                  />
                 </div>
               </div>
               <div class="le__row">
                 <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Value field</span>
-                  <button
-                    type="button"
-                    class="le__field-select le__field-select--sm"
+                  <UiSelect
+                    :model-value="metric.field"
+                    :options="metricAmountFields(metric)"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
                     :disabled="metric.aggregate === 'count' || !metric.source_doctype"
-                    @click="openMetricFieldPicker(index, 'amount', metric)"
-                  >
-                    <span>{{ metric.aggregate === 'count' ? 'Rows' : metricFieldChoiceLabel(metric, metric.field, 'Choose value field') }}</span>
-                    <span class="le__chevron">⌄</span>
-                  </button>
-                  <div v-if="fieldPickerOpen === `metric_field:${index}:amount`" class="le__option-pop">
-                    <button
-                      v-for="field in metricAmountFields(metric)"
-                      :key="field.fieldname"
-                      type="button"
-                      class="le__option"
-                      :data-active="metric.field === field.fieldname"
-                      @mousedown.prevent="chooseMetricField(index, field.fieldname, 'field')"
-                    >
-                      <span>{{ field.label || field.fieldname }}</span>
-                      <small>{{ field.fieldname }} · {{ field.fieldtype }}</small>
-                    </button>
-                    <p v-if="metricFieldsMessage(metric)" class="le__option-empty">{{ metricFieldsMessage(metric) }}</p>
-                    <p v-else-if="!metricAmountFields(metric).length" class="le__option-empty">No numeric value fields found.</p>
-                  </div>
+                    :placeholder="metric.aggregate === 'count' ? 'Rows' : (metricFieldsMessage(metric) || 'Choose value field')"
+                    :selected-label="metric.aggregate === 'count' ? 'Rows' : metricFieldChoiceLabel(metric, metric.field, 'Choose value field')"
+                    :empty-text="metricFieldsMessage(metric) || 'No numeric value fields found.'"
+                    @open="loadMetricFields(metric)"
+                    @select="field => chooseMetricField(index, field.fieldname, 'field')"
+                  />
                 </div>
               </div>
               <div class="le__seg-row">
@@ -3207,29 +3006,18 @@ function close() {
               <div class="le__row">
                 <div class="le__field le__field--half le__link-field">
                   <span class="le__label">Metric</span>
-                  <button
-                    type="button"
-                    class="le__field-select le__field-select--sm"
+                  <UiSelect
+                    :model-value="filter.metric"
+                    :options="linkedMetricRows"
+                    value-key="key"
+                    label-key="label"
+                    meta-key="key"
+                    compact
                     :disabled="!linkedMetricRows.length"
-                    @click="fieldPickerOpen = fieldPickerOpen === `metric_filter:${index}` ? '' : `metric_filter:${index}`"
-                  >
-                    <span>{{ linkedMetricChoiceLabel(filter.metric) }}</span>
-                    <span class="le__chevron">⌄</span>
-                  </button>
-                  <div v-if="fieldPickerOpen === `metric_filter:${index}`" class="le__option-pop">
-                    <button
-                      v-for="metric in linkedMetricRows"
-                      :key="metric.key"
-                      type="button"
-                      class="le__option"
-                      :data-active="filter.metric === metric.key"
-                      @mousedown.prevent="chooseLinkedMetricFilter(index, metric.key)"
-                    >
-                      <span>{{ metric.label || metric.key }}</span>
-                      <small>{{ metric.key }} · {{ metric.aggregate || 'sum' }} {{ metric.field || 'rows' }}</small>
-                    </button>
-                    <p v-if="!linkedMetricRows.length" class="le__option-empty">Add a field metric first.</p>
-                  </div>
+                    :selected-label="linkedMetricChoiceLabel(filter.metric)"
+                    empty-text="Add a field metric first."
+                    @select="metric => chooseLinkedMetricFilter(index, metric.key)"
+                  />
                 </div>
                 <label class="le__field le__field--half">
                   <span class="le__label">Value</span>

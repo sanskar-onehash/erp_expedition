@@ -24,6 +24,7 @@ import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { wrapLng } from '../lib/geo.js'
 import { deskDocRoute, openDeskDoc } from '../lib/desk.js'
+import UiSelect from './ui/UiSelect.vue'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -61,6 +62,16 @@ const fieldSearch = ref('')
 const showMoreFields = ref(false)
 const showAssignPanel = ref(false)
 let userSearchTimer = null
+
+const showTodoPanel = ref(false)
+const todoDescription = ref('')
+const todoAllocatedTo = ref('')
+const todoDate = ref('')
+const todoPriority = ref('Medium')
+const todoUserSearchOpen = ref(false)
+const todoUserOptions = ref([])
+const todoUserSearchLoading = ref(false)
+let todoUserSearchTimer = null
 
 const feature = computed(() => ui.selectedFeature)
 const layer = computed(() => {
@@ -178,6 +189,7 @@ watch(feature, async (v) => {
     fieldSearch.value = ''
     showMoreFields.value = false
     showAssignPanel.value = false
+    showTodoPanel.value = false
     loadHistory()
     loadLinkedRecords()
   } else {
@@ -187,6 +199,7 @@ watch(feature, async (v) => {
     linkedRecordsError.value = ''
     actionError.value = ''
     todoCreated.value = ''
+    showTodoPanel.value = false
   }
 })
 
@@ -472,6 +485,51 @@ async function scheduleVisit() {
   }
 }
 
+function getTodayDateString() {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function toggleTodoPanel() {
+  showTodoPanel.value = !showTodoPanel.value
+  if (showTodoPanel.value) {
+    todoDescription.value = `Follow up on ${title.value || sourceName.value}`
+    todoAllocatedTo.value = window.expeditionSession?.user || ''
+    todoDate.value = getTodayDateString()
+    todoPriority.value = 'Medium'
+    showAssignPanel.value = false
+  }
+}
+
+function scheduleTodoUserSearch() {
+  if (todoUserSearchTimer) clearTimeout(todoUserSearchTimer)
+  todoUserSearchTimer = setTimeout(() => searchTodoUsers(todoAllocatedTo.value), 180)
+}
+
+async function searchTodoUsers(txt = '') {
+  todoUserSearchLoading.value = true
+  try {
+    todoUserOptions.value = await call('expedition.api.action.search_users', {
+      txt,
+      limit: 8,
+    }) || []
+    todoUserSearchOpen.value = true
+  } catch (e) {
+    console.warn('[expedition] todo user search failed', e)
+    todoUserOptions.value = []
+  } finally {
+    todoUserSearchLoading.value = false
+  }
+}
+
+function selectTodoUser(user) {
+  todoAllocatedTo.value = user.value
+  todoUserSearchOpen.value = false
+}
+
 async function createTodo() {
   if (!sourceDoctype.value || !sourceName.value) return
   todoBusy.value = true
@@ -481,11 +539,14 @@ async function createTodo() {
     const name = await call('expedition.api.action.create_todo', {
       source_doctype: sourceDoctype.value,
       source_name: sourceName.value,
-      description: `Follow up on ${title.value}`,
-      allocated_to: window.expeditionSession?.user || '',
+      description: todoDescription.value || `Follow up on ${title.value}`,
+      allocated_to: todoAllocatedTo.value || '',
+      date: todoDate.value || null,
+      priority: todoPriority.value || 'Medium',
     })
     todoCreated.value = name || 'created'
     window.frappe?.show_alert?.({ message: 'ToDo created', indicator: 'green' })
+    showTodoPanel.value = false
   } catch (e) {
     actionError.value = e.message || String(e)
   } finally {
@@ -865,7 +926,14 @@ function formatDate(s) {
         </svg>
         <span>Open</span>
       </button>
-      <button type="button" class="mp__action" :disabled="todoBusy" @click="createTodo" title="Create a ToDo linked to this record">
+      <button
+        type="button"
+        class="mp__action"
+        :class="{ 'mp__action--active': showTodoPanel }"
+        :disabled="todoBusy"
+        @click="toggleTodoPanel"
+        title="Customize and Create a ToDo"
+      >
         <span>{{ todoBusy ? 'Adding...' : (todoCreated ? 'Added' : 'ToDo') }}</span>
       </button>
       <button
@@ -971,6 +1039,85 @@ function formatDate(s) {
         <button type="button" class="mp__assign-btn" :disabled="assignBusy || !currentAssignmentValue || assignField === 'owner'" @click="unassignRecord">
           Clear
         </button>
+      </div>
+    </div>
+
+    <!-- Custom ToDo Customization Panel -->
+    <div v-if="sourceDoctype && sourceName && showTodoPanel" class="mp__assign-panel mp__todo-panel">
+      <div class="mp__todo-header">
+        <span class="mp__todo-title">Create ToDo</span>
+      </div>
+
+      <div class="mp__todo-form">
+        <div class="mp__todo-field">
+          <label class="mp__todo-label">Description</label>
+          <textarea
+            v-model="todoDescription"
+            class="mp__todo-textarea"
+            rows="2"
+            placeholder="Description..."
+          />
+        </div>
+
+        <div class="mp__todo-field-row">
+          <div class="mp__todo-field mp__todo-field--half">
+            <label class="mp__todo-label">Allocated To</label>
+            <div class="mp__user-picker">
+              <input
+                v-model="todoAllocatedTo"
+                class="mp__assign-input"
+                type="search"
+                placeholder="Search user"
+                autocomplete="off"
+                @focus="searchTodoUsers(todoAllocatedTo)"
+                @input="scheduleTodoUserSearch"
+                @keydown.escape.stop="todoUserSearchOpen = false"
+              />
+              <div v-if="todoUserSearchOpen" class="mp__user-menu">
+                <button
+                  v-for="user in todoUserOptions"
+                  :key="user.value"
+                  type="button"
+                  class="mp__user-option"
+                  @mousedown.prevent="selectTodoUser(user)"
+                >
+                  <span class="mp__user-label">{{ user.label }}</span>
+                  <span class="mp__user-value">{{ user.value }}</span>
+                </button>
+                <div v-if="todoUserSearchLoading" class="mp__user-empty">Searching...</div>
+                <div v-else-if="!todoUserOptions.length" class="mp__user-empty">No users found</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mp__todo-field mp__todo-field--half">
+            <label class="mp__todo-label">Due Date</label>
+            <input
+              v-model="todoDate"
+              class="mp__assign-input"
+              type="date"
+            />
+          </div>
+        </div>
+
+        <div class="mp__todo-field-row">
+          <div class="mp__todo-field mp__todo-field--half">
+            <label class="mp__todo-label">Priority</label>
+            <UiSelect
+              v-model="todoPriority"
+              :options="['Low', 'Medium', 'High']"
+              :searchable="false"
+              compact
+            />
+          </div>
+
+          <div class="mp__todo-buttons mp__todo-field--half">
+            <button type="button" class="mp__todo-btn mp__todo-btn--ghost" @click="showTodoPanel = false">Cancel</button>
+            <button type="button" class="mp__todo-btn mp__todo-btn--primary" :disabled="todoBusy" @click="createTodo">
+              {{ todoBusy ? 'Saving...' : 'Save' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2209,5 +2356,97 @@ function formatDate(s) {
   color: rgba(230, 232, 236, 0.85);
   margin-top: 4px;
   line-height: 1.4;
+}
+
+.mp__todo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mp__todo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.mp__todo-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #E6E8EC;
+}
+.mp__todo-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mp__todo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mp__todo-field-row {
+  display: flex;
+  gap: 8px;
+}
+.mp__todo-field--half {
+  flex: 1;
+  min-width: 0;
+}
+.mp__todo-label {
+  font-size: 10px;
+  color: rgba(230, 232, 236, 0.55);
+}
+.mp__todo-textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: #E6E8EC;
+  border-radius: 5px;
+  padding: 5px 7px;
+  font-size: 11px;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+}
+.mp__todo-textarea:focus {
+  border-color: rgba(59, 130, 246, 0.72);
+}
+.mp__todo-buttons {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.mp__todo-btn {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 0;
+  min-width: 60px;
+}
+.mp__todo-btn--ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: rgba(230, 232, 236, 0.85);
+}
+.mp__todo-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.mp__todo-btn--primary {
+  background: #3B82F6;
+  color: #fff;
+}
+.mp__todo-btn--primary:hover {
+  background: #2563EB;
+}
+.mp__todo-btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

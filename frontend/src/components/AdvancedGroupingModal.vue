@@ -3,8 +3,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { call } from '../api/client.js'
 import { useIconsStore } from '../state/icons.js'
 import { ICON_PATHS } from '../api/icons.js'
+import UiColorInput from './ui/UiColorInput.vue'
+import UiNumberInput from './ui/UiNumberInput.vue'
+import UiSelect from './ui/UiSelect.vue'
 
 const GROUP_PATH_SEPARATOR = '\x1f'
+const LEVEL_MODE_OPTIONS = [
+  { value: 'value', label: 'Exact values', meta: 'One group per distinct value' },
+  { value: 'bands', label: 'Bands', meta: 'Numeric/date ranges' },
+]
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -31,7 +38,6 @@ const search = ref('')
 const expanded = ref(new Set())
 const treeTruncated = ref(false)
 const openIconMenuKey = ref('')
-const openLevelMenu = ref('')
 const bandEdgePicker = ref({ key: '', levelIndex: -1, bandIndex: -1, edge: '', month: '', top: 0, left: 0 })
 const bandEdgePickerOpen = computed(() => !!bandEdgePicker.value.key)
 const bandEdgePickerTitle = computed(() =>
@@ -104,9 +110,6 @@ watch(
 function onDocumentClick(e) {
   if (!e.target?.closest?.('.agm__band-date-menu') && !e.target?.closest?.('.agm__date-trigger')) {
     closeBandEdgePicker()
-  }
-  if (!e.target?.closest?.('.agm__select-menu') && !e.target?.closest?.('.agm__select-trigger')) {
-    openLevelMenu.value = ''
   }
 }
 
@@ -350,12 +353,10 @@ function fieldLabel(fieldname) {
 
 function chooseLevelField(index, fieldname) {
   updateLevel(index, fieldname)
-  openLevelMenu.value = ''
 }
 
 function chooseLevelMode(index, mode) {
   setLevelMode(index, mode)
-  openLevelMenu.value = ''
 }
 
 function updateLevel(index, field) {
@@ -756,51 +757,28 @@ function clearGrouping() {
             <div class="agm__level-main">
               <div class="agm__level-config">
                 <div class="agm__level-pickers">
-                  <div class="agm__select">
-                    <button
-                      type="button"
-                      class="agm__input agm__select-trigger"
-                      @click="openLevelMenu = openLevelMenu === `field:${index}` ? '' : `field:${index}`"
-                    >
-                      <span>{{ fieldLabel(level.field) }}</span>
-                      <span class="agm__select-chevron">⌄</span>
-                    </button>
-                    <div v-if="openLevelMenu === `field:${index}`" class="agm__select-menu">
-                      <button
-                        v-for="field in levelFieldOptions(level)"
-                        :key="field.fieldname"
-                        type="button"
-                        class="agm__select-option"
-                        :data-active="level.field === field.fieldname"
-                        @mousedown.prevent="chooseLevelField(index, field.fieldname)"
-                      >
-                        <span>{{ field.label || field.fieldname }}</span>
-                        <small>{{ field.fieldname }} · {{ field.fieldtype }}</small>
-                      </button>
-                    </div>
-                  </div>
+                  <UiSelect
+                    :model-value="level.field"
+                    :options="levelFieldOptions(level)"
+                    value-key="fieldname"
+                    label-key="label"
+                    meta-key="fieldname"
+                    compact
+                    :selected-label="fieldLabel(level.field)"
+                    @select="field => chooseLevelField(index, field.fieldname)"
+                  />
                   <div
                     v-if="fieldSupportsBands(level.field)"
-                    class="agm__select agm__select--mode"
+                    class="agm__select--mode"
                   >
-                    <button
-                      type="button"
-                      class="agm__input agm__input--mode agm__select-trigger"
-                      @click="openLevelMenu = openLevelMenu === `mode:${index}` ? '' : `mode:${index}`"
-                    >
-                      <span>{{ level.mode === 'bands' ? 'Bands' : 'Exact values' }}</span>
-                      <span class="agm__select-chevron">⌄</span>
-                    </button>
-                    <div v-if="openLevelMenu === `mode:${index}`" class="agm__select-menu agm__select-menu--right">
-                      <button type="button" class="agm__select-option" :data-active="level.mode !== 'bands'" @mousedown.prevent="chooseLevelMode(index, 'value')">
-                        <span>Exact values</span>
-                        <small>One group per distinct value</small>
-                      </button>
-                      <button type="button" class="agm__select-option" :data-active="level.mode === 'bands'" @mousedown.prevent="chooseLevelMode(index, 'bands')">
-                        <span>Bands</span>
-                        <small>Numeric/date ranges</small>
-                      </button>
-                    </div>
+                    <UiSelect
+                      :model-value="level.mode === 'bands' ? 'bands' : 'value'"
+                      :options="LEVEL_MODE_OPTIONS"
+                      compact
+                      :searchable="false"
+                      :selected-label="level.mode === 'bands' ? 'Bands' : 'Exact values'"
+                      @update:model-value="mode => chooseLevelMode(index, mode)"
+                    />
                   </div>
                 </div>
                 <button type="button" class="agm__icon-btn" aria-label="Remove level" @click="removeLevel(index)">×</button>
@@ -808,13 +786,12 @@ function clearGrouping() {
             </div>
             <div v-if="level.mode === 'bands'" class="agm__bands">
               <div v-for="(band, bandIndex) in level.bands" :key="band.key" class="agm__band-row">
-                <input
+                <UiNumberInput
                   v-if="level.kind === 'number'"
-                  class="agm__input agm__band-number"
-                  type="number"
                   placeholder="From"
-                  :value="band.min"
-                  @input="updateLevelBand(index, bandIndex, { min: $event.target.value })"
+                  :model-value="band.min"
+                  compact
+                  @update:model-value="value => updateLevelBand(index, bandIndex, { min: value })"
                 />
                 <button
                   v-else
@@ -822,13 +799,12 @@ function clearGrouping() {
                   class="agm__date-trigger"
                   @click="openBandEdgePicker(index, bandIndex, 'min', $event)"
                 >{{ formatBandEdgeValue(band.min, 'From') }}</button>
-                <input
+                <UiNumberInput
                   v-if="level.kind === 'number'"
-                  class="agm__input agm__band-number"
-                  type="number"
                   placeholder="To"
-                  :value="band.max"
-                  @input="updateLevelBand(index, bandIndex, { max: $event.target.value })"
+                  :model-value="band.max"
+                  compact
+                  @update:model-value="value => updateLevelBand(index, bandIndex, { max: value })"
                 />
                 <button
                   v-else
@@ -887,20 +863,12 @@ function clearGrouping() {
                         :title="'Color for ' + row.fullLabel"
                       />
                       <div class="agm__color-popover">
-                        <button
-                          v-for="color in colorPalette"
-                          :key="color"
-                          type="button"
-                          class="agm__color-chip"
-                          :class="{ 'agm__color-chip--active': row.override.color === color }"
-                          :style="{ background: color }"
-                          @click="setGroupProp(row.key, 'color', color); closeRowMenu($event)"
-                        />
-                        <input
-                          class="agm__input agm__color-code"
-                          :value="row.override.color || row.style.color"
+                        <UiColorInput
+                          :model-value="row.override.color || row.style.color"
+                          :presets="colorPalette"
+                          compact
                           placeholder="#RRGGBB"
-                          @input="setGroupProp(row.key, 'color', $event.target.value)"
+                          @update:model-value="value => setGroupProp(row.key, 'color', value)"
                         />
                       </div>
                     </details>
@@ -920,20 +888,12 @@ function clearGrouping() {
                           class="agm__reset agm__reset--wide"
                           @click="resetGroupProp(row.key, 'territory_color'); closeRowMenu($event)"
                         >Auto from pin color</button>
-                        <button
-                          v-for="color in colorPalette"
-                          :key="'territory-' + color"
-                          type="button"
-                          class="agm__color-chip"
-                          :class="{ 'agm__color-chip--active': row.override.territory_color === color }"
-                          :style="{ background: color }"
-                          @click="setGroupProp(row.key, 'territory_color', color); closeRowMenu($event)"
-                        />
-                        <input
-                          class="agm__input agm__color-code"
-                          :value="row.override.territory_color || ''"
+                        <UiColorInput
+                          :model-value="row.override.territory_color || ''"
+                          :presets="colorPalette"
+                          compact
                           placeholder="Auto"
-                          @input="setGroupProp(row.key, 'territory_color', $event.target.value)"
+                          @update:model-value="value => setGroupProp(row.key, 'territory_color', value)"
                         />
                       </div>
                     </details>

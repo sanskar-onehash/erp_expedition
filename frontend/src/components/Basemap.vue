@@ -1705,6 +1705,128 @@ function _fetchAllVisibleBounds() {
   }
 }
 
+function _applyIndiaBoundaryFix() {
+  if (!map || !map.isStyleLoaded()) return
+
+  // 1. Define the exclusion expression to hide boundary lines touching India
+  const excludeIndiaExpression = [
+    '!',
+    [
+      'any',
+      ['==', ['get', 'adm0_l'], 'IN'],
+      ['==', ['get', 'adm0_r'], 'IN'],
+      ['==', ['get', 'adm0_l'], 'IND'],
+      ['==', ['get', 'adm0_r'], 'IND'],
+      ['==', ['get', 'adm0_l'], 'India'],
+      ['==', ['get', 'adm0_r'], 'India'],
+      ['==', ['get', 'adm0_l'], 'in'],
+      ['==', ['get', 'adm0_r'], 'in'],
+      ['==', ['get', 'adm0_l'], 'ind'],
+      ['==', ['get', 'adm0_r'], 'ind'],
+      ['==', ['get', 'adm0_l'], 'india'],
+      ['==', ['get', 'adm0_r'], 'india'],
+      ['==', ['get', 'adm0_left'], 'IN'],
+      ['==', ['get', 'adm0_right'], 'IN'],
+      ['==', ['get', 'adm0_left'], 'IND'],
+      ['==', ['get', 'adm0_right'], 'IND'],
+      ['==', ['get', 'adm0_left'], 'India'],
+      ['==', ['get', 'adm0_right'], 'India']
+    ]
+  ]
+
+  // Helper to safely append the exclusion to an existing filter
+  const applyFilterExclusion = (layerId) => {
+    if (!map.getLayer(layerId)) return
+    try {
+      let currentFilter = map.getFilter(layerId)
+      if (!currentFilter) {
+        currentFilter = ['all']
+      } else if (!Array.isArray(currentFilter)) {
+        currentFilter = ['all', currentFilter]
+      } else if (currentFilter[0] !== 'all') {
+        currentFilter = ['all', currentFilter]
+      }
+      
+      // Check if we already added the exclusion to avoid duplicate additions
+      const alreadyAdded = currentFilter.some(subExpr => 
+        Array.isArray(subExpr) && 
+        subExpr[0] === '!' && 
+        Array.isArray(subExpr[1]) && 
+        subExpr[1][0] === 'any' &&
+        subExpr[1].some(valExpr => Array.isArray(valExpr) && valExpr[1]?.[1] === 'adm0_l' && (valExpr[2] === 'IN' || valExpr[2] === 'IND'))
+      )
+
+      if (!alreadyAdded) {
+        currentFilter.push(excludeIndiaExpression)
+        map.setFilter(layerId, currentFilter)
+      }
+    } catch (e) {
+      console.error(`Error applying filter exclusion to ${layerId}:`, e)
+    }
+  }
+
+  // Apply the exclusion to both boundary_2 and boundary_disputed layers
+  applyFilterExclusion('boundary_2')
+  applyFilterExclusion('boundary_disputed')
+
+  // 2. Add the custom official Indian land boundary GeoJSON source and layer
+  const sourceId = 'india-boundary-source'
+  const layerId = 'india-boundary-layer'
+
+  if (!map.getSource(sourceId)) {
+    try {
+      const geojsonUrl = `${window.location.origin}/assets/expedition/india-land-simplified.geojson`
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: geojsonUrl
+      })
+    } catch (e) {
+      console.error('Error adding india-boundary-source:', e)
+    }
+  }
+
+  if (map.getSource(sourceId) && !map.getLayer(layerId)) {
+    try {
+      // Standard Mapbox/OpenMapTiles styling values for boundary_2 (fallback values)
+      let paintProps = {
+        'line-color': 'hsl(248,1%,41%)',
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 0, 0.4, 4, 1],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 3, 1, 5, 1.2, 12, 3]
+      }
+
+      // If boundary_2 exists, dynamically extract its style properties to match the current skin
+      const boundary2 = map.getLayer('boundary_2')
+      if (boundary2) {
+        const color = map.getPaintProperty('boundary_2', 'line-color')
+        if (color) paintProps['line-color'] = color
+        const opacity = map.getPaintProperty('boundary_2', 'line-opacity')
+        if (opacity) paintProps['line-opacity'] = opacity
+        const width = map.getPaintProperty('boundary_2', 'line-width')
+        if (width) paintProps['line-width'] = width
+      }
+
+      // Find the first symbol/label layer to insert our border layer before it
+      // so that city and country labels are drawn on top of the border line
+      const layers = map.getStyle().layers || []
+      const firstSymbol = layers.find(l => l.type === 'symbol')
+      const beforeId = firstSymbol ? firstSymbol.id : undefined
+
+      map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round'
+        },
+        paint: paintProps
+      }, beforeId)
+    } catch (e) {
+      console.error('Error adding india-boundary-layer:', e)
+    }
+  }
+}
+
 function _reAddAllLayers() {
   if (!map || !map.isStyleLoaded()) return
   _pruneStaleRenderedLayers()
@@ -2238,12 +2360,14 @@ onMounted(() => {
   // re-add on every styledata.
   map.on('styledata', () => {
     if (ui.basemapLoading) ui.basemapLoading = false
+    _applyIndiaBoundaryFix()
     _reAddAllLayers()
     _reAddZones()
   })
 
   // Initial bootstrap: paint any layers that already have features.
   map.on('load', () => {
+    _applyIndiaBoundaryFix()
     _reAddAllLayers()
     _reAddZones()
     _fetchAllVisibleBounds()

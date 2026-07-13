@@ -4,6 +4,8 @@ import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
 import { useZonesStore } from '../state/zones.js'
 import { shortcutLabel } from '../lib/keymaps.js'
+import UiColorInput from './ui/UiColorInput.vue'
+import UiNumberInput from './ui/UiNumberInput.vue'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -208,11 +210,6 @@ async function deleteSelectedZone() {
   await zoneStore.deleteZone(mapName, zone.name)
 }
 
-function applyPreset(color) {
-  ui.setDrawingColor(color)
-  styleOpen.value = false
-}
-
 function resetTilt() {
   const m = window.expeditionMap?.getMap?.()
   window.removeEventListener('pointermove', updateTiltFromPointer)
@@ -347,8 +344,8 @@ function popoverStyle(id, dx = 48, dy = 0, popoverId = id) {
   }
 }
 
-function setEditColor(field, color) {
-  edit.value = { ...edit.value, [field]: color }
+function setDrawingColor(color) {
+  ui.setDrawingColor(color)
 }
 </script>
 
@@ -512,19 +509,13 @@ function setEditColor(field, color) {
     </div>
 
     <div v-if="styleOpen" :ref="registerPopover('style')" class="mtt__pop mtt__pop--style" :style="popoverStyle('toolsStyle', 48, 0, 'style')">
-      <div class="mtt__swatches">
-        <button v-for="color in presets" :key="color" type="button" class="mtt__preset" :style="{ background: color }" @click="applyPreset(color)" />
-      </div>
-      <div class="mtt__color-row">
-        <span class="mtt__color-preview" :style="{ background: ui.drawingColor }" />
-        <input
-          :value="ui.drawingColor"
-          class="mtt__color-code"
-          type="text"
-          @input="ui.setDrawingColor($event.target.value)"
-          @keydown.enter.prevent="styleOpen = false"
-        />
-      </div>
+      <UiColorInput
+        :model-value="ui.drawingColor"
+        :presets="presets"
+        compact
+        placeholder="#3B82F6"
+        @update:model-value="setDrawingColor"
+      />
     </div>
 
     <div v-if="editOpen && selectedZone" :ref="registerPopover('edit')" class="mtt__pop mtt__pop--edit" :style="popoverStyle('toolsStyle', 48, 0, 'edit')">
@@ -538,25 +529,29 @@ function setEditColor(field, color) {
       </label>
       <label class="mtt__field">
         <span>Fill</span>
-        <input v-model="edit.color" type="text" placeholder="#3B82F6 or rgba(...)" />
+        <UiColorInput
+          v-model="edit.color"
+          :presets="presets"
+          compact
+          placeholder="#3B82F6 or rgba(...)"
+        />
       </label>
-      <div class="mtt__swatches mtt__swatches--edit">
-        <button v-for="color in presets" :key="'fill-' + color" type="button" class="mtt__preset" :style="{ background: color }" @click="setEditColor('color', color)" />
-      </div>
       <label class="mtt__field">
         <span>Opacity</span>
-        <input v-model.number="edit.fill_opacity" type="number" min="0" max="1" step="0.05" />
+        <UiNumberInput v-model="edit.fill_opacity" min="0" max="1" step="0.05" compact />
       </label>
       <label class="mtt__field">
         <span>Border</span>
-        <input v-model="edit.stroke_color" type="text" placeholder="#1E40AF or rgba(...)" />
+        <UiColorInput
+          v-model="edit.stroke_color"
+          :presets="presets"
+          compact
+          placeholder="#1E40AF or rgba(...)"
+        />
       </label>
-      <div class="mtt__swatches mtt__swatches--edit">
-        <button v-for="color in presets" :key="'border-' + color" type="button" class="mtt__preset" :style="{ background: color }" @click="setEditColor('stroke_color', color)" />
-      </div>
       <label class="mtt__field">
         <span>Width</span>
-        <input v-model.number="edit.stroke_width" type="number" min="1" max="16" step="1" />
+        <UiNumberInput v-model="edit.stroke_width" min="1" max="16" step="1" compact />
       </label>
       <div class="mtt__field">
         <span>Type</span>

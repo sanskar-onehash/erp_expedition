@@ -567,6 +567,83 @@ def _coerce_linked_metrics(raw: str | list | None) -> list[dict[str, Any]]:
     return metrics
 
 
+def _validate_link_field_path(metric_doctype: str, link_field_path: str, source_doctype: str) -> None:
+    parts = [p.strip() for p in link_field_path.split(".") if p.strip()]
+    if not parts:
+        frappe.throw("Invalid empty link field path")
+
+    current_doctype = metric_doctype
+    for part in parts:
+        meta = frappe.get_meta(current_doctype)
+        field = meta.get_field(part)
+        if not field:
+            frappe.throw(f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'")
+        if field.fieldtype != "Link" or not field.options:
+            frappe.throw(f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'")
+        current_doctype = field.options
+
+    if current_doctype != source_doctype:
+        frappe.throw(
+            f"Link path '{link_field_path}' on {metric_doctype} must resolve to target DocType '{source_doctype}', but resolves to '{current_doctype}'",
+            frappe.ValidationError
+        )
+
+
+def _resolve_link_path_mapping(
+    source_doctype: str,
+    link_field_path: str,
+    target_names: list[str]
+) -> tuple[str, dict[str, str]]:
+    """
+    Resolves a dot-separated link path from source_doctype to target_names.
+    Returns:
+        (first_field, mapping)
+        where first_field is the field on source_doctype (e.g. 'customer'),
+        and mapping is a dict mapping values of first_field to the corresponding
+        name in target_names.
+    """
+    parts = [p.strip() for p in link_field_path.split(".") if p.strip()]
+    if len(parts) <= 1:
+        field = link_field_path
+        return field, {name: name for name in target_names}
+
+    # Build the chain of (doctype, field, target_doctype)
+    chain = []
+    current_doctype = source_doctype
+    for part in parts:
+        meta = frappe.get_meta(current_doctype)
+        field = meta.get_field(part)
+        if not field:
+            frappe.throw(f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'")
+        if field.fieldtype != "Link" or not field.options:
+            frappe.throw(f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'")
+        target_dt = field.options
+        chain.append((current_doctype, part, target_dt))
+        current_doctype = target_dt
+
+    # Traverse back from the end of the chain to build the mapping
+    current_mapping = {name: name for name in target_names}
+
+    for i in range(len(chain) - 1, 0, -1):
+        step_doctype, step_fieldname, step_target_doctype = chain[i]
+        if not current_mapping:
+            break
+        rows = frappe.get_all(
+            step_doctype,
+            filters={step_fieldname: ["in", list(current_mapping.keys())]},
+            fields=["name", step_fieldname],
+            limit_page_length=0
+        )
+        next_mapping = {}
+        for r in rows:
+            val = r.get(step_fieldname)
+            if val in current_mapping:
+                next_mapping[r.name] = current_mapping[val]
+        current_mapping = next_mapping
+
+    return chain[0][1], current_mapping
+
+
 def validate_linked_metrics_json(
     source_doctype: str,
     linked_metrics_json: str | list | None,
@@ -584,41 +661,45 @@ def validate_linked_metrics_json(
             )
         assert_source_read(metric_doctype)
         meta = frappe.get_meta(metric_doctype)
-        link_field = meta.get_field(metric["link_field"])
-        if not link_field or link_field.fieldtype not in {"Link", "Dynamic Link"}:
-            frappe.throw(
-                f"Linked metric '{metric['key']}' needs a Link or Dynamic Link field on {metric_doctype}",
-                frappe.ValidationError,
-            )
-        if link_field.fieldtype == "Link":
-            if link_field.options != source_doctype:
-                frappe.throw(
-                    f"Linked metric '{metric['key']}' needs a Link field on {metric_doctype} pointing to {source_doctype}",
-                    frappe.ValidationError,
-                )
+        link_field_path = metric["link_field"]
+        if "." in link_field_path:
+            _validate_link_field_path(metric_doctype, link_field_path, source_doctype)
         else:
-            doctype_fieldname = metric.get("dynamic_link_doctype_field") or link_field.options
-            doctype_field = meta.get_field(doctype_fieldname)
-            if not doctype_field or not doctype_field.fieldname:
+            link_field = meta.get_field(link_field_path)
+            if not link_field or link_field.fieldtype not in {"Link", "Dynamic Link"}:
                 frappe.throw(
-                    f"Linked metric '{metric['key']}' needs a Dynamic Link selector field on {metric_doctype}",
+                    f"Linked metric '{metric['key']}' needs a Link or Dynamic Link field on {metric_doctype}",
                     frappe.ValidationError,
                 )
-            metric["dynamic_link_doctype_field"] = doctype_field.fieldname
-            selector_options = {
-                row.strip()
-                for row in str(getattr(doctype_field, "options", "") or "").splitlines()
-                if row.strip()
-            }
-            if (
-                getattr(doctype_field, "fieldtype", "") == "Select"
-                and selector_options
-                and source_doctype not in selector_options
-            ):
-                frappe.throw(
-                    f"Linked metric '{metric['key']}' Dynamic Link selector cannot point to {source_doctype}",
-                    frappe.ValidationError,
-                )
+            if link_field.fieldtype == "Link":
+                if link_field.options != source_doctype:
+                    frappe.throw(
+                        f"Linked metric '{metric['key']}' needs a Link field on {metric_doctype} pointing to {source_doctype}",
+                        frappe.ValidationError,
+                    )
+            else:
+                doctype_fieldname = metric.get("dynamic_link_doctype_field") or link_field.options
+                doctype_field = meta.get_field(doctype_fieldname)
+                if not doctype_field or not doctype_field.fieldname:
+                    frappe.throw(
+                        f"Linked metric '{metric['key']}' needs a Dynamic Link selector field on {metric_doctype}",
+                        frappe.ValidationError,
+                    )
+                metric["dynamic_link_doctype_field"] = doctype_field.fieldname
+                selector_options = {
+                    row.strip()
+                    for row in str(getattr(doctype_field, "options", "") or "").splitlines()
+                    if row.strip()
+                }
+                if (
+                    getattr(doctype_field, "fieldtype", "") == "Select"
+                    and selector_options
+                    and source_doctype not in selector_options
+                ):
+                    frappe.throw(
+                        f"Linked metric '{metric['key']}' Dynamic Link selector cannot point to {source_doctype}",
+                        frappe.ValidationError,
+                    )
         aggregate = metric["aggregate"]
         if aggregate not in LINKED_METRIC_AGGREGATES:
             frappe.throw(
@@ -804,7 +885,8 @@ def _linked_metric_dynamic_doctype_field(metric: dict[str, Any]) -> str:
         return configured
     try:
         meta = frappe.get_meta(metric["source_doctype"])
-        link_field = meta.get_field(metric["link_field"])
+        first_field = metric["link_field"].split(".")[0]
+        link_field = meta.get_field(first_field)
     except Exception:
         return ""
     if link_field and link_field.fieldtype == "Dynamic Link":
@@ -825,7 +907,19 @@ def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str,
     for metric in metrics:
         validate_linked_metrics_json(layer_doc.source_doctype, [metric])
         aggregate = metric["aggregate"]
-        metric_fields = [metric["link_field"]]
+
+        link_field_path = metric["link_field"]
+        first_field, mapping = _resolve_link_path_mapping(
+            metric["source_doctype"],
+            link_field_path,
+            source_names
+        )
+        if not mapping:
+            for source_name in source_names:
+                out[source_name][metric["key"]] = 0 if aggregate == "count" else None
+            continue
+
+        metric_fields = [first_field]
         dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
         if dynamic_doctype_field and dynamic_doctype_field not in metric_fields:
             metric_fields.append(dynamic_doctype_field)
@@ -834,7 +928,7 @@ def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str,
         filters = _coerce_filter(metric["filters"]) or []
         if dynamic_doctype_field:
             filters.append([dynamic_doctype_field, "=", layer_doc.source_doctype])
-        filters.append([metric["link_field"], "in", source_names])
+        filters.append([first_field, "in", list(mapping.keys())])
         metric_rows = frappe.get_all(
             metric["source_doctype"],
             fields=metric_fields,
@@ -843,8 +937,8 @@ def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str,
         )
         bucket: dict[str, list[Any]] = {name: [] for name in source_names}
         for metric_row in metric_rows:
-            source_name = metric_row.get(metric["link_field"])
-            if source_name not in bucket:
+            source_name = mapping.get(metric_row.get(first_field))
+            if not source_name or source_name not in bucket:
                 continue
             bucket[source_name].append(
                 1 if aggregate == "count" else metric_row.get(metric["field"])
@@ -899,7 +993,8 @@ def _linked_record_field_meta(meta, fieldname: str) -> dict[str, Any] | None:
 
 def _linked_record_fields(metric: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
     meta = frappe.get_meta(metric["source_doctype"])
-    fields = ["name", "modified", "docstatus", metric["link_field"]]
+    link_field = metric["link_field"].split(".")[0]
+    fields = ["name", "modified", "docstatus", link_field]
     dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
     if dynamic_doctype_field and dynamic_doctype_field not in fields:
         fields.append(dynamic_doctype_field)
@@ -1056,12 +1151,41 @@ def get_linked_records(
     total = 0
     for metric in metrics:
         validate_linked_metrics_json(layer_doc.source_doctype, [metric])
+
+        # Resolve the dot-walked path mapping
+        link_field_path = metric["link_field"]
+        first_field, mapping = _resolve_link_path_mapping(
+            metric["source_doctype"],
+            link_field_path,
+            [source_name]
+        )
+
         fields, field_meta = _linked_record_fields(metric)
+
+        if not mapping:
+            groups.append(
+                {
+                    "key": metric["key"],
+                    "label": metric["label"],
+                    "source_doctype": metric["source_doctype"],
+                    "aggregate": metric["aggregate"],
+                    "field": metric["field"],
+                    "link_field": metric["link_field"],
+                    "dynamic_link_doctype_field": _linked_metric_dynamic_doctype_field(metric),
+                    "fields": field_meta,
+                    "rows": [],
+                    "summary": _linked_record_group_summary([], metric),
+                    "truncated": False,
+                    "suggested": bool(metric.get("suggested")),
+                }
+            )
+            continue
+
         filters = _coerce_filter(metric["filters"]) or []
         dynamic_doctype_field = _linked_metric_dynamic_doctype_field(metric)
         if dynamic_doctype_field:
             filters.append([dynamic_doctype_field, "=", layer_doc.source_doctype])
-        filters.append([metric["link_field"], "=", source_name])
+        filters.append([first_field, "in", list(mapping.keys())])
         rows = frappe.get_all(
             metric["source_doctype"],
             fields=fields,
@@ -1069,6 +1193,11 @@ def get_linked_records(
             limit_page_length=limit,
             order_by="modified desc",
         )
+
+        # Map the first_field value back to the original source_name
+        for row in rows:
+            row[metric["link_field"]] = mapping.get(row.get(first_field))
+
         total += len(rows)
         groups.append(
             {
@@ -2217,6 +2346,15 @@ def get_features(
         layer_doc.source_doctype,
     )
     _append_valid_source_fields(fields, layer_doc.source_doctype, requested_extra_fields)
+
+    meta = frappe.get_meta(layer_doc.source_doctype)
+    for df in meta.fields:
+        if df.in_list_view and not df.hidden and df.fieldname not in fields:
+            fields.append(df.fieldname)
+    for f in ["modified", "modified_by", "owner"]:
+        if f not in fields:
+            fields.append(f)
+
     heatmap_config = _heatmap_config_dict(layer_doc)
     heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
     if (
@@ -4535,3 +4673,29 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
     _sync_filter_child_table_from_json(doc, master.filter_json)
     doc.insert(ignore_permissions=True)
     return _layer_to_dto(doc)
+
+
+@frappe.whitelist()
+def get_list_view_fields(source_doctype: str) -> list[dict]:
+    """Return the list view fields configured for a source DocType."""
+    assert_source_read(source_doctype)
+    meta = frappe.get_meta(source_doctype)
+    fields = []
+
+    # Check for fields configured for list view in doctype
+    for df in meta.fields:
+        if df.in_list_view and not df.hidden:
+            fields.append({
+                "fieldname": df.fieldname,
+                "label": df.label or df.fieldname,
+                "fieldtype": df.fieldtype,
+                "options": df.options,
+            })
+
+    # Default fallback if no specific list view fields exist
+    if not fields:
+        fields = [
+            {"fieldname": "name", "label": "ID", "fieldtype": "Link", "options": source_doctype},
+            {"fieldname": "modified", "label": "Modified", "fieldtype": "Datetime"},
+        ]
+    return fields

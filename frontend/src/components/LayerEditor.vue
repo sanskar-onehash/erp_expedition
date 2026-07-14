@@ -34,11 +34,16 @@ const mode = computed(() => ui.editorOpen?.mode || 'edit')
 const isCreate = computed(() => mode.value === 'create')
 // In create mode the user can choose to save as a master (map=NULL) or
 // as a per-map instance (map=active map). In edit mode, `isMaster` is
-// derived from the layer doc's `map` field — masters have no map.
+// derived from whether the layer appears in the active map's layers —
+// all layers are now "free" (doc.map is null), so we cannot use the
+// map field to distinguish masters from regular map layers.
 const asMaster = ref(false)
 const isMaster = computed(() => {
   if (isCreate.value) return asMaster.value
-  return !ui.editorOpen?.layer?.map
+  const layerName = ui.editorOpen?.layer?.name
+  if (!layerName) return true
+  // If the layer is in the active map's layer list, it's not a master
+  return !layerStore.layers.some(l => l.name === layerName)
 })
 
 // Form state. Initialized from the editorOpen target on open.
@@ -264,7 +269,7 @@ watch(
     } else if (v.mode === 'edit' && v.layer) {
       const requestedLayer = v.layer
       const liveLayer = layerStore.layers.find((layer) => layer.name === requestedLayer.name) || requestedLayer
-      if (liveLayer && liveLayer.map) {
+      if (liveLayer && !isMaster.value) {
         previewOriginalLayer.value = {
           ...liveLayer,
           style: { ...(liveLayer.style || {}) },

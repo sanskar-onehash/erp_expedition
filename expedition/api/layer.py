@@ -2320,7 +2320,9 @@ def get_text_search_matches(
     return {"names": [name for name in names if name], "truncated": len(rows) > limit}
 
 
-def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup, kwargs=None):
+def _get_features_from_python_script(
+    layer_doc, bounds, limit, offset, render_popup, kwargs=None
+):
     """Execute a python script to return layer data, and format it as GeoJSON."""
     from frappe.utils.safe_exec import safe_exec as frappe_safe_exec
 
@@ -2417,7 +2419,7 @@ def get_features(
     limit: int = 5000,
     offset: int = 0,
     render_popup: bool | int | str = True,
-    **kwargs
+    **kwargs,
 ) -> dict:
     """Return a GeoJSON FeatureCollection for the given Expedition Layer."""
     layer_doc = frappe.get_doc("Expedition Layer", layer)
@@ -3717,15 +3719,30 @@ def list_for_map(map_name: str) -> list[dict]:
     if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
         fields.insert(fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
 
+    # Load from junction child table (all rows, enabled and disabled)
+    map_doc = frappe.get_doc("Expedition Map", map_name)
+    map_layers = [
+        (row.layer, row.sequence, row.enabled) for row in map_doc.get("layers", [])
+    ]
+    all_names = [ln for ln, _seq, _en in map_layers]
+
+    if not all_names:
+        return []
+
     rows = frappe.get_all(
         "Expedition Layer",
-        filters={"map": map_name},
+        filters={"name": ["in", all_names]},
         fields=fields,
-        order_by="sequence asc, modified desc",
     )
+    seq_map = {ln: seq for ln, seq, _en in map_layers}
+    en_map = {ln: en for ln, _seq, en in map_layers}
+    for r in rows:
+        r["sequence"] = seq_map.get(r["name"], 0)
+        r["enabled"] = en_map.get(r["name"], 1)
+    rows = sorted(rows, key=lambda r: (r["sequence"], r.get("modified") or ""))
+
     out = []
     for r in rows:
-        # Parse the group_config_json into a dict for the client
         r["group_config"] = _coerce_group_config_for_client(r.get("group_config_json"))
         r["popup_fields"] = _coerce_popup_fields(r.get("popup_fields_json"))
         out.append({**r, "style": _layer_style_dict(r)})
@@ -3910,17 +3927,21 @@ def create(
         assert_source_read(location_doctype)
     _assert_icons_readable(icon, group_config_json)
 
-    # Next sequence for this map
-    last_seq = frappe.db.sql(
-        "select ifnull(max(sequence), 0) + 1 from `tabExpedition Layer` where map = %s",
-        (map_name,),
-    )[0][0]
+    # Next sequence for this map (from junction child table)
+    last_seq = (
+        frappe.db.sql(
+            "select ifnull(max(sequence), 0) + 1 from `tabExpedition Map Layer`"
+            " where parent = %s and parenttype = 'Expedition Map'",
+            (map_name,),
+        )[0][0]
+        or 1
+    )
 
     doc = frappe.new_doc("Expedition Layer")
     doc.update(
         {
             "title": title,
-            "map": map_name,
+            "map": "",
             "source_doctype": source_doctype,
             "location_source": location_source or "Direct Fields",
             "location_link_field": location_link_field or "",
@@ -3976,6 +3997,15 @@ def create(
     _sync_filter_child_table_from_json(doc, filter_json)
     _assert_location_read(doc)
     doc.insert(ignore_permissions=True)
+
+    # Add to the map's junction child table
+    map_doc = frappe.get_doc("Expedition Map", map_name)
+    map_doc.append(
+        "layers",
+        {"layer": doc.name, "sequence": int(last_seq), "enabled": int(enabled)},
+    )
+    map_doc.save(ignore_permissions=True)
+
     return _layer_to_dto(doc)
 
 
@@ -3990,9 +4020,7 @@ def update(layer_name: str, **fields) -> dict:
     if "pin_min_zoom" in fields:
         _ensure_pin_min_zoom_column()
     doc = frappe.get_doc("Expedition Layer", layer_name)
-    if doc.map:
-        assert_map_write(doc.map)
-    elif not frappe.has_permission("Expedition Layer", "write", doc=layer_name):
+    if not frappe.has_permission("Expedition Layer", "write", doc=layer_name):
         frappe.throw("Not permitted to update this layer", frappe.PermissionError)
     _assert_icons_readable(fields.get("icon"), fields.get("group_config_json"))
 
@@ -4062,20 +4090,71 @@ def update(layer_name: str, **fields) -> dict:
 
 @frappe.whitelist()
 def delete(layer_name: str) -> dict:
-    """Delete an Expedition Layer."""
-    map_name = frappe.db.get_value("Expedition Layer", layer_name, "map")
-    if map_name:
-        assert_map_write(map_name)
-    elif not frappe.has_permission("Expedition Layer", "delete", doc=layer_name):
+    """Hard-delete an Expedition Layer and remove it from all map junction rows."""
+    if not frappe.has_permission("Expedition Layer", "delete", doc=layer_name):
         frappe.throw("Not permitted to delete this layer", frappe.PermissionError)
+    # Remove from all maps' junction tables before deleting the doc
+    frappe.db.delete(
+        "Expedition Map Layer",
+        {"layer": layer_name, "parenttype": "Expedition Map"},
+    )
     frappe.delete_doc("Expedition Layer", layer_name, ignore_permissions=True)
     return {"deleted": layer_name}
 
 
 @frappe.whitelist()
+def remove_from_map(layer_name: str, map_name: str) -> dict:
+    """Remove a layer from a map's junction child table without deleting the layer doc."""
+    assert_map_write(map_name)
+    frappe.db.delete(
+        "Expedition Map Layer",
+        {"layer": layer_name, "parent": map_name, "parenttype": "Expedition Map"},
+    )
+    return {"removed": layer_name, "from_map": map_name}
+
+
+@frappe.whitelist()
+def update_in_map(
+    map_name: str,
+    layer_name: str,
+    sequence: int | None = None,
+    enabled: int | None = None,
+) -> dict:
+    """Update per-map settings (sequence, enabled) for a layer in the junction child table."""
+    assert_map_write(map_name)
+    row_name = frappe.db.get_value(
+        "Expedition Map Layer",
+        {"layer": layer_name, "parent": map_name, "parenttype": "Expedition Map"},
+        "name",
+    )
+    if not row_name:
+        frappe.throw(
+            f"Layer {layer_name} is not in map {map_name}", frappe.DoesNotExistError
+        )
+    if sequence is not None:
+        frappe.db.set_value(
+            "Expedition Map Layer",
+            row_name,
+            "sequence",
+            int(sequence),
+            update_modified=False,
+        )
+    if enabled is not None:
+        frappe.db.set_value(
+            "Expedition Map Layer",
+            row_name,
+            "enabled",
+            int(enabled),
+            update_modified=False,
+        )
+    return {"ok": True}
+
+
+@frappe.whitelist()
 def reorder(map_name: str, layer_names: list[str]) -> dict:
-    """Persist a new ordering. layer_names is the desired sequence from top
-    to bottom. Layer docs not in the list get a sequence past the end.
+    """Persist a new ordering via the junction child table.
+
+    layer_names is the desired sequence from top to bottom.
     """
     if not frappe.has_permission("Expedition Layer", "write"):
         frappe.throw("Not permitted", frappe.PermissionError)
@@ -4084,10 +4163,15 @@ def reorder(map_name: str, layer_names: list[str]) -> dict:
     for n in layer_names:
         if not n:
             continue
-        if frappe.db.get_value("Expedition Layer", n, "map") != map_name:
+        row_name = frappe.db.get_value(
+            "Expedition Map Layer",
+            {"layer": n, "parent": map_name, "parenttype": "Expedition Map"},
+            "name",
+        )
+        if not row_name:
             continue
         frappe.db.set_value(
-            "Expedition Layer", n, "sequence", seq, update_modified=False
+            "Expedition Map Layer", row_name, "sequence", seq, update_modified=False
         )
         seq += 1
     return {"ok": True}
@@ -4902,7 +4986,7 @@ def create_master(
 
 @frappe.whitelist()
 def list_masters() -> list[dict]:
-    """Return all Expedition Layer rows where map is empty (the masters).
+    """Return all Expedition Layer rows (all layers are free — not bound to any map).
 
     Ordered by source_doctype asc, title asc so the client can group by
     source_doctype cheaply. Reads through standard Frappe permissions; only
@@ -4911,12 +4995,9 @@ def list_masters() -> list[dict]:
     if not frappe.has_permission("Expedition Layer", "read"):
         frappe.throw("Not permitted", frappe.PermissionError)
 
-    # Frappe stores empty Links as either '' or NULL depending on the
-    # driver, so match both. The IN filter translates cleanly in MySQL.
     _lm_fields = [
         "name",
         "title",
-        "map",
         "source_doctype",
         "location_source",
         "location_link_field",
@@ -4972,7 +5053,6 @@ def list_masters() -> list[dict]:
 
     raw = frappe.get_all(
         "Expedition Layer",
-        filters={"map": ["in", ["", None]]},
         fields=_lm_fields,
         order_by="source_doctype asc, title asc",
     )
@@ -4986,115 +5066,57 @@ def list_masters() -> list[dict]:
 
 @frappe.whitelist()
 def attach_to_map(master_name: str, map_name: str) -> dict:
-    """Create a per-map instance Expedition Layer that inherits its display
-    fields from a master. Idempotent: if an instance already exists on
-    this map for the same (title, source_doctype), enables and returns the
-    existing instance instead of creating a duplicate.
+    """Add a free layer to a map by inserting a row in the junction child table.
+
+    Idempotent: if the layer is already in this map, enables it if disabled
+    and returns the layer DTO.
     """
-    if not frappe.has_permission("Expedition Layer", "create"):
-        frappe.throw("Not permitted to create layers", frappe.PermissionError)
+    if not frappe.has_permission("Expedition Layer", "read"):
+        frappe.throw("Not permitted to add layers", frappe.PermissionError)
     assert_map_write(map_name)
 
-    master = frappe.get_doc("Expedition Layer", master_name)
-    if master.map:
-        frappe.throw(
-            f"{master_name} is not a master mapping (it already has a map)",
-            frappe.ValidationError,
-        )
-    assert_source_read(master.source_doctype)
+    layer = frappe.get_doc("Expedition Layer", master_name)
+    assert_source_read(layer.source_doctype)
 
-    # Idempotency: if an instance with the same (title, source_doctype)
-    # already exists on this map, return it.
-    existing = frappe.db.get_value(
-        "Expedition Layer",
-        {
-            "map": map_name,
-            "source_doctype": master.source_doctype,
-            "title": master.title,
-        },
-        "name",
+    # Idempotency: check if this layer is already in the map's child table
+    existing_row = frappe.db.get_value(
+        "Expedition Map Layer",
+        {"layer": master_name, "parent": map_name, "parenttype": "Expedition Map"},
+        ["name", "enabled"],
+        as_dict=True,
     )
-    if existing:
-        doc = frappe.get_doc("Expedition Layer", existing)
-        if not doc.enabled:
-            doc.enabled = 1
-            doc.save(ignore_permissions=True)
-        return _layer_to_dto(doc)
+    if existing_row:
+        if not existing_row.enabled:
+            frappe.db.set_value(
+                "Expedition Map Layer",
+                existing_row.name,
+                "enabled",
+                1,
+                update_modified=False,
+            )
+        dto = _layer_to_dto(layer)
+        dto["enabled"] = 1
+        return dto
 
-    last_seq = frappe.db.sql(
-        "select ifnull(max(sequence), 0) + 1 from `tabExpedition Layer` where map = %s",
-        (map_name,),
-    )[0][0]
-
-    doc = frappe.new_doc("Expedition Layer")
-    doc.update(
-        {
-            "title": master.title,
-            "map": map_name,
-            "source_doctype": master.source_doctype,
-            "location_source": getattr(master, "location_source", None)
-            or "Direct Fields",
-            "location_link_field": getattr(master, "location_link_field", None) or "",
-            "location_doctype": getattr(master, "location_doctype", None) or "",
-            "location_reverse_link_field": getattr(
-                master, "location_reverse_link_field", None
-            )
-            or "",
-            "location_fields_json": getattr(master, "location_fields_json", None) or "",
-            "latitude_field": master.latitude_field,
-            "longitude_field": master.longitude_field,
-            "label_field": master.label_field,
-            "color": master.color,
-            "icon": master.icon,
-            "size": master.size,
-            "pin_min_zoom": getattr(master, "pin_min_zoom", 0) or 0,
-            "cluster": master.cluster,
-            "heatmap": master.heatmap,
-            "heatmap_mode": master.heatmap_mode or "count",
-            "heatmap_weight_field": master.heatmap_weight_field or "",
-            "heatmap_weight_min": master.heatmap_weight_min,
-            "heatmap_weight_max": master.heatmap_weight_max,
-            "heatmap_weight_scale": master.heatmap_weight_scale or "linear",
-            "heatmap_weight_stops_json": master.heatmap_weight_stops_json or "",
-            "heatmap_radius_min": master.heatmap_radius_min or 10,
-            "heatmap_radius_max": master.heatmap_radius_max or 30,
-            "heatmap_intensity_min": master.heatmap_intensity_min or 1,
-            "heatmap_intensity_max": master.heatmap_intensity_max or 2.5,
-            "heatmap_opacity": master.heatmap_opacity
-            if master.heatmap_opacity is not None
-            else 0.75,
-            "heatmap_ramp_json": master.heatmap_ramp_json or "",
-            "territory_enabled": getattr(master, "territory_enabled", 0),
-            "territory_color": getattr(master, "territory_color", None) or "",
-            "territory_opacity": getattr(master, "territory_opacity", None)
-            if getattr(master, "territory_opacity", None) is not None
-            else 0.18,
-            "territory_padding_meters": getattr(
-                master, "territory_padding_meters", None
-            )
-            or 2500,
-            "enabled": 1,
-            "filter_json": master.filter_json,
-            "stroke_color": master.stroke_color,
-            "stroke_width": master.stroke_width,
-            "fill_opacity": master.fill_opacity,
-            "popup_template": master.popup_template,
-            "popup_fields_json": master.popup_fields_json,
-            "linked_metrics_json": getattr(master, "linked_metrics_json", None) or "",
-            "linked_metric_filters_json": getattr(
-                master, "linked_metric_filters_json", None
-            )
-            or "",
-            "group_by_field": master.group_by_field,
-            "group_config_json": master.group_config_json,
-            "click_action": master.click_action,
-            "use_source_permissions": master.use_source_permissions,
-            "sequence": int(last_seq),
-        }
+    last_seq = (
+        frappe.db.sql(
+            "select ifnull(max(sequence), 0) + 1 from `tabExpedition Map Layer`"
+            " where parent = %s and parenttype = 'Expedition Map'",
+            (map_name,),
+        )[0][0]
+        or 1
     )
-    _sync_filter_child_table_from_json(doc, master.filter_json)
-    doc.insert(ignore_permissions=True)
-    return _layer_to_dto(doc)
+
+    map_doc = frappe.get_doc("Expedition Map", map_name)
+    map_doc.append(
+        "layers", {"layer": master_name, "sequence": int(last_seq), "enabled": 1}
+    )
+    map_doc.save(ignore_permissions=True)
+
+    dto = _layer_to_dto(layer)
+    dto["sequence"] = int(last_seq)
+    dto["enabled"] = 1
+    return dto
 
 
 @frappe.whitelist()

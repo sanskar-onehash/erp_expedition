@@ -755,18 +755,37 @@ export const useLayersStore = defineStore('layers', () => {
     return dto
   }
 
-  async function updateLayer(layerName, fields) {
-    const dto = await call('expedition.api.layer.update', { layer_name: layerName, ...fields })
-    _replaceLayer(dto)
-    // Filter / color / etc. changed — re-fetch so the map reflects them.
-    // The server may return a different feature set after filter changes,
-    // so we drop the cache and refetch with the last known bounds. If
-    // we've never fetched (e.g. map just opened), we just clear and
-    // let the next moveend populate it.
+  // Per-map fields live in the junction table; all other fields on the layer doc.
+  const _PER_MAP_FIELDS = new Set(['enabled', 'sequence'])
+
+  async function updateLayer(layerName, fields, mapName) {
+    const perMap = {}
+    const shared = {}
+    for (const [k, v] of Object.entries(fields)) {
+      if (_PER_MAP_FIELDS.has(k)) perMap[k] = v
+      else shared[k] = v
+    }
+
+    let dto = layers.value.find((l) => l.name === layerName) || {}
+
+    if (Object.keys(perMap).length && mapName) {
+      await call('expedition.api.layer.update_in_map', {
+        map_name: mapName,
+        layer_name: layerName,
+        ...perMap,
+      })
+      dto = { ...dto, ...perMap }
+      _replaceLayer(dto)
+    }
+
+    if (Object.keys(shared).length) {
+      dto = await call('expedition.api.layer.update', { layer_name: layerName, ...shared })
+      _replaceLayer(dto)
+      // Re-inject per-map fields that update() doesn't know about
+      if (Object.keys(perMap).length) dto = { ...dto, ...perMap }
+    }
+
     clearFeatures(layerName)
-    // Same for the bounds envelope — filter / source / lat-lng
-    // changes invalidate it. Fire-and-forget; UI falls back to the
-    // feature cache while the new bounds are in flight.
     clearBounds(layerName)
     fetchBounds(layerName).catch(() => {})
     _emitLayersChanged()
@@ -774,8 +793,15 @@ export const useLayersStore = defineStore('layers', () => {
     return dto
   }
 
-  async function removeLayer(layerName) {
-    await call('expedition.api.layer.delete', { layer_name: layerName })
+  async function removeLayer(layerName, mapName) {
+    if (mapName) {
+      await call('expedition.api.layer.remove_from_map', {
+        layer_name: layerName,
+        map_name: mapName,
+      })
+    } else {
+      await call('expedition.api.layer.delete', { layer_name: layerName })
+    }
     layers.value = layers.value.filter((l) => l.name !== layerName)
     clearFeatures(layerName)
     clearBounds(layerName)
@@ -835,7 +861,7 @@ export const useLayersStore = defineStore('layers', () => {
     _replaceLayer(dto)
     _emitLayersChanged()
     if (dto.enabled === 0 || dto.enabled === false) {
-      dto = await updateLayer(dto.name, { enabled: 1 })
+      dto = await updateLayer(dto.name, { enabled: 1 }, mapName)
     }
     if (dto.enabled !== 0 && dto.enabled !== false) {
       clearFeatures(dto.name)

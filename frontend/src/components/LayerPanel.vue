@@ -324,7 +324,7 @@ function editShareRow(row) {
   shareDraftCanShare.value = !!row.canShare
 }
 function toggleLayer(layerName, enabled) {
-  layerStore.updateLayer(layerName, { enabled: enabled ? 1 : 0 })
+  layerStore.updateLayer(layerName, { enabled: enabled ? 1 : 0 }, activeMapName.value)
 }
 function editLayer(layer) { ui.openLayerEditor(layer) }
 function createLayer() {

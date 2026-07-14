@@ -192,16 +192,32 @@ def load_full(name: str) -> dict:
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
         layer_fields.insert(layer_fields.index("cluster"), "pin_min_zoom")
     if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
-        layer_fields.insert(layer_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+        layer_fields.insert(
+            layer_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json"
+        )
     if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
-        layer_fields.insert(layer_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
+        layer_fields.insert(
+            layer_fields.index("heatmap_intensity_max"), "heatmap_intensity_min"
+        )
 
-    layers = frappe.get_all(
-        "Expedition Layer",
-        filters={"map": name, "enabled": 1},
-        fields=layer_fields,
-        order_by="sequence asc, modified asc",
-    )
+    # Load layers from the junction child table (many-to-many)
+    map_layers = [
+        (row.layer, row.sequence, row.enabled) for row in map_doc.get("layers", [])
+    ]
+    enabled_names = [ln for ln, seq, en in map_layers if en]
+
+    if not enabled_names:
+        layers = []
+    else:
+        layers = frappe.get_all(
+            "Expedition Layer",
+            filters={"name": ["in", enabled_names]},
+            fields=layer_fields,
+        )
+        seq_map = {ln: seq for ln, seq, en in map_layers}
+        for layer in layers:
+            layer["sequence"] = seq_map.get(layer["name"], 0)
+        layers = sorted(layers, key=lambda l: (l["sequence"], l.get("modified") or ""))
     zone_fields = [
         "name",
         "title",
@@ -489,7 +505,10 @@ def share_map(name: str, users: list | str | None = None) -> list[dict]:
     doc = frappe.get_doc("Expedition Map", name)
     if _has_map_field("access_overrides_json"):
         doc.access_overrides_json = frappe.json.dumps(
-            [{"user": user, "access": row["access"]} for user, row in sorted(next_shares.items())]
+            [
+                {"user": user, "access": row["access"]}
+                for user, row in sorted(next_shares.items())
+            ]
         )
     doc.save(ignore_permissions=True)
     frappe.db.commit()
@@ -678,11 +697,19 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         "sequence",
     ]
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
-        template_layer_fields.insert(template_layer_fields.index("cluster"), "pin_min_zoom")
+        template_layer_fields.insert(
+            template_layer_fields.index("cluster"), "pin_min_zoom"
+        )
     if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
-        template_layer_fields.insert(template_layer_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+        template_layer_fields.insert(
+            template_layer_fields.index("heatmap_radius_min"),
+            "heatmap_weight_stops_json",
+        )
     if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
-        template_layer_fields.insert(template_layer_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
+        template_layer_fields.insert(
+            template_layer_fields.index("heatmap_intensity_max"),
+            "heatmap_intensity_min",
+        )
 
     template_layers = frappe.get_all(
         "Expedition Layer",
@@ -794,7 +821,4 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
 def get_global_settings() -> dict:
     """Return site-wide global settings and script for the Expedition Map."""
     doc = frappe.get_single("Expedition Settings")
-    return {
-        "global_script": getattr(doc, "global_script", "") or ""
-    }
-
+    return {"global_script": getattr(doc, "global_script", "") or ""}

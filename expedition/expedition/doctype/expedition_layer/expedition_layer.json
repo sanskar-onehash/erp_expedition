@@ -7,9 +7,9 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
-  "map",
   "sequence",
   "enabled",
+  "map",
   "tab_source",
   "data_source_type",
   "source_doctype",
@@ -94,11 +94,10 @@
   {
    "fieldname": "map",
    "fieldtype": "Link",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
    "label": "Map",
    "options": "Expedition Map",
-   "description": "Leave empty for a master mapping. A master can be attached to any map to create an instance that inherits its display properties."
+   "hidden": 1,
+   "description": "Legacy — use the Layers child table on Expedition Map instead."
   },
   {
    "fieldname": "sequence",

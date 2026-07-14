@@ -30,7 +30,7 @@ const cursor = ref(0)
 const activeMapName = computed(() => mapStore.activeMap?.map?.name)
 const recent = computed(() => ui.recent || [])
 const templates = computed(() => mapStore.templates || [])
-const activeLayers = computed(() => (layerStore.layers || []).filter((l) => l.map === activeMapName.value))
+const activeLayers = computed(() => layerStore.layers || [])
 const zones = computed(() => activeMapName.value ? zoneStore.byMap[activeMapName.value] || [] : [])
 
 function buildFlat() {
@@ -59,7 +59,7 @@ function buildFlat() {
         id: 'layer:' + l.name,
         label: l.title || l.name,
         meta: l.source_doctype,
-        run: () => { layerStore.updateLayer(l.name, { enabled: l.enabled === false ? 1 : 0 }); close() },
+        run: () => { layerStore.updateLayer(l.name, { enabled: l.enabled === false ? 1 : 0 }, activeMapName.value); close() },
       })
     }
   }

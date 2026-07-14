@@ -1879,21 +1879,21 @@ async function save() {
 
 async function remove() {
   if (!form.value.name) return
+  const activeMapName = mapStore.activeMap?.map?.name
+  const fromMap = !!activeMapName
   const ok = await ui.ask({
-    title: 'Delete this layer?',
-    body: 'This cannot be undone. The layer will be removed from the map and the underlying DocType rows will be unaffected.',
-    confirmLabel: 'Delete',
+    title: fromMap ? 'Remove from this map?' : 'Delete this layer?',
+    body: fromMap
+      ? 'The layer will be removed from this map. It will remain available to add to other maps.'
+      : 'This cannot be undone. The layer will be deleted permanently.',
+    confirmLabel: fromMap ? 'Remove' : 'Delete',
     destructive: true,
   })
   if (!ok) return
   saving.value = true
   error.value = ''
   try {
-    if (isMaster.value) {
-      await layerStore.removeMaster(form.value.name)
-    } else {
-      await layerStore.removeLayer(form.value.name)
-    }
+    await layerStore.removeLayer(form.value.name, activeMapName)
     commitLayerPreview()
     ui.closeLayerEditor()
   } catch (e) {

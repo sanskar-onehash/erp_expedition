@@ -13,6 +13,8 @@
   "basemap_style",
   "map_section",
   "viewport",
+  "layers_section",
+  "layers",
   "tab_filters",
   "filters_section",
   "layer_filters",
@@ -76,6 +78,17 @@
    "fieldtype": "JSON",
    "label": "Viewport",
    "description": "{ center: [lat, lng], zoom, bearing, pitch }"
+  },
+  {
+   "fieldname": "layers_section",
+   "fieldtype": "Section Break",
+   "label": "Layers"
+  },
+  {
+   "fieldname": "layers",
+   "fieldtype": "Table",
+   "label": "Layers",
+   "options": "Expedition Map Layer"
   },
   {
    "fieldname": "tab_filters",

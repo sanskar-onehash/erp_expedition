@@ -13,7 +13,7 @@ no_cache = 1
 # Bare skeleton — does NOT extend Frappe's templates/web.html, which
 # would pull in website.bundle.css and all global selectors (h3, .level,
 # etc.) that conflict with our scoped component styles.
-base_template_path = "templates/base.html"
+base_template_path = "expedition/templates/expedition_base.html"
 
 
 def get_context(context):

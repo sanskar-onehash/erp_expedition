@@ -67,9 +67,11 @@
   "heatmap_weight_min",
   "heatmap_weight_max",
   "heatmap_weight_scale",
+  "heatmap_weight_stops_json",
   "column_heatmap_b",
   "heatmap_radius_min",
   "heatmap_radius_max",
+  "heatmap_intensity_min",
   "heatmap_intensity_max",
   "heatmap_opacity",
   "heatmap_ramp_json",
@@ -457,6 +459,13 @@
    "default": "linear"
   },
   {
+   "fieldname": "heatmap_weight_stops_json",
+   "fieldtype": "Code",
+   "depends_on": "eval:doc.heatmap && doc.heatmap_mode=='sum'",
+   "label": "Heatmap Weight Stops",
+   "description": "Optional JSON array of [[value, weight]] breakpoints for non-linear weight mapping. Example: [[0,0],[100,0.5],[1000,1]]"
+  },
+  {
    "fieldname": "column_heatmap_b",
    "fieldtype": "Column Break"
   },
@@ -473,6 +482,13 @@
    "depends_on": "eval:doc.heatmap",
    "label": "Heatmap Radius",
    "default": "30"
+  },
+  {
+   "fieldname": "heatmap_intensity_min",
+   "fieldtype": "Float",
+   "depends_on": "eval:doc.heatmap",
+   "label": "Heatmap Intensity Min",
+   "default": "0"
   },
   {
    "fieldname": "heatmap_intensity_max",

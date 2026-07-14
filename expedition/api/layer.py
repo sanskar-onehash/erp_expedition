@@ -3499,6 +3499,10 @@ def list_for_map(map_name: str) -> list[dict]:
     ]
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
         fields.insert(fields.index("cluster"), "pin_min_zoom")
+    if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
+        fields.insert(fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+    if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
+        fields.insert(fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
 
     rows = frappe.get_all(
         "Expedition Layer",
@@ -4645,58 +4649,63 @@ def list_masters() -> list[dict]:
 
     # Frappe stores empty Links as either '' or NULL depending on the
     # driver, so match both. The IN filter translates cleanly in MySQL.
+    _lm_fields = [
+        "name",
+        "title",
+        "map",
+        "source_doctype",
+        "location_source",
+        "location_link_field",
+        "location_doctype",
+        "location_reverse_link_field",
+        "location_fields_json",
+        "latitude_field",
+        "longitude_field",
+        "label_field",
+        "filter_json",
+        "group_by_field",
+        "group_config_json",
+        "popup_template",
+        "popup_fields_json",
+        "linked_metrics_json",
+        "linked_metric_filters_json",
+        "click_action",
+        "color",
+        "icon",
+        "size",
+        "cluster",
+        "heatmap",
+        "heatmap_mode",
+        "heatmap_weight_field",
+        "heatmap_weight_min",
+        "heatmap_weight_max",
+        "heatmap_weight_scale",
+        "heatmap_radius_min",
+        "heatmap_radius_max",
+        "heatmap_intensity_max",
+        "heatmap_opacity",
+        "heatmap_ramp_json",
+        "territory_enabled",
+        "territory_color",
+        "territory_opacity",
+        "territory_padding_meters",
+        "stroke_color",
+        "stroke_width",
+        "fill_opacity",
+        "enabled",
+        "sequence",
+    ]
+    if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
+        _lm_fields.insert(_lm_fields.index("cluster"), "pin_min_zoom")
+    if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
+        _lm_fields.insert(_lm_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+    if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
+        _lm_fields.insert(_lm_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
+
     raw = frappe.get_all(
         "Expedition Layer",
         filters={"map": ["in", ["", None]]},
-        fields=[
-            "name",
-            "title",
-            "map",
-            "source_doctype",
-            "location_source",
-            "location_link_field",
-            "location_doctype",
-            "location_reverse_link_field",
-            "location_fields_json",
-            "latitude_field",
-            "longitude_field",
-            "label_field",
-            "filter_json",
-            "group_by_field",
-            "group_config_json",
-            "popup_template",
-            "popup_fields_json",
-            "linked_metrics_json",
-            "linked_metric_filters_json",
-            "click_action",
-            "color",
-            "icon",
-            "size",
-            "pin_min_zoom",
-            "cluster",
-            "heatmap",
-            "heatmap_mode",
-            "heatmap_weight_field",
-            "heatmap_weight_min",
-            "heatmap_weight_max",
-            "heatmap_weight_scale",
-            "heatmap_weight_stops_json",
-            "heatmap_radius_min",
-            "heatmap_radius_max",
-            "heatmap_intensity_min",
-            "heatmap_intensity_max",
-            "heatmap_opacity",
-            "heatmap_ramp_json",
-            "territory_enabled",
-            "territory_color",
-            "territory_opacity",
-            "territory_padding_meters",
-            "stroke_color",
-            "stroke_width",
-            "fill_opacity",
-            "enabled",
-            "sequence",
-        ],
+        fields=_lm_fields,
         order_by="source_doctype asc, title asc",
     )
     out = []

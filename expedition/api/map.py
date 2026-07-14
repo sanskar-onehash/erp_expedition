@@ -191,6 +191,10 @@ def load_full(name: str) -> dict:
     ]
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
         layer_fields.insert(layer_fields.index("cluster"), "pin_min_zoom")
+    if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
+        layer_fields.insert(layer_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+    if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
+        layer_fields.insert(layer_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
 
     layers = frappe.get_all(
         "Expedition Layer",
@@ -675,6 +679,10 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
     ]
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
         template_layer_fields.insert(template_layer_fields.index("cluster"), "pin_min_zoom")
+    if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
+        template_layer_fields.insert(template_layer_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+    if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
+        template_layer_fields.insert(template_layer_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
 
     template_layers = frappe.get_all(
         "Expedition Layer",

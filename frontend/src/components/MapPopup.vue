@@ -1286,27 +1286,6 @@ function formatDate(s) {
                   {{ item.label }} <strong>{{ item.count }}</strong>
                 </span>
               </div>
-              <button
-                v-for="row in group.rows"
-                :key="`${group.key}-${row.name}`"
-                type="button"
-                class="mp__linked-row"
-                @click="openDoc(group.source_doctype, row.name)"
-              >
-                <span class="mp__linked-row-main">
-                  <strong>{{ row.name }}</strong>
-                  <small v-if="linkedRecordStatus(row)">{{ linkedRecordStatus(row) }}</small>
-                </span>
-                <span class="mp__linked-row-meta">
-                  <strong v-if="linkedRecordAmount(row, group)">{{ linkedRecordAmount(row, group) }}</strong>
-                  <small>{{ linkedRecordDate(row) }}</small>
-                </span>
-                <span v-if="linkedRecordFields(group, row).length" class="mp__linked-fields">
-                  <span v-for="field in linkedRecordFields(group, row)" :key="field.fieldname">
-                    {{ field.label }}: {{ field.value }}
-                  </span>
-                </span>
-              </button>
             </section>
           </div>
         </div>

@@ -3,6 +3,7 @@
   "private": true,
   "description": "Wrapper package.json so `bench build --app expedition` invokes the Vite build.",
   "scripts": {
-    "build": "cd frontend && npm run build"
+    "postinstall": "cd frontend && yarn install --check-files",
+    "build": "cd frontend && yarn build"
   }
 }

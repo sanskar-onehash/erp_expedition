@@ -157,6 +157,13 @@ function onWindowBlur() {
   ui.clearShortcutModifiers()
 }
 
+async function onRefreshLayerEvent(e) {
+  const { layerName, context } = e.detail || {}
+  if (layerName) {
+    await layers.refetchLayer(layerName, { context })
+  }
+}
+
 onMounted(async () => {
   updateLayoutViewport()
   window.addEventListener('resize', updateLayoutViewport)
@@ -167,6 +174,7 @@ onMounted(async () => {
   })
   await mapStore.bootstrap()
   window.addEventListener('expedition:fit-data', onFitDataEvent)
+  window.addEventListener('expedition:refresh-layer', onRefreshLayerEvent)
   document.addEventListener('keydown', onGlobalKeydown, true)
   document.addEventListener('keyup', onGlobalKeyup, true)
   window.addEventListener('blur', onWindowBlur)
@@ -179,6 +187,7 @@ onBeforeUnmount(() => {
   if (_layoutMeasureFrame) window.cancelAnimationFrame(_layoutMeasureFrame)
   _layoutResizeObserver?.disconnect?.()
   window.removeEventListener('expedition:fit-data', onFitDataEvent)
+  window.removeEventListener('expedition:refresh-layer', onRefreshLayerEvent)
   document.removeEventListener('keydown', onGlobalKeydown, true)
   document.removeEventListener('keyup', onGlobalKeyup, true)
   window.removeEventListener('blur', onWindowBlur)

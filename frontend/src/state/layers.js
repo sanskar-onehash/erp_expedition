@@ -288,6 +288,9 @@ export const useLayersStore = defineStore('layers', () => {
     if (Array.isArray(options.extraFields) && options.extraFields.length) {
       args.extra_fields = options.extraFields
     }
+    if (options.context && typeof options.context === 'object') {
+      Object.assign(args, options.context)
+    }
     return call('expedition.api.layer.get_features', args)
   }
 
@@ -362,14 +365,14 @@ export const useLayersStore = defineStore('layers', () => {
   // truth without the user having to pan. Falls back to the live
   // map viewport so the layer refreshes even on first paint (e.g.
   // after the user edits popup_fields and saves).
-  async function refetchLayer(layerName) {
+  async function refetchLayer(layerName, options = {}) {
     const b = lastBounds.value[layerName]
     if (b) {
-      await fetchFeatures(layerName, b)
+      await fetchFeatures(layerName, b, options)
     } else if (window.expeditionMap?.getMap) {
       const m = window.expeditionMap.getMap()
       if (m && m.getBounds) {
-        await fetchFeatures(layerName, viewportBoundsForServer(m.getBounds()))
+        await fetchFeatures(layerName, viewportBoundsForServer(m.getBounds()), options)
       }
     }
   }

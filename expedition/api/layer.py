@@ -2320,7 +2320,7 @@ def get_text_search_matches(
     return {"names": [name for name in names if name], "truncated": len(rows) > limit}
 
 
-def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup):
+def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup, kwargs=None):
     """Execute a python script to return layer data, and format it as GeoJSON."""
     from frappe.utils.safe_exec import safe_exec as frappe_safe_exec
 
@@ -2329,6 +2329,8 @@ def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_po
         "limit": limit,
         "offset": offset,
     }
+    if kwargs:
+        context.update(kwargs)
 
     _locals = {"result": [], "context": context}
     try:
@@ -2415,6 +2417,7 @@ def get_features(
     limit: int = 5000,
     offset: int = 0,
     render_popup: bool | int | str = True,
+    **kwargs
 ) -> dict:
     """Return a GeoJSON FeatureCollection for the given Expedition Layer."""
     layer_doc = frappe.get_doc("Expedition Layer", layer)
@@ -2434,7 +2437,7 @@ def get_features(
 
             assert_map_read(layer_doc.map)
         return _get_features_from_python_script(
-            layer_doc, bounds, limit, offset, render_popup
+            layer_doc, bounds, limit, offset, render_popup, kwargs
         )
     elif data_source_type == "Client Script (JS)":
         return {

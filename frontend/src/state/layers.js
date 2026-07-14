@@ -341,7 +341,23 @@ export const useLayersStore = defineStore('layers', () => {
     if (options.context && typeof options.context === 'object') {
       Object.assign(args, options.context)
     }
-    return call('expedition.api.layer.get_features', args)
+    let offset = 0
+    let accumulated = null
+    while (true) {
+      const page = await call('expedition.api.layer.get_features', { ...args, offset })
+      if (!accumulated) {
+        accumulated = page
+      } else {
+        for (const feature of page.features || []) {
+          accumulated.features.push(feature)
+        }
+        accumulated.total = page.total
+      }
+      if (!page.truncated) break
+      offset += (page.features || []).length
+    }
+    accumulated.truncated = false
+    return accumulated
   }
 
   async function fetchFeatures(layerName, bounds, options = {}) {

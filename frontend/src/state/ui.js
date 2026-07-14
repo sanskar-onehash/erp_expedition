@@ -36,7 +36,7 @@ const DEFAULT_CHROME_LAYOUT = {
 // preference and is mirrored into prefs.blurOnPanel).
 const DEFAULT_PREFS = {
   // Map
-  defaultZoom: 3,
+  defaultZoom: 1,
   defaultPitch: 0,
   tiltJoystickInverted: true,
   // Panels

@@ -53,6 +53,30 @@ const canEdit = computed(() => {
   return !owner || owner === me || me === 'Administrator'
 })
 
+const customZoneActions = computed(() => {
+  const list = window.Expedition?.Actions?.list?.() || []
+  return list.filter((act) => act.type === 'zone')
+})
+
+const zoneActionsBusy = ref(false)
+const zoneActionsError = ref('')
+
+async function runZoneAction(act) {
+  if (zoneActionsBusy.value) return
+  zoneActionsBusy.value = true
+  zoneActionsError.value = ''
+  try {
+    const zoneDoc = selectedZone.value
+    const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
+    await act.action(zoneDoc, features)
+  } catch (e) {
+    zoneActionsError.value = e.message || String(e)
+    console.error(`[expedition] Custom zone action ${act.id} failed`, e)
+  } finally {
+    zoneActionsBusy.value = false
+  }
+}
+
 const openSections = ref({
   zones: true,
   insights: true,
@@ -464,6 +488,20 @@ function onInsightClick(ins) {
               <span class="tp__zone-metric-label">{{ metric.label }}</span>
               <span class="tp__zone-metric-value">{{ metric.value ?? '—' }}</span>
             </div>
+          </div>
+          <div v-if="customZoneActions.length && zoneSummary" class="tp__zone-actions">
+            <button
+              v-for="act in customZoneActions"
+              :key="act.id"
+              type="button"
+              class="tp__zone-action"
+              :disabled="zoneActionsBusy"
+              @click="runZoneAction(act)"
+              :title="act.label"
+            >
+              {{ act.label }}
+            </button>
+            <p v-if="zoneActionsError" class="tp__action-err">{{ zoneActionsError }}</p>
           </div>
         </div>
 
@@ -1454,5 +1492,39 @@ function onInsightClick(ins) {
   font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.tp__zone-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+.tp__zone-action {
+  width: 100%;
+  padding: 6px 12px;
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.34);
+  border-radius: 4px;
+  color: #BFDBFE;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+.tp__zone-action:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: rgba(59, 130, 246, 0.54);
+}
+.tp__zone-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tp__action-err {
+  font-size: 10px;
+  color: #FCA5A5;
+  margin: 4px 0 0 0;
 }
 </style>

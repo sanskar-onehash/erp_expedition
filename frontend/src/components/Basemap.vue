@@ -2051,15 +2051,63 @@ function _bindZoneHandlers() {
 }
 
 function onZoneClick(e) {
-  if (!ui.zoneEditMode) return
   if (ui.drawMode !== 'off' || ui.measureMode) return
-  selectZoneFeature(e)
+  const f = e.features?.[0]
+  if (!f?.properties?.name) return
+  const mapName = mapStore.activeMap?.map?.name
+  const zone = (mapName && zoneStore.byMap?.[mapName] || []).find((z) => z.name === f.properties.name)
+  if (!zone) return
+
+  if (ui.zoneEditMode) {
+    ui.selectZone(zone)
+    _reAddZones()
+  } else {
+    ui.selectZone(zone)
+    ui.selectedFeature = {
+      _lngLat: e.lngLat,
+      properties: {
+        _name: zone.name,
+        _doctype: 'Expedition Zone',
+        title: zone.title || zone.name,
+        tag: zone.tag || '',
+        color: zone.color,
+        zone_type: zone.zone_type,
+      },
+      layer: {
+        name: 'Expedition Zone',
+        title: 'Zone',
+        click_action: 'popup',
+      }
+    }
+  }
 }
 
 function onZoneContextMenu(e) {
   if (ui.drawMode !== 'off' || ui.measureMode) return
   e.preventDefault?.()
-  selectZoneFeature(e)
+  const f = e.features?.[0]
+  if (!f?.properties?.name) return
+  const mapName = mapStore.activeMap?.map?.name
+  const zone = (mapName && zoneStore.byMap?.[mapName] || []).find((z) => z.name === f.properties.name)
+  if (!zone) return
+
+  ui.selectZone(zone)
+  ui.selectedFeature = {
+    _lngLat: e.lngLat,
+    properties: {
+      _name: zone.name,
+      _doctype: 'Expedition Zone',
+      title: zone.title || zone.name,
+      tag: zone.tag || '',
+      color: zone.color,
+      zone_type: zone.zone_type,
+    },
+    layer: {
+      name: 'Expedition Zone',
+      title: 'Zone',
+      click_action: 'popup',
+    }
+  }
 }
 
 function selectZoneFeature(e) {

@@ -8,6 +8,7 @@
  */
 
 import { mountExpedition } from './core/mount.js'
+import { useLayersStore } from './state/layers.js'
 
 export function initExpeditionSDK({ app }) {
   window.expedition = Object.assign(window.expedition || {}, {
@@ -18,6 +19,56 @@ export function initExpeditionSDK({ app }) {
 
   // Initialize the developer extension registries
   window.Expedition = window.Expedition || {}
+  
+  window.Expedition.getFeaturesInZone = function(zone, layerName) {
+    if (!zone || !zone.geometry) return []
+    const geom = typeof zone.geometry === 'string' ? JSON.parse(zone.geometry) : zone.geometry
+    if (!geom) return []
+
+    function pointInRing(lng, lat, ring) {
+      let inside = false
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1]
+        const xj = ring[j][0], yj = ring[j][1]
+        const intersects = ((yi > lat) !== (yj > lat)) &&
+          (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi)
+        if (intersects) inside = !inside
+      }
+      return inside
+    }
+
+    function pointInGeometry(lng, lat, geometry) {
+      if (geometry.type === 'Polygon') {
+        const ring = geometry.coordinates?.[0]
+        return ring ? pointInRing(lng, lat, ring) : false
+      }
+      if (geometry.type === 'MultiPolygon') {
+        const polys = geometry.coordinates || []
+        return polys.some(poly => poly[0] ? pointInRing(lng, lat, poly[0]) : false)
+      }
+      return false
+    }
+
+    const layersStore = useLayersStore()
+    const allFeatures = []
+    const layerNames = layerName ? [layerName] : Object.keys(layersStore.features)
+
+    for (const name of layerNames) {
+      const fc = layersStore.features[name]
+      if (!fc || !Array.isArray(fc.features)) continue
+      for (const f of fc.features) {
+        const coords = f.geometry?.coordinates
+        if (Array.isArray(coords) && coords.length === 2) {
+          const [lng, lat] = coords
+          if (pointInGeometry(lng, lat, geom)) {
+            allFeatures.push(f)
+          }
+        }
+      }
+    }
+    return allFeatures
+  }
+
   window.Expedition.Actions = window.Expedition.Actions || {
     registry: {},
     register(id, config) {
@@ -30,6 +81,7 @@ export function initExpeditionSDK({ app }) {
       return Object.values(this.registry)
     }
   }
+  
   window.Expedition.Sources = window.Expedition.Sources || {
     registry: {},
     register(id, config) {

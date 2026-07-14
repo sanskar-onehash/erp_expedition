@@ -109,6 +109,68 @@ watch(feature, (newVal) => {
 function close() { ui.selectedFeature = null }
 function onKey(e) { if (e.key === 'Escape' && feature.value) close() }
 
+const customActions = computed(() => {
+  const list = window.Expedition?.Actions?.list?.() || []
+  return list.filter((act) => {
+    const type = act.type || 'popup'
+    if (sourceDoctype.value === 'Expedition Zone') {
+      return type === 'zone'
+    } else {
+      if (type !== 'popup') return false
+      if (act.doctype && act.doctype !== sourceDoctype.value) return false
+      if (typeof act.visible === 'function') {
+        try { return act.visible(feature.value) } catch (e) { return false }
+      }
+      return true
+    }
+  })
+})
+
+const customActionsBusy = ref(false)
+
+async function runCustomAction(act) {
+  if (customActionsBusy.value) return
+  customActionsBusy.value = true
+  actionError.value = ''
+  try {
+    if (sourceDoctype.value === 'Expedition Zone') {
+      const zoneDoc = ui.selectedZone
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
+      await act.action(zoneDoc, features)
+    } else {
+      await act.action(feature.value)
+    }
+  } catch (e) {
+    actionError.value = e.message || String(e)
+    console.error(`[expedition] Custom action ${act.id} failed`, e)
+  } finally {
+    customActionsBusy.value = false
+  }
+}
+
+const zoneLoading = ref(false)
+const zoneError = ref('')
+const zoneMetrics = ref(null)
+
+watch(feature, async (newVal) => {
+  if (newVal && newVal.properties && newVal.properties._doctype === 'Expedition Zone') {
+    zoneLoading.value = true
+    zoneError.value = ''
+    zoneMetrics.value = null
+    try {
+      zoneMetrics.value = await call('expedition.api.metric.summarize_zone', {
+        zone_name: newVal.properties._name
+      })
+    } catch (e) {
+      zoneError.value = e.message || String(e)
+    } finally {
+      zoneLoading.value = false
+    }
+  } else {
+    zoneMetrics.value = null
+  }
+})
+
 function recompute() {
   const sel = ui.selectedFeature
   if (!sel || !sel._lngLat) { screen.value = null; return }
@@ -961,6 +1023,17 @@ function formatDate(s) {
       >
         <span>Assign</span>
       </button>
+      <button
+        v-for="act in customActions"
+        :key="act.id"
+        type="button"
+        class="mp__action"
+        :disabled="customActionsBusy"
+        @click="runCustomAction(act)"
+        :title="act.label"
+      >
+        <span>{{ act.label }}</span>
+      </button>
       <button type="button" class="mp__action mp__action--ghost" :disabled="copyBusy" @click="copyDocLink" title="Copy source document link">
         <span>{{ copyBusy ? 'Copied' : 'Copy Link' }}</span>
       </button>
@@ -971,7 +1044,7 @@ function formatDate(s) {
         Details
       </button>
       <button
-        v-if="sourceDoctype && sourceName"
+        v-if="sourceDoctype && sourceName && sourceDoctype !== 'Expedition Zone'"
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'activity' }"
@@ -981,7 +1054,7 @@ function formatDate(s) {
         <span v-if="aggregate && aggregate.total" class="mp__tab-count">{{ aggregate.total }}</span>
       </button>
       <button
-        v-if="linkedRecordTabVisible"
+        v-if="linkedRecordTabVisible && sourceDoctype !== 'Expedition Zone'"
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'records' }"
@@ -1138,7 +1211,32 @@ function formatDate(s) {
 
     <div class="mp__body">
       <section v-if="activeTab === 'details'" class="mp__section">
-        <div v-if="feature.properties._popup_html" class="mp__custom" v-html="feature.properties._popup_html" />
+        <div v-if="sourceDoctype === 'Expedition Zone'" class="mp__zone-details">
+          <div class="mp__zone-summary-box">
+            <div class="mp__zone-row">
+              <span>Zone Tag:</span>
+              <strong>{{ feature.properties.tag || 'None' }}</strong>
+            </div>
+            <div class="mp__zone-row">
+              <span>Type:</span>
+              <strong>{{ feature.properties.zone_type }}</strong>
+            </div>
+          </div>
+
+          <div class="mp__zone-metrics-block">
+            <div class="mp__zone-metrics-head">Zone Metrics</div>
+            <p v-if="zoneLoading" class="mp__zone-loading">Calculating metrics...</p>
+            <p v-else-if="zoneError" class="mp__zone-error">{{ zoneError }}</p>
+            <div v-else-if="zoneMetrics" class="mp__zone-metrics-rows">
+              <div v-for="row in zoneMetrics.layers" :key="row.layer" class="mp__zone-metric-row">
+                <span>{{ row.title || row.source_doctype }}</span>
+                <strong>{{ row.count }}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="feature.properties._popup_html && sourceDoctype !== 'Expedition Zone'" class="mp__custom" v-html="feature.properties._popup_html" />
 
         <div v-if="metricRows.length" class="mp__metric-grid" aria-label="Linked field metrics">
           <div v-for="metric in metricRows" :key="metric.key" class="mp__metric-card">
@@ -2463,5 +2561,74 @@ function formatDate(s) {
 .mp__todo-btn--primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.mp__zone-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.mp__zone-summary-box {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mp__zone-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.mp__zone-row span {
+  color: rgba(230, 232, 236, 0.62);
+}
+.mp__zone-row strong {
+  color: #E6E8EC;
+  font-weight: 500;
+}
+.mp__zone-metrics-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mp__zone-metrics-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: rgba(230, 232, 236, 0.52);
+}
+.mp__zone-loading,
+.mp__zone-error {
+  font-size: 11px;
+  color: rgba(230, 232, 236, 0.45);
+  margin: 0;
+}
+.mp__zone-error {
+  color: #FCA5A5;
+}
+.mp__zone-metrics-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mp__zone-metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.mp__zone-metric-row span {
+  color: rgba(230, 232, 236, 0.72);
+}
+.mp__zone-metric-row strong {
+  color: #E6E8EC;
+  font-weight: 600;
 }
 </style>

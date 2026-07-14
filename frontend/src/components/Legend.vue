@@ -127,30 +127,28 @@ function groupSwatches(l) {
 .legend {
   display: inline-flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 4px;
   max-width: 60vw;
-  background: rgba(11, 14, 20, 0.72);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  padding: 4px 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.32);
+  background: transparent;
   pointer-events: auto;
 }
 .legend__chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px 4px 6px;
-  background: transparent;
-  border: 0;
+  background: rgba(11, 14, 20, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.32);
   color: rgba(230, 232, 236, 0.92);
   font-family: inherit;
   font-size: 11px;
   cursor: pointer;
   transition: background 100ms ease;
 }
-.legend__chip:hover { background: rgba(255, 255, 255, 0.08); }
+.legend__chip:hover { background: rgba(30, 35, 46, 0.88); }
 .legend__chip--disabled {
   opacity: 0.5;
 }

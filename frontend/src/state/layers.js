@@ -7,7 +7,7 @@
  * mutate it directly.
  */
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { call } from '../api/client.js'
 import { useUiStore } from './ui.js'
 import {
@@ -43,7 +43,7 @@ export const useLayersStore = defineStore('layers', () => {
 
   // Names of layers hidden locally (session-only, not persisted).
   // Legend chips toggle this; panel enable/disable persists via server.
-  const locallyHidden = ref(new Set())
+  const locallyHidden = reactive(new Set())
 
   // Timeline playback — session-only. When active, getDisplayFeatures()
   // filters each layer's GeoJSON by the _time property (or timelineField).
@@ -98,14 +98,12 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   function toggleLocalVisibility(layerName) {
-    const s = new Set(locallyHidden.value)
-    if (s.has(layerName)) s.delete(layerName)
-    else s.add(layerName)
-    locallyHidden.value = s
+    if (locallyHidden.has(layerName)) locallyHidden.delete(layerName)
+    else locallyHidden.add(layerName)
   }
 
   const visibleLayers = computed(() =>
-    layers.value.filter(l => l.enabled !== 0 && !locallyHidden.value.has(l.name))
+    layers.value.filter(l => l.enabled !== 0 && !locallyHidden.has(l.name))
   )
 
   const featureListeners = new Set()

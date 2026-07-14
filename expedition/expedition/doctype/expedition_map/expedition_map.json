@@ -9,16 +9,13 @@
   "title",
   "is_template",
   "template_category",
-
   "tab_map",
   "basemap_style",
   "map_section",
   "viewport",
-
   "tab_filters",
   "filters_section",
   "layer_filters",
-
   "tab_sharing",
   "shared_section",
   "is_public",
@@ -26,15 +23,12 @@
   "access_overrides_json",
   "owner_user",
   "owner_section",
-
   "tab_activity",
   "campaign_section",
   "campaign",
   "last_opened_at",
-
   "tab_scripts",
   "custom_script",
-
   "filters_json",
   "summary_json"
  ],
@@ -206,18 +200,6 @@
  "name": "Expedition Map",
  "owner": "Administrator",
  "permissions": [
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
-  },
   {
    "create": 1,
    "delete": 1,

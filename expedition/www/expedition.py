@@ -17,10 +17,22 @@ base_template_path = "expedition/templates/expedition_base.html"
 
 
 def get_context(context):
+    if frappe.session.user == "Guest":
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    if not frappe.db.exists(
+        "Has Role",
+        {
+            "parent": frappe.session.user,
+            "role": "Expedition User",
+        },
+    ):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
     from expedition import __frontend_build__
 
     context.expedition_build = __frontend_build__
     context.csrf_token = frappe.sessions.get_csrf_token()
-    context.expedition_user = frappe.session.user or "Guest"
+    context.expedition_user = frappe.session.user
 
     return context

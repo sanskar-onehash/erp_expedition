@@ -21,12 +21,4 @@ before_tests = "expedition.install.before_tests"
 
 app_include_icons = "expedition/icons.svg"
 
-standard_navbar_items = [
-    {
-        "item_label": "Expedition",
-        "item_type": "Route",
-        "route": "/expedition",
-        "is_standard": 1,
-        "hidden": 0,
-    },
-]
+extend_bootinfo = "expedition.boot.add_navbar_item"

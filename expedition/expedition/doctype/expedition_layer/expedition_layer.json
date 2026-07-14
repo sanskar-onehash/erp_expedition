@@ -10,7 +10,6 @@
   "map",
   "sequence",
   "enabled",
-
   "tab_source",
   "data_source_type",
   "source_doctype",
@@ -28,11 +27,9 @@
   "column_source_b",
   "preset",
   "source_section",
-
   "tab_filters",
   "filter_section",
   "filters",
-
   "tab_style",
   "style_section",
   "color",
@@ -52,13 +49,11 @@
   "radius_field",
   "radius_meters",
   "radius_opacity",
-
   "tab_group",
   "group_section",
   "group_by_field",
   "column_group_b",
   "groups",
-
   "tab_heatmap",
   "heatmap_section",
   "heatmap",
@@ -75,7 +70,6 @@
   "heatmap_intensity_max",
   "heatmap_opacity",
   "heatmap_ramp_json",
-
   "tab_popup",
   "popup_section",
   "click_action",
@@ -83,11 +77,9 @@
   "popup_fields_json",
   "linked_metrics_json",
   "linked_metric_filters_json",
-
   "tab_permissions",
   "permissions_section",
   "use_source_permissions",
-
   "filter_json",
   "group_config_json"
  ],
@@ -596,18 +588,6 @@
  "name": "Expedition Layer",
  "owner": "Administrator",
  "permissions": [
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
-  },
   {
    "create": 1,
    "delete": 1,

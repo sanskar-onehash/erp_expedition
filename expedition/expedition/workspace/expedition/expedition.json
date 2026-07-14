@@ -51,9 +51,6 @@
  "roles": [
   {
    "role": "Expedition User"
-  },
-  {
-   "role": "System Manager"
   }
  ],
  "sequence_id": 30.0,

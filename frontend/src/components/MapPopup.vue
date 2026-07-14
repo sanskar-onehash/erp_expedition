@@ -181,7 +181,7 @@ function recompute() {
   // viewport (.expedition has fixed inset: 0).
   const w = 360
   const margin = 12
-  const cardH = 220 // estimated; recomputed after mount
+  const cardH = measuredH.value || 220
   const vw = window.innerWidth
   const vh = window.innerHeight
   // Default: card opens to the right of the pin.
@@ -278,6 +278,11 @@ watch(feature, async (v) => {
     todoCreated.value = ''
     showTodoPanel.value = false
   }
+})
+
+watch([activeTab, linkedRecordsLoading], async () => {
+  await nextTick()
+  measure()
 })
 
 watch(assignField, () => {
@@ -1264,29 +1269,33 @@ function formatDate(s) {
         >
           <div class="mp__linked-head">
             <span>Linked Records</span>
-            <small v-if="linkedRecordCount">{{ linkedRecordCount }} rows</small>
-            <small v-else-if="linkedRecordsLoading">Loading</small>
+            <small v-if="linkedRecordsLoading">Loading</small>
           </div>
           <p v-if="linkedRecordsError" class="mp__linked-empty">Could not load linked records.</p>
           <p v-else-if="linkedRecordsLoading && !linkedRecordGroups.length" class="mp__linked-empty">Loading linked records...</p>
           <div v-else class="mp__linked-groups">
-            <section v-for="group in linkedRecordGroups" :key="group.key" class="mp__linked-group">
-              <div class="mp__linked-group-head">
-                <span>
-                  {{ group.label || group.source_doctype }}
-                  <em v-if="group.suggested">Suggested</em>
-                </span>
-                <small>{{ group.source_doctype }}</small>
-              </div>
-              <div v-if="linkedRecordGroupSummary(group).length" class="mp__linked-summary">
-                <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
-                  {{ item.label }} <strong>{{ item.value }}</strong>
-                </span>
-                <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
-                  {{ item.label }} <strong>{{ item.count }}</strong>
-                </span>
-              </div>
-            </section>
+            <template v-for="group in linkedRecordGroups" :key="group.key">
+              <section
+                v-if="linkedRecordGroupSummary(group).length || linkedRecordStatusSummary(group).length"
+                class="mp__linked-group"
+              >
+                <div class="mp__linked-group-head">
+                  <span>
+                    {{ group.label || group.source_doctype }}
+                    <em v-if="group.suggested">Suggested</em>
+                  </span>
+                  <small>{{ group.source_doctype }}</small>
+                </div>
+                <div class="mp__linked-summary">
+                  <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
+                    {{ item.label }} <strong>{{ item.value }}</strong>
+                  </span>
+                  <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
+                    {{ item.label }} <strong>{{ item.count }}</strong>
+                  </span>
+                </div>
+              </section>
+            </template>
           </div>
         </div>
 

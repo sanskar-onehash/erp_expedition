@@ -19,7 +19,7 @@ after_uninstall = "expedition.install.after_uninstall"
 
 before_tests = "expedition.install.before_tests"
 
-app_include_icons = "expedition/public/icons.svg"
+app_include_icons = "expedition/icons.svg"
 
 standard_navbar_items = [
     {

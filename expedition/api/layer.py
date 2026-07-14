@@ -2196,8 +2196,8 @@ def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_po
     
     script_output = frappe.safe_eval(
         layer_doc.python_script or "",
-        globals_dict={"frappe": frappe, "context": context},
-        locals_dict=context
+        eval_globals={"frappe": frappe, "context": context},
+        eval_locals=context,
     )
     
     if not isinstance(script_output, list):
@@ -3214,6 +3214,13 @@ def get_layer_bounds(layer: str) -> dict:
     layer_doc = frappe.get_doc("Expedition Layer", layer)
     if not layer_doc.enabled:
         return _empty_bounds()
+
+    # Python Script and Client Script layers have no source_doctype —
+    # bounds cannot be computed server-side without running the script.
+    # Return an empty-bounds sentinel so the client skips auto-fit.
+    if layer_doc.data_source_type in ("Python Script", "Client Script (JS)"):
+        return _empty_bounds()
+
     assert_source_read(layer_doc.source_doctype)
     _assert_location_read(layer_doc)
 

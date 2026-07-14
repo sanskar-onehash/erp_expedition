@@ -3194,11 +3194,11 @@ watch(
 </style>
 <style>
 /* MapLibre controls live outside the Vue component root (appended
-   to the map container), so these must be unscoped. They use
-   class names unique to Expedition, so leakage is nil. */
-.maplibregl-ctrl-attrib { font-size: 10px; opacity: 0.65; }
-.maplibregl-ctrl-attrib a { color: rgba(255, 255, 255, 0.7); }
-.maplibregl-ctrl-scale {
+   to the map container), so these cannot use scoped data-v attributes.
+   Nesting under .basemap-shell keeps them from leaking to Frappe Desk. */
+.basemap-shell .maplibregl-ctrl-attrib { font-size: 10px; opacity: 0.65; }
+.basemap-shell .maplibregl-ctrl-attrib a { color: rgba(255, 255, 255, 0.7); }
+.basemap-shell .maplibregl-ctrl-scale {
   background: rgba(11, 14, 20, 0.7);
   border-color: rgba(255, 255, 255, 0.2);
   color: rgba(255, 255, 255, 0.8);

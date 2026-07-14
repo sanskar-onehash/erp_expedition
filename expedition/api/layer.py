@@ -29,7 +29,11 @@ from typing import Any
 import frappe
 
 from expedition.api.icon import assert_icon_readable
-from expedition.api.permission import assert_map_read, assert_map_write, assert_source_read
+from expedition.api.permission import (
+    assert_map_read,
+    assert_map_write,
+    assert_source_read,
+)
 
 
 LAYOUT_FIELD_TYPES = {
@@ -64,6 +68,7 @@ GROUP_PATH_SEPARATOR = "\x1f"
 def _auto_group_color(value: Any) -> str:
     digest = hashlib.sha1(str(value).encode("utf-8")).digest()
     return GROUP_PALETTE[digest[0] % len(GROUP_PALETTE)]
+
 
 FILTERABLE_FIELD_TYPES = {
     "Attach",
@@ -247,7 +252,11 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
             op_key = _operator_key(op)
             if op_key in {"in", "not in", "between"}:
                 value = _parse_multi_value(value)
-            elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
+            elif (
+                op_key in {"like", "not like"}
+                and isinstance(value, str)
+                and "%" not in value
+            ):
                 value = f"%{value}%"
             normalized.append([field, op, value])
         elif len(f) == 4:
@@ -255,7 +264,11 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
             op_key = _operator_key(op)
             if op_key in {"in", "not in", "between"}:
                 value = _parse_multi_value(value)
-            elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
+            elif (
+                op_key in {"like", "not like"}
+                and isinstance(value, str)
+                and "%" not in value
+            ):
                 value = f"%{value}%"
             normalized.append([dt, field, op, value])
     return normalized
@@ -303,7 +316,11 @@ def _sync_filter_child_table_from_json(doc, filter_json: str | dict | None) -> N
     otherwise be overwritten by stale child rows.
     """
     _coerce_filter(filter_json)
-    parsed = json.loads(filter_json) if isinstance(filter_json, str) and filter_json else filter_json
+    parsed = (
+        json.loads(filter_json)
+        if isinstance(filter_json, str) and filter_json
+        else filter_json
+    )
     rows = parsed if isinstance(parsed, list) else []
     doc.set("filters", [])
     if not rows:
@@ -331,7 +348,9 @@ def _sync_filter_child_table_from_json(doc, filter_json: str | dict | None) -> N
             child["to_value"] = value[1] if len(value) > 1 else ""
             child["value"] = ""
         else:
-            child["value"] = ", ".join(map(str, value)) if isinstance(value, list) else value
+            child["value"] = (
+                ", ".join(map(str, value)) if isinstance(value, list) else value
+            )
         doc.append("filters", child)
         serialized.append([field, op, value])
     doc.filter_json = frappe.json.dumps(serialized)
@@ -365,7 +384,12 @@ def _operators_for_field(fieldtype: str | None) -> list[dict]:
         ops += TEXT_OPERATORS
     if ft in NUMERIC_FIELD_TYPES or ft in DATE_FIELD_TYPES:
         ops += ORDER_OPERATORS
-    ops += [COMMON_OPERATORS[2], COMMON_OPERATORS[3], COMMON_OPERATORS[4], COMMON_OPERATORS[5]]
+    ops += [
+        COMMON_OPERATORS[2],
+        COMMON_OPERATORS[3],
+        COMMON_OPERATORS[4],
+        COMMON_OPERATORS[5],
+    ]
     return ops
 
 
@@ -387,7 +411,10 @@ def _filter_field_map(source_doctype: str) -> dict[str, dict]:
     meta = frappe.get_meta(source_doctype)
     fields: dict[str, dict] = {}
     for f in STANDARD_FILTER_FIELDS:
-        fields[f["fieldname"]] = {**f, "operators": _operators_for_field(f["fieldtype"])}
+        fields[f["fieldname"]] = {
+            **f,
+            "operators": _operators_for_field(f["fieldtype"]),
+        }
     for f in meta.fields:
         if not f.fieldname:
             continue
@@ -411,7 +438,9 @@ def _select_filter_options(field_meta: dict) -> list:
     return _select_options(field_meta.get("options"))
 
 
-def _parse_extra_feature_fields(raw: list | str | None, source_doctype: str) -> list[str]:
+def _parse_extra_feature_fields(
+    raw: list | str | None, source_doctype: str
+) -> list[str]:
     if not raw:
         return []
     if isinstance(raw, str):
@@ -527,7 +556,10 @@ def _validate_filter_rows(source_doctype: str, filters: list | None) -> None:
                     f"Filter '{field} between' needs exactly two values",
                     frappe.ValidationError,
                 )
-        if op_key == "is" and str(value or "").strip().lower() not in {"set", "not set"}:
+        if op_key == "is" and str(value or "").strip().lower() not in {
+            "set",
+            "not set",
+        }:
             frappe.throw(
                 f"Filter '{field} is' must use set or not set",
                 frappe.ValidationError,
@@ -556,7 +588,9 @@ def _coerce_linked_metrics(raw: str | list | None) -> list[dict[str, Any]]:
     seen = set()
     for idx, item in enumerate(parsed):
         if not isinstance(item, dict):
-            frappe.throw(f"Linked metric #{idx + 1} must be an object", frappe.ValidationError)
+            frappe.throw(
+                f"Linked metric #{idx + 1} must be an object", frappe.ValidationError
+            )
         key = str(item.get("key") or "").strip()
         if not key or not METRIC_KEY_RE.match(key):
             frappe.throw(
@@ -595,7 +629,9 @@ def _coerce_linked_metrics(raw: str | list | None) -> list[dict[str, Any]]:
     return metrics
 
 
-def _validate_link_field_path(metric_doctype: str, link_field_path: str, source_doctype: str) -> None:
+def _validate_link_field_path(
+    metric_doctype: str, link_field_path: str, source_doctype: str
+) -> None:
     parts = [p.strip() for p in link_field_path.split(".") if p.strip()]
     if not parts:
         frappe.throw("Invalid empty link field path")
@@ -605,22 +641,24 @@ def _validate_link_field_path(metric_doctype: str, link_field_path: str, source_
         meta = frappe.get_meta(current_doctype)
         field = meta.get_field(part)
         if not field:
-            frappe.throw(f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'")
+            frappe.throw(
+                f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'"
+            )
         if field.fieldtype != "Link" or not field.options:
-            frappe.throw(f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'")
+            frappe.throw(
+                f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'"
+            )
         current_doctype = field.options
 
     if current_doctype != source_doctype:
         frappe.throw(
             f"Link path '{link_field_path}' on {metric_doctype} must resolve to target DocType '{source_doctype}', but resolves to '{current_doctype}'",
-            frappe.ValidationError
+            frappe.ValidationError,
         )
 
 
 def _resolve_link_path_mapping(
-    source_doctype: str,
-    link_field_path: str,
-    target_names: list[str]
+    source_doctype: str, link_field_path: str, target_names: list[str]
 ) -> tuple[str, dict[str, str]]:
     """
     Resolves a dot-separated link path from source_doctype to target_names.
@@ -642,9 +680,13 @@ def _resolve_link_path_mapping(
         meta = frappe.get_meta(current_doctype)
         field = meta.get_field(part)
         if not field:
-            frappe.throw(f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'")
+            frappe.throw(
+                f"Field '{part}' not found on DocType '{current_doctype}' in path '{link_field_path}'"
+            )
         if field.fieldtype != "Link" or not field.options:
-            frappe.throw(f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'")
+            frappe.throw(
+                f"Field '{part}' on DocType '{current_doctype}' is not a Link field in path '{link_field_path}'"
+            )
         target_dt = field.options
         chain.append((current_doctype, part, target_dt))
         current_doctype = target_dt
@@ -660,7 +702,7 @@ def _resolve_link_path_mapping(
             step_doctype,
             filters={step_fieldname: ["in", list(current_mapping.keys())]},
             fields=["name", step_fieldname],
-            limit_page_length=0
+            limit_page_length=0,
         )
         next_mapping = {}
         for r in rows:
@@ -706,7 +748,9 @@ def validate_linked_metrics_json(
                         frappe.ValidationError,
                     )
             else:
-                doctype_fieldname = metric.get("dynamic_link_doctype_field") or link_field.options
+                doctype_fieldname = (
+                    metric.get("dynamic_link_doctype_field") or link_field.options
+                )
                 doctype_field = meta.get_field(doctype_fieldname)
                 if not doctype_field or not doctype_field.fieldname:
                     frappe.throw(
@@ -716,7 +760,9 @@ def validate_linked_metrics_json(
                 metric["dynamic_link_doctype_field"] = doctype_field.fieldname
                 selector_options = {
                     row.strip()
-                    for row in str(getattr(doctype_field, "options", "") or "").splitlines()
+                    for row in str(
+                        getattr(doctype_field, "options", "") or ""
+                    ).splitlines()
                     if row.strip()
                 }
                 if (
@@ -759,7 +805,9 @@ def _coerce_linked_metric_filters(raw: str | list | None) -> list[dict[str, Any]
     except (TypeError, ValueError):
         frappe.throw("Linked Metric Filters must be valid JSON", frappe.ValidationError)
     if not isinstance(parsed, list):
-        frappe.throw("Linked Metric Filters must be a JSON array", frappe.ValidationError)
+        frappe.throw(
+            "Linked Metric Filters must be a JSON array", frappe.ValidationError
+        )
 
     filters = []
     for idx, item in enumerate(parsed):
@@ -778,7 +826,18 @@ def _coerce_linked_metric_filters(raw: str | list | None) -> list[dict[str, Any]
                 f"Linked metric filter #{idx + 1} needs a valid metric key",
                 frappe.ValidationError,
             )
-        if operator not in {"=", "!=", ">", ">=", "<", "<=", "between", "in", "not in", "is"}:
+        if operator not in {
+            "=",
+            "!=",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "between",
+            "in",
+            "not in",
+            "is",
+        }:
             frappe.throw(
                 f"Linked metric filter '{metric}' has unsupported operator '{operator}'",
                 frappe.ValidationError,
@@ -811,7 +870,10 @@ def validate_linked_metric_filters_json(
                 f"Linked metric filter '{flt['metric']} between' needs exactly two values",
                 frappe.ValidationError,
             )
-        if op == "is" and str(flt["value"] or "").strip().lower() not in {"set", "not set"}:
+        if op == "is" and str(flt["value"] or "").strip().lower() not in {
+            "set",
+            "not set",
+        }:
             frappe.throw(
                 f"Linked metric filter '{flt['metric']} is' must use set or not set",
                 frappe.ValidationError,
@@ -837,7 +899,9 @@ def _metric_filter_matches(metric_value: Any, operator: str, expected: Any) -> b
         return is_set if is_value == "set" else not is_set
     if op in {"in", "not in"}:
         values = _parse_multi_value(expected)
-        matched = metric_value in values or str(metric_value) in {str(v) for v in values}
+        matched = metric_value in values or str(metric_value) in {
+            str(v) for v in values
+        }
         return matched if op == "in" else not matched
     if op == "between":
         values = _parse_multi_value(expected)
@@ -922,8 +986,12 @@ def _linked_metric_dynamic_doctype_field(metric: dict[str, Any]) -> str:
     return ""
 
 
-def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    metrics = _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or "")
+def _linked_metrics_for_rows(
+    layer_doc, rows: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    metrics = _coerce_linked_metrics(
+        getattr(layer_doc, "linked_metrics_json", "") or ""
+    )
     if not metrics or not rows:
         return {}
 
@@ -938,9 +1006,7 @@ def _linked_metrics_for_rows(layer_doc, rows: list[dict[str, Any]]) -> dict[str,
 
         link_field_path = metric["link_field"]
         first_field, mapping = _resolve_link_path_mapping(
-            metric["source_doctype"],
-            link_field_path,
-            source_names
+            metric["source_doctype"], link_field_path, source_names
         )
         if not mapping:
             for source_name in source_names:
@@ -1019,7 +1085,9 @@ def _linked_record_field_meta(meta, fieldname: str) -> dict[str, Any] | None:
     }
 
 
-def _linked_record_fields(metric: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+def _linked_record_fields(
+    metric: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]]]:
     meta = frappe.get_meta(metric["source_doctype"])
     link_field = metric["link_field"].split(".")[0]
     fields = ["name", "modified", "docstatus", link_field]
@@ -1040,8 +1108,12 @@ def _linked_record_fields(metric: dict[str, Any]) -> tuple[list[str], list[dict[
     return fields, display_meta
 
 
-def _suggested_linked_record_metrics(source_doctype: str, limit: int = 8) -> list[dict[str, Any]]:
-    suggestions = suggest_money_metrics(source_doctype, limit=limit).get("suggestions") or []
+def _suggested_linked_record_metrics(
+    source_doctype: str, limit: int = 8
+) -> list[dict[str, Any]]:
+    suggestions = (
+        suggest_money_metrics(source_doctype, limit=limit).get("suggestions") or []
+    )
     metrics: list[dict[str, Any]] = []
     seen_doctypes: set[str] = set()
     for suggestion in suggestions:
@@ -1056,7 +1128,10 @@ def _suggested_linked_record_metrics(source_doctype: str, limit: int = 8) -> lis
                 "label": doctype,
                 "source_doctype": doctype,
                 "link_field": link_field,
-                "dynamic_link_doctype_field": suggestion.get("dynamic_link_doctype_field") or "",
+                "dynamic_link_doctype_field": suggestion.get(
+                    "dynamic_link_doctype_field"
+                )
+                or "",
                 "aggregate": "count",
                 "field": "",
                 "filters": suggestion.get("filters") or [],
@@ -1134,7 +1209,9 @@ def _linked_record_group_summary(
         "totals": totals,
         "statuses": [
             {"label": label, "count": count}
-            for label, count in sorted(statuses.items(), key=lambda item: (-item[1], item[0]))
+            for label, count in sorted(
+                statuses.items(), key=lambda item: (-item[1], item[0])
+            )
         ],
     }
 
@@ -1167,7 +1244,9 @@ def get_linked_records(
     if not source_rows:
         frappe.throw("Source record not found or not readable", frappe.PermissionError)
 
-    metrics = _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or "")
+    metrics = _coerce_linked_metrics(
+        getattr(layer_doc, "linked_metrics_json", "") or ""
+    )
     configured = bool(metrics)
     if not metrics:
         metrics = _suggested_linked_record_metrics(layer_doc.source_doctype)
@@ -1183,9 +1262,7 @@ def get_linked_records(
         # Resolve the dot-walked path mapping
         link_field_path = metric["link_field"]
         first_field, mapping = _resolve_link_path_mapping(
-            metric["source_doctype"],
-            link_field_path,
-            [source_name]
+            metric["source_doctype"], link_field_path, [source_name]
         )
 
         fields, field_meta = _linked_record_fields(metric)
@@ -1199,7 +1276,9 @@ def get_linked_records(
                     "aggregate": metric["aggregate"],
                     "field": metric["field"],
                     "link_field": metric["link_field"],
-                    "dynamic_link_doctype_field": _linked_metric_dynamic_doctype_field(metric),
+                    "dynamic_link_doctype_field": _linked_metric_dynamic_doctype_field(
+                        metric
+                    ),
                     "fields": field_meta,
                     "rows": [],
                     "summary": _linked_record_group_summary([], metric),
@@ -1283,7 +1362,9 @@ def _coerce_group_config(raw: str | dict | None) -> dict:
         entry = {}
         if isinstance(cfg.get("color"), str) and cfg["color"].startswith("#"):
             entry["color"] = cfg["color"]
-        if isinstance(cfg.get("territory_color"), str) and cfg["territory_color"].startswith("#"):
+        if isinstance(cfg.get("territory_color"), str) and cfg[
+            "territory_color"
+        ].startswith("#"):
             entry["territory_color"] = cfg["territory_color"]
         if isinstance(cfg.get("icon"), str) and cfg["icon"]:
             entry["icon"] = cfg["icon"]
@@ -1334,7 +1415,9 @@ def _coerce_grouping_rules(raw: str | dict | None) -> dict:
             item["label"] = band["label"]
         if isinstance(band.get("color"), str) and band["color"].startswith("#"):
             item["color"] = band["color"]
-        if isinstance(band.get("territory_color"), str) and band["territory_color"].startswith("#"):
+        if isinstance(band.get("territory_color"), str) and band[
+            "territory_color"
+        ].startswith("#"):
             item["territory_color"] = band["territory_color"]
         if isinstance(band.get("icon"), str) and band["icon"]:
             item["icon"] = band["icon"]
@@ -1398,11 +1481,14 @@ def _coerce_multi_grouping(raw: str | dict | None) -> dict:
 def _resolve_group_level_value(row: dict[str, Any], level: dict) -> str:
     value = row.get(level["field"])
     if level.get("mode") == "bands":
-        group_value, band_override = _resolve_group_band(value, {
-            "mode": "bands",
-            "kind": level.get("kind") or "number",
-            "bands": level.get("bands") or [],
-        })
+        group_value, band_override = _resolve_group_band(
+            value,
+            {
+                "mode": "bands",
+                "kind": level.get("kind") or "number",
+                "bands": level.get("bands") or [],
+            },
+        )
         if band_override and band_override.get("label"):
             return str(band_override["label"])
         return _group_display_value(group_value)
@@ -1439,8 +1525,7 @@ def _resolve_multi_group_style(
         "label": path_values[-1],
     }
     group_values = {
-        level["field"]: path_values[idx]
-        for idx, level in enumerate(levels)
+        level["field"]: path_values[idx] for idx, level in enumerate(levels)
     }
     for idx in range(len(path_values)):
         key = _group_path_key(path_values[: idx + 1])
@@ -1449,7 +1534,9 @@ def _resolve_multi_group_style(
             continue
         if isinstance(override.get("color"), str) and override.get("color"):
             effective["color"] = override["color"]
-        if isinstance(override.get("territory_color"), str) and override.get("territory_color"):
+        if isinstance(override.get("territory_color"), str) and override.get(
+            "territory_color"
+        ):
             effective["territory_color"] = override["territory_color"]
         if isinstance(override.get("icon"), str):
             effective["icon"] = override["icon"]
@@ -1483,9 +1570,9 @@ def _band_sort_value(value: Any, kind: str) -> float | str | None:
         if kind == "datetime":
             if isinstance(value, datetime):
                 return value.isoformat(sep=" ")
-            return datetime.fromisoformat(
-                str(value).replace("Z", "+00:00")
-            ).isoformat(sep=" ")
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat(
+                sep=" "
+            )
         if kind == "time":
             if isinstance(value, timedelta):
                 return value.total_seconds()
@@ -1512,7 +1599,9 @@ def _resolve_group_band(value: Any, rules: dict) -> tuple[str | None, dict | Non
         if max_value is not None and comparable >= max_value:
             continue
         return str(band["key"]), {
-            k: band[k] for k in ("color", "territory_color", "icon", "label") if band.get(k)
+            k: band[k]
+            for k in ("color", "territory_color", "icon", "label")
+            if band.get(k)
         }
     return "__unmatched", {"label": "Other"}
 
@@ -1618,7 +1707,11 @@ def _group_filters_for_key(
                         matched = band
                         break
                 if matched:
-                    filters.extend(_group_filter_for_band(field, matched, level.get("kind") or "number"))
+                    filters.extend(
+                        _group_filter_for_band(
+                            field, matched, level.get("kind") or "number"
+                        )
+                    )
             elif value == "(blank)":
                 filters.append([field, "in", ["", None]])
             else:
@@ -1656,7 +1749,9 @@ def _virtual_group_style(
     return {
         "color": (override or {}).get("color") or _auto_group_color(key),
         "territory_color": (override or {}).get("territory_color") or "",
-        "icon": (override or {}).get("icon") if override and "icon" in override else (layer_icon or ""),
+        "icon": (override or {}).get("icon")
+        if override and "icon" in override
+        else (layer_icon or ""),
         "label": (override or {}).get("label") or label,
     }
 
@@ -1678,14 +1773,20 @@ def _virtual_groups_for_layer(
         db_fields = [field for field in fields if not _is_linked_metric_field(field)]
         uses_metric_fields = any(_is_linked_metric_field(field) for field in fields)
         fetch_fields = ["name", *db_fields]
-        order_by = ", ".join(f"{field} asc" for field in db_fields) if db_fields else "name asc"
+        order_by = (
+            ", ".join(f"{field} asc" for field in db_fields)
+            if db_fields
+            else "name asc"
+        )
         rows = frappe.get_all(
             layer_doc.source_doctype,
             fields=fetch_fields,
             filters=base_filters,
             distinct=not uses_metric_fields,
             order_by=order_by,
-            limit_page_length=0 if uses_metric_fields else min(max(int(limit or 1000), 1), 5000),
+            limit_page_length=0
+            if uses_metric_fields
+            else min(max(int(limit or 1000), 1), 5000),
         )
         metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
         groups = multi_grouping.get("groups") or {}
@@ -1726,15 +1827,19 @@ def _virtual_groups_for_layer(
         for band in group_rules.get("bands") or []:
             key = str(band["key"])
             label = str(band.get("label") or key)
-            out.append({
-                "key": key,
-                "label": label,
-                "style": {
-                    "color": band.get("color") or _auto_group_color(key),
-                    "territory_color": band.get("territory_color") or "",
-                    "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
-                },
-            })
+            out.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "style": {
+                        "color": band.get("color") or _auto_group_color(key),
+                        "territory_color": band.get("territory_color") or "",
+                        "icon": band.get("icon")
+                        if "icon" in band
+                        else (layer_doc.icon or ""),
+                    },
+                }
+            )
         return out
     if _is_linked_metric_field(group_by_field):
         return []
@@ -1755,8 +1860,20 @@ def _virtual_groups_for_layer(
         if key in seen:
             continue
         seen.add(key)
-        style = _virtual_group_style(key, key, layer_doc.color, layer_doc.icon, group_config)
-        out.append({"key": key, "label": style["label"], "style": {"color": style["color"], "territory_color": style.get("territory_color") or "", "icon": style["icon"]}})
+        style = _virtual_group_style(
+            key, key, layer_doc.color, layer_doc.icon, group_config
+        )
+        out.append(
+            {
+                "key": key,
+                "label": style["label"],
+                "style": {
+                    "color": style["color"],
+                    "territory_color": style.get("territory_color") or "",
+                    "icon": style["icon"],
+                },
+            }
+        )
     return out
 
 
@@ -1768,7 +1885,11 @@ def _style_for_virtual_group_key(
     multi_grouping: dict,
 ) -> dict:
     if not group_key:
-        return {"color": layer_doc.color, "territory_color": getattr(layer_doc, "territory_color", "") or "", "icon": layer_doc.icon}
+        return {
+            "color": layer_doc.color,
+            "territory_color": getattr(layer_doc, "territory_color", "") or "",
+            "icon": layer_doc.icon,
+        }
     if multi_grouping:
         parts = str(group_key).split(GROUP_PATH_SEPARATOR)
         groups = multi_grouping.get("groups") or {}
@@ -1793,7 +1914,11 @@ def _style_for_virtual_group_key(
                 "territory_color": band.get("territory_color") or "",
                 "icon": band.get("icon") if "icon" in band else (layer_doc.icon or ""),
             }
-        return {"color": _auto_group_color(group_key), "territory_color": "", "icon": layer_doc.icon or ""}
+        return {
+            "color": _auto_group_color(group_key),
+            "territory_color": "",
+            "icon": layer_doc.icon or "",
+        }
     style = _virtual_group_style(
         str(group_key),
         str(group_key),
@@ -1801,10 +1926,16 @@ def _style_for_virtual_group_key(
         layer_doc.icon,
         group_config,
     )
-    return {"color": style["color"], "territory_color": style.get("territory_color") or "", "icon": style["icon"]}
+    return {
+        "color": style["color"],
+        "territory_color": style.get("territory_color") or "",
+        "icon": style["icon"],
+    }
 
 
-def _assert_icons_readable(icon: str | None = None, group_config_json: str | dict | None = None) -> None:
+def _assert_icons_readable(
+    icon: str | None = None, group_config_json: str | dict | None = None
+) -> None:
     assert_icon_readable(icon)
     raw = _parse_group_config_raw(group_config_json)
     groups = raw.get("groups") if isinstance(raw.get("groups"), dict) else {}
@@ -1884,7 +2015,9 @@ def _linked_location_config(layer_doc) -> dict[str, str]:
             frappe.ValidationError,
         )
 
-    location_doctype = (getattr(layer_doc, "location_doctype", "") or link_field.options).strip()
+    location_doctype = (
+        getattr(layer_doc, "location_doctype", "") or link_field.options
+    ).strip()
     if location_doctype != link_field.options:
         frappe.throw(
             f"Location DocType must match {link_fieldname}'s target DocType ({link_field.options})",
@@ -2013,7 +2146,9 @@ def _location_doctype_for_layer(layer_doc) -> str:
     return cfg.get("location_doctype") if cfg else layer_doc.source_doctype
 
 
-def validate_location_fields_json(layer_doc, location_fields_json: str | list | None) -> None:
+def validate_location_fields_json(
+    layer_doc, location_fields_json: str | list | None
+) -> None:
     fields = _coerce_location_fields(location_fields_json)
     if not fields:
         return
@@ -2029,7 +2164,9 @@ def validate_location_fields_json(layer_doc, location_fields_json: str | list | 
 
 
 def _valid_location_fields(layer_doc) -> list[str]:
-    fields = _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or "")
+    fields = _coerce_location_fields(
+        getattr(layer_doc, "location_fields_json", "") or ""
+    )
     if not fields:
         return []
     validate_location_fields_json(layer_doc, fields)
@@ -2045,9 +2182,7 @@ def _attach_location_to_props(
     if not location_row:
         return
     location = {
-        k: v
-        for k, v in location_row.items()
-        if k not in {lat_field, lng_field}
+        k: v for k, v in location_row.items() if k not in {lat_field, lng_field}
     }
     if not location:
         return
@@ -2187,56 +2322,58 @@ def get_text_search_matches(
 
 def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup):
     """Execute a python script to return layer data, and format it as GeoJSON."""
+    from frappe.utils.safe_exec import safe_exec as frappe_safe_exec
+
     context = {
         "bounds": bounds,
         "limit": limit,
         "offset": offset,
-        "frappe": frappe,
     }
-    
-    script_output = frappe.safe_eval(
-        layer_doc.python_script or "",
-        eval_globals={"frappe": frappe, "context": context},
-        eval_locals=context,
-    )
-    
+
+    _locals = {"result": [], "context": context}
+    try:
+        frappe_safe_exec(
+            layer_doc.python_script or "",
+            _globals={"context": context},
+            _locals=_locals,
+        )
+    except Exception as e:
+        frappe.log_error(f"Layer python script error ({layer_doc.name}): {e}")
+
+    script_output = _locals.get("result") or []
     if not isinstance(script_output, list):
         script_output = []
-        
+
     features = []
     total = len(script_output)
-    
+
     limit = min(int(limit or 5000), 10000)
     offset = max(int(offset or 0), 0)
     sliced_output = script_output[offset : offset + limit]
-    
+
     for item in sliced_output:
         if not isinstance(item, dict):
             continue
-        
+
         geom = item.get("geometry")
         if not geom:
             lat = item.get("latitude")
             lng = item.get("longitude")
             if lat is not None and lng is not None:
                 geom = {"type": "Point", "coordinates": [float(lng), float(lat)]}
-                
+
         if not geom:
             continue
-            
+
         props = item.get("properties") or {}
         if not isinstance(props, dict):
             props = {"value": props}
-            
+
         props["_name"] = item.get("id") or item.get("name") or "custom_pin"
         props["_doctype"] = layer_doc.name
-        
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": props
-        })
-        
+
+        features.append({"type": "Feature", "geometry": geom, "properties": props})
+
     response_style = {
         "color": layer_doc.color,
         "icon": layer_doc.icon,
@@ -2247,12 +2384,14 @@ def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_po
         "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
         "territory_color": getattr(layer_doc, "territory_color", "") or "",
         "territory_opacity": getattr(layer_doc, "territory_opacity", None),
-        "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
+        "territory_padding_meters": getattr(
+            layer_doc, "territory_padding_meters", None
+        ),
         "stroke_color": layer_doc.stroke_color,
         "stroke_width": layer_doc.stroke_width,
         "fill_opacity": layer_doc.fill_opacity,
     }
-    
+
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -2263,7 +2402,7 @@ def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_po
             "title": layer_doc.title,
             "click_action": layer_doc.click_action or "popup",
             "style": response_style,
-        }
+        },
     }
 
 
@@ -2292,8 +2431,11 @@ def get_features(
     if data_source_type == "Python Script":
         if layer_doc.map:
             from expedition.api.permission import assert_map_read
+
             assert_map_read(layer_doc.map)
-        return _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup)
+        return _get_features_from_python_script(
+            layer_doc, bounds, limit, offset, render_popup
+        )
     elif data_source_type == "Client Script (JS)":
         return {
             "type": "FeatureCollection",
@@ -2314,8 +2456,8 @@ def get_features(
                     "stroke_color": layer_doc.stroke_color,
                     "stroke_width": layer_doc.stroke_width,
                     "fill_opacity": layer_doc.fill_opacity,
-                }
-            }
+                },
+            },
         }
 
     assert_source_read(layer_doc.source_doctype)
@@ -2329,12 +2471,18 @@ def get_features(
     group_by_field = (layer_doc.group_by_field or "").strip() or None
     grouping_fields = []
     if multi_grouping:
-        grouping_fields = [level["field"] for level in multi_grouping.get("levels") or []]
+        grouping_fields = [
+            level["field"] for level in multi_grouping.get("levels") or []
+        ]
     elif group_by_field:
         grouping_fields = [group_by_field]
-    metric_grouping_active = any(_is_linked_metric_field(field) for field in grouping_fields)
+    metric_grouping_active = any(
+        _is_linked_metric_field(field) for field in grouping_fields
+    )
     metric_post_filtering = bool(
-        _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or "")
+        _coerce_linked_metric_filters(
+            getattr(layer_doc, "linked_metric_filters_json", "") or ""
+        )
     ) or bool(group_key and metric_grouping_active)
 
     if (multi_grouping or group_by_field) and not group_key:
@@ -2361,20 +2509,35 @@ def get_features(
                 "name": layer_doc.name,
                 "title": layer_doc.title,
                 "source_doctype": layer_doc.source_doctype,
-                "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
-                "location_link_field": getattr(layer_doc, "location_link_field", None) or "",
+                "location_source": getattr(layer_doc, "location_source", None)
+                or "Direct Fields",
+                "location_link_field": getattr(layer_doc, "location_link_field", None)
+                or "",
                 "location_doctype": getattr(layer_doc, "location_doctype", None) or "",
-                "location_reverse_link_field": getattr(layer_doc, "location_reverse_link_field", None) or "",
-                "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
+                "location_reverse_link_field": getattr(
+                    layer_doc, "location_reverse_link_field", None
+                )
+                or "",
+                "location_fields": _coerce_location_fields(
+                    getattr(layer_doc, "location_fields_json", "") or ""
+                ),
                 "click_action": layer_doc.click_action or "popup",
                 "group_by_field": group_by_field,
-                "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
+                "group_config": _coerce_group_config_for_client(
+                    layer_doc.group_config_json
+                ),
                 "popup_fields": popup_fields,
                 "default_popup_fields": default_popup_fields,
-                "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
-                "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
+                "linked_metrics": _coerce_linked_metrics(
+                    getattr(layer_doc, "linked_metrics_json", "") or ""
+                ),
+                "linked_metric_filters": _coerce_linked_metric_filters(
+                    getattr(layer_doc, "linked_metric_filters_json", "") or ""
+                ),
                 "field_labels": _source_field_labels(layer_doc.source_doctype),
-                "assignment_fields": _source_assignment_fields(layer_doc.source_doctype),
+                "assignment_fields": _source_assignment_fields(
+                    layer_doc.source_doctype
+                ),
                 "style": {
                     "color": layer_doc.color,
                     "icon": layer_doc.icon,
@@ -2385,7 +2548,9 @@ def get_features(
                     "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
                     "territory_color": getattr(layer_doc, "territory_color", "") or "",
                     "territory_opacity": getattr(layer_doc, "territory_opacity", None),
-                    "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
+                    "territory_padding_meters": getattr(
+                        layer_doc, "territory_padding_meters", None
+                    ),
                     "stroke_color": layer_doc.stroke_color,
                     "stroke_width": layer_doc.stroke_width,
                     "fill_opacity": layer_doc.fill_opacity,
@@ -2455,7 +2620,9 @@ def get_features(
         extra_fields,
         layer_doc.source_doctype,
     )
-    _append_valid_source_fields(fields, layer_doc.source_doctype, requested_extra_fields)
+    _append_valid_source_fields(
+        fields, layer_doc.source_doctype, requested_extra_fields
+    )
 
     meta = frappe.get_meta(layer_doc.source_doctype)
     for df in meta.fields:
@@ -2466,7 +2633,11 @@ def get_features(
             fields.append(f)
 
     heatmap_config = _heatmap_config_dict(layer_doc)
-    heatmap_weight_field = heatmap_config.get("weight_field") if heatmap_config.get("mode") == "sum" else ""
+    heatmap_weight_field = (
+        heatmap_config.get("weight_field")
+        if heatmap_config.get("mode") == "sum"
+        else ""
+    )
     if (
         heatmap_weight_field
         and not heatmap_weight_field.startswith("_metric_")
@@ -2639,11 +2810,7 @@ def get_features(
             lng = location_row.get(lng_field)
             if lat is None or lng is None:
                 continue
-            props = {
-                k: v
-                for k, v in r.items()
-                if not link_field or k != link_field
-            }
+            props = {k: v for k, v in r.items() if not link_field or k != link_field}
             props["_doctype"] = layer_doc.source_doctype
             props["_name"] = r.get("name")
             props["_label"] = (
@@ -2667,7 +2834,9 @@ def get_features(
             ):
                 continue
             if multi_grouping:
-                if not _multi_group_matches(r, source_metrics, multi_grouping, group_key):
+                if not _multi_group_matches(
+                    r, source_metrics, multi_grouping, group_key
+                ):
                     continue
 
             total += 1
@@ -2717,7 +2886,9 @@ def get_features(
                     group_value = source_group_value
                 props["_group_value"] = group_value
                 override = (
-                    group_config.get(str(group_value)) if group_value is not None else None
+                    group_config.get(str(group_value))
+                    if group_value is not None
+                    else None
                 )
                 if not override and band_override:
                     override = band_override
@@ -2774,7 +2945,9 @@ def get_features(
             "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
             "territory_color": getattr(layer_doc, "territory_color", "") or "",
             "territory_opacity": getattr(layer_doc, "territory_opacity", None),
-            "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
+            "territory_padding_meters": getattr(
+                layer_doc, "territory_padding_meters", None
+            ),
             "stroke_color": layer_doc.stroke_color,
             "stroke_width": layer_doc.stroke_width,
             "fill_opacity": layer_doc.fill_opacity,
@@ -2800,18 +2973,27 @@ def get_features(
                 "name": layer_doc.name,
                 "title": layer_doc.title,
                 "source_doctype": layer_doc.source_doctype,
-                "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
+                "location_source": getattr(layer_doc, "location_source", None)
+                or "Direct Fields",
                 "location_link_field": link_field or "",
                 "location_reverse_link_field": reverse_link_field or "",
                 "location_doctype": location_doctype,
-                "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
+                "location_fields": _coerce_location_fields(
+                    getattr(layer_doc, "location_fields_json", "") or ""
+                ),
                 "click_action": layer_doc.click_action or "popup",
                 "group_by_field": group_by_field,
-                "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
+                "group_config": _coerce_group_config_for_client(
+                    layer_doc.group_config_json
+                ),
                 "popup_fields": popup_fields,
                 "default_popup_fields": default_popup_fields,
-                "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
-                "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
+                "linked_metrics": _coerce_linked_metrics(
+                    getattr(layer_doc, "linked_metrics_json", "") or ""
+                ),
+                "linked_metric_filters": _coerce_linked_metric_filters(
+                    getattr(layer_doc, "linked_metric_filters_json", "") or ""
+                ),
                 "field_labels": field_labels,
                 "assignment_fields": assignment_fields,
                 "style": response_style,
@@ -2834,7 +3016,11 @@ def get_features(
     )
     metrics_by_name = _linked_metrics_for_rows(layer_doc, rows)
 
-    total = 0 if metric_post_filtering else frappe.db.count(layer_doc.source_doctype, filters=filters)
+    total = (
+        0
+        if metric_post_filtering
+        else frappe.db.count(layer_doc.source_doctype, filters=filters)
+    )
 
     features = []
 
@@ -3015,7 +3201,9 @@ def get_features(
         "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
         "territory_color": getattr(layer_doc, "territory_color", "") or "",
         "territory_opacity": getattr(layer_doc, "territory_opacity", None),
-        "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
+        "territory_padding_meters": getattr(
+            layer_doc, "territory_padding_meters", None
+        ),
         "stroke_color": layer_doc.stroke_color,
         "stroke_width": layer_doc.stroke_width,
         "fill_opacity": layer_doc.fill_opacity,
@@ -3041,18 +3229,31 @@ def get_features(
             "name": layer_doc.name,
             "title": layer_doc.title,
             "source_doctype": layer_doc.source_doctype,
-            "location_source": getattr(layer_doc, "location_source", None) or "Direct Fields",
-            "location_link_field": getattr(layer_doc, "location_link_field", None) or "",
+            "location_source": getattr(layer_doc, "location_source", None)
+            or "Direct Fields",
+            "location_link_field": getattr(layer_doc, "location_link_field", None)
+            or "",
             "location_doctype": getattr(layer_doc, "location_doctype", None) or "",
-            "location_reverse_link_field": getattr(layer_doc, "location_reverse_link_field", None) or "",
-            "location_fields": _coerce_location_fields(getattr(layer_doc, "location_fields_json", "") or ""),
+            "location_reverse_link_field": getattr(
+                layer_doc, "location_reverse_link_field", None
+            )
+            or "",
+            "location_fields": _coerce_location_fields(
+                getattr(layer_doc, "location_fields_json", "") or ""
+            ),
             "click_action": layer_doc.click_action or "popup",
             "group_by_field": group_by_field,
-            "group_config": _coerce_group_config_for_client(layer_doc.group_config_json),
+            "group_config": _coerce_group_config_for_client(
+                layer_doc.group_config_json
+            ),
             "popup_fields": popup_fields,
             "default_popup_fields": default_popup_fields,
-            "linked_metrics": _coerce_linked_metrics(getattr(layer_doc, "linked_metrics_json", "") or ""),
-            "linked_metric_filters": _coerce_linked_metric_filters(getattr(layer_doc, "linked_metric_filters_json", "") or ""),
+            "linked_metrics": _coerce_linked_metrics(
+                getattr(layer_doc, "linked_metrics_json", "") or ""
+            ),
+            "linked_metric_filters": _coerce_linked_metric_filters(
+                getattr(layer_doc, "linked_metric_filters_json", "") or ""
+            ),
             "field_labels": field_labels,
             "assignment_fields": assignment_fields,
             "style": response_style,
@@ -3187,7 +3388,9 @@ def _filter_hash(layer_doc) -> str:
     h.update(b"|")
     h.update((getattr(layer_doc, "location_doctype", "") or "").encode("utf-8"))
     h.update(b"|")
-    h.update((getattr(layer_doc, "location_reverse_link_field", "") or "").encode("utf-8"))
+    h.update(
+        (getattr(layer_doc, "location_reverse_link_field", "") or "").encode("utf-8")
+    )
     h.update(b"|")
     h.update((layer_doc.latitude_field or "").encode("utf-8"))
     h.update(b"|")
@@ -3586,24 +3789,36 @@ def _coerce_weight_stops(raw: str | list | None) -> list[list[float]]:
     return out
 
 
-def _validate_heatmap_weight_range(field: str | None, min_value: Any, max_value: Any) -> None:
+def _validate_heatmap_weight_range(
+    field: str | None, min_value: Any, max_value: Any
+) -> None:
     """Weighted heatmaps need a usable input range for client expressions."""
     if not field:
         return
     if min_value in (None, "") or max_value in (None, ""):
-        frappe.throw("Heatmap metric range requires both minimum and maximum.", frappe.ValidationError)
+        frappe.throw(
+            "Heatmap metric range requires both minimum and maximum.",
+            frappe.ValidationError,
+        )
     try:
         min_number = float(min_value)
         max_number = float(max_value)
     except (TypeError, ValueError):
         frappe.throw("Heatmap metric range must be numeric.", frappe.ValidationError)
     if min_number == max_number:
-        frappe.throw("Heatmap metric minimum and maximum must be different.", frappe.ValidationError)
+        frappe.throw(
+            "Heatmap metric minimum and maximum must be different.",
+            frappe.ValidationError,
+        )
 
 
 def _heatmap_config_dict(layer: Any) -> dict[str, Any]:
     """Return the client-facing heatmap configuration for a layer row/doc."""
-    get = layer.get if isinstance(layer, dict) else lambda key, default=None: getattr(layer, key, default)
+    get = (
+        layer.get
+        if isinstance(layer, dict)
+        else lambda key, default=None: getattr(layer, key, default)
+    )
     mode = str(get("heatmap_mode") or "count").lower()
     scale = str(get("heatmap_weight_scale") or "linear").lower()
     return {
@@ -3617,7 +3832,9 @@ def _heatmap_config_dict(layer: Any) -> dict[str, Any]:
         "radius_max": get("heatmap_radius_max") or 30,
         "intensity_min": get("heatmap_intensity_min") or 1,
         "intensity_max": get("heatmap_intensity_max") or 2.5,
-        "opacity": get("heatmap_opacity") if get("heatmap_opacity") is not None else 0.75,
+        "opacity": get("heatmap_opacity")
+        if get("heatmap_opacity") is not None
+        else 0.75,
         "ramp": _coerce_heatmap_ramp(get("heatmap_ramp_json") or ""),
     }
 
@@ -3737,11 +3954,15 @@ def create(
             "heatmap_radius_max": int(heatmap_radius_max or 30),
             "heatmap_intensity_min": float(heatmap_intensity_min or 1),
             "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
-            "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
+            "heatmap_opacity": float(
+                heatmap_opacity if heatmap_opacity is not None else 0.75
+            ),
             "heatmap_ramp_json": heatmap_ramp_json or "",
             "territory_enabled": int(territory_enabled),
             "territory_color": territory_color or "",
-            "territory_opacity": float(territory_opacity if territory_opacity is not None else 0.18),
+            "territory_opacity": float(
+                territory_opacity if territory_opacity is not None else 0.18
+            ),
             "territory_padding_meters": int(territory_padding_meters or 2500),
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
@@ -3874,7 +4095,7 @@ def get_filter_schema(source_doctype: str) -> dict:
     """Return filterable field metadata for a source DocType including child tables."""
     assert_source_read(source_doctype)
     fields = list(_filter_field_map(source_doctype).values())
-    
+
     # Load child table fields
     parent_meta = frappe.get_meta(source_doctype)
     for f in parent_meta.fields:
@@ -3885,19 +4106,21 @@ def get_filter_schema(source_doctype: str) -> dict:
                 for cf in child_fields_map.values():
                     c_fieldname = f"{child_doctype}:{cf['fieldname']}"
                     c_label = f"{cf.get('label') or cf['fieldname']} ({f.label or f.fieldname})"
-                    fields.append({
-                        "fieldname": c_fieldname,
-                        "fieldtype": cf["fieldtype"],
-                        "label": c_label,
-                        "options": cf.get("options") or "",
-                        "reqd": cf.get("reqd") or 0,
-                        "hidden": cf.get("hidden") or 0,
-                        "read_only": cf.get("read_only") or 0,
-                        "standard": cf.get("standard") or 0,
-                        "operators": cf.get("operators") or [],
-                        "child_doctype": child_doctype,
-                        "child_fieldname": cf["fieldname"],
-                    })
+                    fields.append(
+                        {
+                            "fieldname": c_fieldname,
+                            "fieldtype": cf["fieldtype"],
+                            "label": c_label,
+                            "options": cf.get("options") or "",
+                            "reqd": cf.get("reqd") or 0,
+                            "hidden": cf.get("hidden") or 0,
+                            "read_only": cf.get("read_only") or 0,
+                            "standard": cf.get("standard") or 0,
+                            "operators": cf.get("operators") or [],
+                            "child_doctype": child_doctype,
+                            "child_fieldname": cf["fieldname"],
+                        }
+                    )
             except Exception:
                 pass
 
@@ -3943,14 +4166,16 @@ def _unique_metric_key(base_key: str, seen: set[str]) -> str:
     suffix = 2
     while True:
         suffix_text = f"_{suffix}"
-        candidate = f"{key[:48 - len(suffix_text)]}{suffix_text}"
+        candidate = f"{key[: 48 - len(suffix_text)]}{suffix_text}"
         if candidate not in seen:
             seen.add(candidate)
             return candidate
         suffix += 1
 
 
-def _money_metric_base_filters(meta: Any, fieldname: str | None = None) -> list[list[Any]]:
+def _money_metric_base_filters(
+    meta: Any, fieldname: str | None = None
+) -> list[list[Any]]:
     filters: list[list[Any]] = []
     if int(getattr(meta, "is_submittable", 0) or 0):
         filters.append(["docstatus", "=", 1])
@@ -3989,7 +4214,9 @@ def _dynamic_link_can_target(field: Any, source_doctype: str) -> bool:
     fieldtype = getattr(field, "fieldtype", "") or ""
     options = str(getattr(field, "options", "") or "")
     if fieldtype == "Select":
-        return source_doctype in {row.strip() for row in options.splitlines() if row.strip()}
+        return source_doctype in {
+            row.strip() for row in options.splitlines() if row.strip()
+        }
     if fieldtype == "Link" and options == "DocType":
         return True
     return fieldtype in {"Data", "Small Text", "Read Only"}
@@ -4006,7 +4233,9 @@ def _money_link_fields(meta: Any, source_doctype: str) -> list[dict[str, str]]:
         elif df.fieldtype == "Dynamic Link":
             doctype_fieldname = str(df.options or "").strip()
             doctype_field = fields_by_name.get(doctype_fieldname)
-            if doctype_field and _dynamic_link_can_target(doctype_field, source_doctype):
+            if doctype_field and _dynamic_link_can_target(
+                doctype_field, source_doctype
+            ):
                 links.append(
                     {
                         "link_field": df.fieldname,
@@ -4072,7 +4301,9 @@ def suggest_money_metrics(source_doctype: str, limit: int = 12) -> dict:
             )
             base_filters = _money_metric_base_filters(meta)
             if dynamic_link_doctype_field:
-                base_filters = base_filters + [[dynamic_link_doctype_field, "=", source_doctype]]
+                base_filters = base_filters + [
+                    [dynamic_link_doctype_field, "=", source_doctype]
+                ]
             count_key = _unique_metric_key(
                 _metric_key_from_parts(doctype, link_fieldname, "count"),
                 seen_keys,
@@ -4165,7 +4396,8 @@ def get_filter_value_options(
         if txt:
             needle = txt.lower()
             values = [
-                v for v in values
+                v
+                for v in values
                 if needle in str(v.get("label") if isinstance(v, dict) else v).lower()
             ]
         return {
@@ -4296,7 +4528,9 @@ def list_group_tree(
     db_fields = []
     seen = set()
     for field in fields:
-        raw_level = field if isinstance(field, dict) else {"field": field, "mode": "value"}
+        raw_level = (
+            field if isinstance(field, dict) else {"field": field, "mode": "value"}
+        )
         fieldname = str(raw_level.get("field") or "").strip()
         if not fieldname or fieldname in seen:
             continue
@@ -4313,7 +4547,9 @@ def list_group_tree(
         level = {"field": fieldname, "mode": "bands" if mode == "bands" else "value"}
         if level["mode"] == "bands":
             kind = str(raw_level.get("kind") or "number").lower()
-            level["kind"] = kind if kind in {"number", "date", "datetime", "time"} else "number"
+            level["kind"] = (
+                kind if kind in {"number", "date", "datetime", "time"} else "number"
+            )
             bands = []
             for idx, band in enumerate(raw_level.get("bands") or []):
                 if not isinstance(band, dict):
@@ -4337,7 +4573,9 @@ def list_group_tree(
     limit = min(max(int(limit or 1000), 1), 5000)
     base_filters = _coerce_filter(filter_json) or []
     fetch_fields = ["name", *db_fields]
-    order_by = ", ".join(f"{field} asc" for field in db_fields) if db_fields else "name asc"
+    order_by = (
+        ", ".join(f"{field} asc" for field in db_fields) if db_fields else "name asc"
+    )
     try:
         rows = frappe.get_all(
             source_doctype,
@@ -4371,11 +4609,13 @@ def list_group_tree(
         if key in seen_paths:
             continue
         seen_paths.add(key)
-        paths.append({
-            "key": key,
-            "values": values,
-            "labels": values,
-        })
+        paths.append(
+            {
+                "key": key,
+                "values": values,
+                "labels": values,
+            }
+        )
     return {"paths": paths, "truncated": len(rows) >= limit}
 
 
@@ -4435,9 +4675,12 @@ def _layer_to_dto(doc) -> dict:
         "location_source": getattr(doc, "location_source", None) or "Direct Fields",
         "location_link_field": getattr(doc, "location_link_field", None) or "",
         "location_doctype": getattr(doc, "location_doctype", None) or "",
-        "location_reverse_link_field": getattr(doc, "location_reverse_link_field", None) or "",
+        "location_reverse_link_field": getattr(doc, "location_reverse_link_field", None)
+        or "",
         "location_fields_json": getattr(doc, "location_fields_json", None) or "",
-        "location_fields": _coerce_location_fields(getattr(doc, "location_fields_json", "") or ""),
+        "location_fields": _coerce_location_fields(
+            getattr(doc, "location_fields_json", "") or ""
+        ),
         "latitude_field": doc.latitude_field,
         "longitude_field": doc.longitude_field,
         "label_field": doc.label_field,
@@ -4449,9 +4692,14 @@ def _layer_to_dto(doc) -> dict:
         "popup_fields": _coerce_popup_fields(doc.popup_fields_json),
         "popup_fields_json": doc.popup_fields_json or "",
         "linked_metrics_json": getattr(doc, "linked_metrics_json", None) or "",
-        "linked_metrics": _coerce_linked_metrics(getattr(doc, "linked_metrics_json", "") or ""),
-        "linked_metric_filters_json": getattr(doc, "linked_metric_filters_json", None) or "",
-        "linked_metric_filters": _coerce_linked_metric_filters(getattr(doc, "linked_metric_filters_json", "") or ""),
+        "linked_metrics": _coerce_linked_metrics(
+            getattr(doc, "linked_metrics_json", "") or ""
+        ),
+        "linked_metric_filters_json": getattr(doc, "linked_metric_filters_json", None)
+        or "",
+        "linked_metric_filters": _coerce_linked_metric_filters(
+            getattr(doc, "linked_metric_filters_json", "") or ""
+        ),
         "click_action": doc.click_action or "popup",
         "color": doc.color,
         "icon": doc.icon,
@@ -4508,7 +4756,9 @@ def _layer_to_dto(doc) -> dict:
                 "territory_enabled": getattr(doc, "territory_enabled", 0),
                 "territory_color": getattr(doc, "territory_color", None) or "",
                 "territory_opacity": getattr(doc, "territory_opacity", None),
-                "territory_padding_meters": getattr(doc, "territory_padding_meters", None),
+                "territory_padding_meters": getattr(
+                    doc, "territory_padding_meters", None
+                ),
                 "stroke_color": doc.stroke_color,
                 "stroke_width": doc.stroke_width,
                 "fill_opacity": doc.fill_opacity,
@@ -4625,11 +4875,15 @@ def create_master(
             "heatmap_radius_max": int(heatmap_radius_max or 30),
             "heatmap_intensity_min": float(heatmap_intensity_min or 1),
             "heatmap_intensity_max": float(heatmap_intensity_max or 2.5),
-            "heatmap_opacity": float(heatmap_opacity if heatmap_opacity is not None else 0.75),
+            "heatmap_opacity": float(
+                heatmap_opacity if heatmap_opacity is not None else 0.75
+            ),
             "heatmap_ramp_json": heatmap_ramp_json or "",
             "territory_enabled": int(territory_enabled),
             "territory_color": territory_color or "",
-            "territory_opacity": float(territory_opacity if territory_opacity is not None else 0.18),
+            "territory_opacity": float(
+                territory_opacity if territory_opacity is not None else 0.18
+            ),
             "territory_padding_meters": int(territory_padding_meters or 2500),
             "radius_enabled": int(radius_enabled),
             "radius_field": radius_field or "",
@@ -4705,9 +4959,13 @@ def list_masters() -> list[dict]:
     if frappe.db.has_column("Expedition Layer", "pin_min_zoom"):
         _lm_fields.insert(_lm_fields.index("cluster"), "pin_min_zoom")
     if frappe.db.has_column("Expedition Layer", "heatmap_weight_stops_json"):
-        _lm_fields.insert(_lm_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json")
+        _lm_fields.insert(
+            _lm_fields.index("heatmap_radius_min"), "heatmap_weight_stops_json"
+        )
     if frappe.db.has_column("Expedition Layer", "heatmap_intensity_min"):
-        _lm_fields.insert(_lm_fields.index("heatmap_intensity_max"), "heatmap_intensity_min")
+        _lm_fields.insert(
+            _lm_fields.index("heatmap_intensity_max"), "heatmap_intensity_min"
+        )
 
     raw = frappe.get_all(
         "Expedition Layer",
@@ -4771,10 +5029,14 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "title": master.title,
             "map": map_name,
             "source_doctype": master.source_doctype,
-            "location_source": getattr(master, "location_source", None) or "Direct Fields",
+            "location_source": getattr(master, "location_source", None)
+            or "Direct Fields",
             "location_link_field": getattr(master, "location_link_field", None) or "",
             "location_doctype": getattr(master, "location_doctype", None) or "",
-            "location_reverse_link_field": getattr(master, "location_reverse_link_field", None) or "",
+            "location_reverse_link_field": getattr(
+                master, "location_reverse_link_field", None
+            )
+            or "",
             "location_fields_json": getattr(master, "location_fields_json", None) or "",
             "latitude_field": master.latitude_field,
             "longitude_field": master.longitude_field,
@@ -4795,12 +5057,19 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "heatmap_radius_max": master.heatmap_radius_max or 30,
             "heatmap_intensity_min": master.heatmap_intensity_min or 1,
             "heatmap_intensity_max": master.heatmap_intensity_max or 2.5,
-            "heatmap_opacity": master.heatmap_opacity if master.heatmap_opacity is not None else 0.75,
+            "heatmap_opacity": master.heatmap_opacity
+            if master.heatmap_opacity is not None
+            else 0.75,
             "heatmap_ramp_json": master.heatmap_ramp_json or "",
             "territory_enabled": getattr(master, "territory_enabled", 0),
             "territory_color": getattr(master, "territory_color", None) or "",
-            "territory_opacity": getattr(master, "territory_opacity", None) if getattr(master, "territory_opacity", None) is not None else 0.18,
-            "territory_padding_meters": getattr(master, "territory_padding_meters", None) or 2500,
+            "territory_opacity": getattr(master, "territory_opacity", None)
+            if getattr(master, "territory_opacity", None) is not None
+            else 0.18,
+            "territory_padding_meters": getattr(
+                master, "territory_padding_meters", None
+            )
+            or 2500,
             "enabled": 1,
             "filter_json": master.filter_json,
             "stroke_color": master.stroke_color,
@@ -4809,7 +5078,10 @@ def attach_to_map(master_name: str, map_name: str) -> dict:
             "popup_template": master.popup_template,
             "popup_fields_json": master.popup_fields_json,
             "linked_metrics_json": getattr(master, "linked_metrics_json", None) or "",
-            "linked_metric_filters_json": getattr(master, "linked_metric_filters_json", None) or "",
+            "linked_metric_filters_json": getattr(
+                master, "linked_metric_filters_json", None
+            )
+            or "",
             "group_by_field": master.group_by_field,
             "group_config_json": master.group_config_json,
             "click_action": master.click_action,
@@ -4832,17 +5104,24 @@ def get_list_view_fields(source_doctype: str) -> list[dict]:
     # Check for fields configured for list view in doctype
     for df in meta.fields:
         if df.in_list_view and not df.hidden:
-            fields.append({
-                "fieldname": df.fieldname,
-                "label": df.label or df.fieldname,
-                "fieldtype": df.fieldtype,
-                "options": df.options,
-            })
+            fields.append(
+                {
+                    "fieldname": df.fieldname,
+                    "label": df.label or df.fieldname,
+                    "fieldtype": df.fieldtype,
+                    "options": df.options,
+                }
+            )
 
     # Default fallback if no specific list view fields exist
     if not fields:
         fields = [
-            {"fieldname": "name", "label": "ID", "fieldtype": "Link", "options": source_doctype},
+            {
+                "fieldname": "name",
+                "label": "ID",
+                "fieldtype": "Link",
+                "options": source_doctype,
+            },
             {"fieldname": "modified", "label": "Modified", "fieldtype": "Datetime"},
         ]
     return fields

@@ -9,13 +9,19 @@
  *
  * PR-10 of the quiet-canvas plan.
  */
-import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
+import { useUiStore } from '../state/ui.js'
 import { wrapLng } from '../lib/geo.js'
 
+const ui = useUiStore()
 const lat = ref(null)
 const lng = ref(null)
 const zoom = ref(null)
-const format = ref('decimal') // 'decimal' | 'dms' | 'dm'
+const format = ref(ui.prefs.coordUnits || 'decimal') // 'decimal' | 'dms' | 'dm'
+
+watch(() => ui.prefs.coordUnits, (val) => {
+  if (val) format.value = val
+})
 const copied = ref(false)
 let rootEl = null
 
@@ -134,7 +140,9 @@ async function copy() {
 
 function cycleFormat() {
   const next = { decimal: 'dms', dms: 'dm', dm: 'decimal' }
-  format.value = next[format.value] || 'decimal'
+  const nextVal = next[format.value] || 'decimal'
+  format.value = nextVal
+  ui.setPref('coordUnits', nextVal)
 }
 
 const hasValue = computed(() => lat.value != null && lng.value != null)

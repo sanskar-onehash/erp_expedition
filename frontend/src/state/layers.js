@@ -45,6 +45,58 @@ export const useLayersStore = defineStore('layers', () => {
   // Legend chips toggle this; panel enable/disable persists via server.
   const locallyHidden = ref(new Set())
 
+  // Timeline playback — session-only. When active, getDisplayFeatures()
+  // filters each layer's GeoJSON by the _time property (or timelineField).
+  // timelineMin/timelineMax are epoch-ms so date+time ranges work correctly.
+  // Bare "HH:MM" values with no date are pinned to today's local date so
+  // single-day GPS tracks still work.
+  const timelineActive = ref(false)
+  const timelineMin = ref(0)       // epoch ms
+  const timelineMax = ref(0)       // epoch ms (0 = not set)
+  const timelineField = ref('_time')
+
+  function _parseTimestamp(value) {
+    if (value == null || value === '') return null
+    if (typeof value === 'number') return value  // already epoch ms
+    const s = String(value).trim()
+    // Frappe / ISO datetime: "2024-01-15 08:30:00" or "2024-01-15T08:30:00"
+    const full = new Date(s.replace(' ', 'T'))
+    if (!isNaN(full.getTime())) return full.getTime()
+    // Bare "HH:MM" or "HH:MM:SS" — pin to today's local date for comparison.
+    const tMatch = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+    if (tMatch) {
+      const d = new Date()
+      d.setHours(parseInt(tMatch[1]), parseInt(tMatch[2]), parseInt(tMatch[3] || '0'), 0)
+      return d.getTime()
+    }
+    return null
+  }
+
+  // Returns features filtered by the current timeline window.
+  // Falls back to raw features when timeline is off.
+  function getDisplayFeatures(layerName) {
+    const base = features.value[layerName]
+    if (!timelineActive.value || !base?.features) return base
+    const field = timelineField.value || '_time'
+    const min = timelineMin.value
+    const max = timelineMax.value
+    if (!max) return base  // not yet initialised
+    const filtered = base.features.filter((f) => {
+      const t = _parseTimestamp(f?.properties?.[field])
+      if (t === null) return true  // no timestamp — always visible
+      return t >= min && t <= max
+    })
+    return { ...base, features: filtered }
+  }
+
+  function setTimeline(active, minMs, maxMs, field) {
+    timelineActive.value = !!active
+    if (minMs != null) timelineMin.value = Number(minMs) || 0
+    if (maxMs != null) timelineMax.value = Number(maxMs) || 0
+    if (field != null) timelineField.value = field || '_time'
+    _emitFeaturesUpdated(null)
+  }
+
   function toggleLocalVisibility(layerName) {
     const s = new Set(locallyHidden.value)
     if (s.has(layerName)) s.delete(layerName)
@@ -806,6 +858,12 @@ export const useLayersStore = defineStore('layers', () => {
     toggleLocalVisibility,
     visibleLayers,
     activeSearch,
+    timelineActive,
+    timelineMin,
+    timelineMax,
+    timelineField,
+    getDisplayFeatures,
+    setTimeline,
     applySearch,
     clearSearch,
     fetchFeatures,

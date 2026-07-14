@@ -44,13 +44,8 @@ const DEFAULT_PREFS = {
   autoCloseOthers: true,    // opening Layers closes Tools
   showLegend: true,
   // Pins & popups
-  labelDensity: 'hover',    // 'off' | 'hover' | 'always'
-  popupAnchor: 'auto',      // 'auto' | 'top' | 'right' | 'bottom' | 'left'
   clickBehavior: 'popup',   // 'popup' | 'select' | 'fly'
-  // Overlays
-  showCompass: false,
-  showScale: true,
-  showMinimap: false,
+
   // Units & cursor
   coordUnits: 'decimal',    // 'decimal' | 'dms'
   distanceUnits: 'km',      // 'km' | 'mi' | 'nm'
@@ -209,17 +204,11 @@ export const useUiStore = defineStore('ui', () => {
     else openSearch()
   }
 
-  // Quiet-canvas panels (PR-2). Both closed at rest. PR-3 will add
-  // 'tools'. The stack policy (`autoCloseOthers`) is implemented in
-  // PR-3 once we have multiple same-edge panels to coordinate.
+  // Quiet-canvas panels (PR-2). Both closed at rest.
   const leftPanel = ref('closed') // 'closed' | 'layers'
-  const rightPanel = ref('closed') // 'closed' | 'tools'
   function openLeftPanel(name) { leftPanel.value = name }
   function closeLeftPanel() { leftPanel.value = 'closed' }
   function toggleLeftPanel(name) { leftPanel.value = leftPanel.value === name ? 'closed' : name }
-  function openRightPanel(name) { rightPanel.value = name }
-  function closeRightPanel() { rightPanel.value = 'closed' }
-  function toggleRightPanel(name) { rightPanel.value = rightPanel.value === name ? 'closed' : name }
 
   // Settings popover (top-right cog). Distinct from a panel because it
   // doesn't slide in from an edge; it anchors to its trigger.
@@ -379,7 +368,6 @@ export const useUiStore = defineStore('ui', () => {
     layoutCustomizing.value = false
     chromeSnapshot.value = {
       leftPanel: leftPanel.value,
-      rightPanel: rightPanel.value,
       editorOpen: editorOpen.value,
       searchOpen: searchOpen.value,
       commandKOpen: commandKOpen.value,
@@ -393,7 +381,6 @@ export const useUiStore = defineStore('ui', () => {
     chromeHidden.value = false
     if (snap) {
       leftPanel.value = snap.leftPanel
-      rightPanel.value = snap.rightPanel
       editorOpen.value = snap.editorOpen
       searchOpen.value = snap.searchOpen
       commandKOpen.value = snap.commandKOpen
@@ -520,6 +507,35 @@ export const useUiStore = defineStore('ui', () => {
     drawingStrokeStyle.value = ['solid', 'dashed', 'dotted'].includes(value) ? value : 'solid'
   }
 
+  // GPS Timeline playback. Session-only — not persisted.
+  // timelineEnabled gates the TimelineSlider widget. When the slider
+  // is open the layers store filters features by _time via setTimeline().
+  const timelineEnabled = ref(false)
+  function enableTimeline() { timelineEnabled.value = true }
+  function disableTimeline() { timelineEnabled.value = false }
+  function toggleTimeline() { timelineEnabled.value = !timelineEnabled.value }
+
+  // Map Cards — named snapshots of the active layer set.
+  // Stored in localStorage so they survive page reloads.
+  // Each card: { id, title, createdAt, layers: [{name, title, enabled, filter_json}] }
+  const CARDS_LS_KEY = 'expedition.mapCards'
+  const mapCards = ref(readLs(CARDS_LS_KEY, []))
+  function saveMapCard(title, layerStates) {
+    const card = {
+      id: 'card_' + Date.now(),
+      title: String(title || 'Untitled').trim() || 'Untitled',
+      createdAt: Date.now(),
+      layers: layerStates,
+    }
+    mapCards.value = [card, ...mapCards.value].slice(0, 20)
+    writeLs(CARDS_LS_KEY, mapCards.value)
+    return card
+  }
+  function deleteMapCard(id) {
+    mapCards.value = mapCards.value.filter((c) => c.id !== id)
+    writeLs(CARDS_LS_KEY, mapCards.value)
+  }
+
   // In-app confirm modal — replaces window.confirm. Any component
   // can call `ask({ title, body, ... })` and get a Promise<boolean>.
   // The result resolves when the user clicks a button in the global
@@ -625,13 +641,9 @@ export const useUiStore = defineStore('ui', () => {
     closeSearch,
     searchValue,
     leftPanel,
-    rightPanel,
     openLeftPanel,
     closeLeftPanel,
     toggleLeftPanel,
-    openRightPanel,
-    closeRightPanel,
-    toggleRightPanel,
     settingsOpen,
     settingsInitialTab,
     settingsTabRequest,
@@ -687,5 +699,12 @@ export const useUiStore = defineStore('ui', () => {
     shortcutHintsAll,
     setShortcutModifiers,
     clearShortcutModifiers,
+    timelineEnabled,
+    enableTimeline,
+    disableTimeline,
+    toggleTimeline,
+    mapCards,
+    saveMapCard,
+    deleteMapCard,
   }
 })

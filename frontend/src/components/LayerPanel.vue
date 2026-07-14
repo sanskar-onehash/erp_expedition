@@ -517,6 +517,64 @@ watch(
   { deep: true, immediate: true }
 )
 
+// ---- Map Cards ----
+// Cards snapshot the current layer set (enabled state + filters) and
+// are stored in localStorage via the ui store. Applying a card calls
+// updateLayer for each layer whose state differs from the snapshot.
+const cardsOpen = ref(true)
+const newCardTitle = ref('')
+const saveCardOpen = ref(false)
+const cardApplying = ref(null)  // card id currently being applied
+
+function openSaveCard() {
+  newCardTitle.value = ''
+  saveCardOpen.value = true
+}
+
+function saveCard() {
+  const title = newCardTitle.value.trim()
+  if (!title) return
+  const layerStates = activeLayers.value.map((l) => ({
+    name: l.name,
+    title: l.title || l.name,
+    enabled: l.enabled,
+    filter_json: l.filter_json || '',
+  }))
+  ui.saveMapCard(title, layerStates)
+  newCardTitle.value = ''
+  saveCardOpen.value = false
+}
+
+async function applyCard(card) {
+  if (cardApplying.value) return
+  cardApplying.value = card.id
+  try {
+    const ops = card.layers.map((state) => {
+      const current = activeLayers.value.find((l) => l.name === state.name)
+      if (!current) return null
+      const updates = {}
+      if (current.enabled !== state.enabled) updates.enabled = state.enabled
+      if (state.filter_json !== undefined && current.filter_json !== state.filter_json) {
+        updates.filter_json = state.filter_json
+      }
+      if (Object.keys(updates).length === 0) return null
+      return layerStore.updateLayer(state.name, updates)
+    }).filter(Boolean)
+    await Promise.all(ops)
+  } catch (e) {
+    console.error('[expedition] applyCard failed', e)
+  } finally {
+    cardApplying.value = null
+  }
+}
+
+function deleteCard(card) {
+  ui.deleteMapCard(card.id)
+}
+
+// Cards filtered to the active map (cards have no map binding — show all).
+const allCards = computed(() => ui.mapCards || [])
+
 defineExpose({})
 </script>
 
@@ -890,6 +948,58 @@ defineExpose({})
             </li>
           </ul>
           <p v-else class="lp__empty">No layers yet.</p>
+        </div>
+      </section>
+
+      <!-- Map Cards — saved layer presets. -->
+      <section class="lp__section">
+        <div class="lp__section-bar">
+          <button class="lp__section-toggle" type="button" @click="cardsOpen = !cardsOpen">
+            <span>Cards</span>
+            <span class="lp__chevron" :data-open="cardsOpen">▾</span>
+          </button>
+          <button class="lp__create" type="button" title="Save current layers as a card" @click="openSaveCard">+</button>
+        </div>
+
+        <div v-if="cardsOpen" class="lp__cards-body">
+          <!-- Save-card inline form -->
+          <div v-if="saveCardOpen" class="lp__subpanel">
+            <input
+              v-model="newCardTitle"
+              class="lp__picker-input"
+              type="text"
+              placeholder="Card name (e.g. North Sales)"
+              aria-label="Card name"
+              autofocus
+              @keydown.enter.prevent="saveCard"
+              @keydown.escape.prevent="saveCardOpen = false"
+            />
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button type="button" class="lp__qf-btn lp__qf-btn--ghost" @click="saveCardOpen = false">Cancel</button>
+              <button type="button" class="lp__qf-btn lp__qf-btn--primary" :disabled="!newCardTitle.trim()" @click="saveCard">Save</button>
+            </div>
+          </div>
+
+          <ul v-if="allCards.length" class="lp__list lp__cards-list">
+            <li v-for="card in allCards" :key="card.id" class="lp__item lp__item--card">
+              <button
+                type="button"
+                class="lp__card-row"
+                :class="{ 'lp__card-row--applying': cardApplying === card.id }"
+                :title="'Apply: ' + card.title"
+                :disabled="!!cardApplying"
+                @click="applyCard(card)"
+              >
+                <svg class="lp__card-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h16M4 10h16M4 14h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span class="lp__card-title">{{ card.title }}</span>
+                <span class="lp__card-meta">{{ card.layers.length }} layer{{ card.layers.length !== 1 ? 's' : '' }}</span>
+              </button>
+              <button type="button" class="lp__remove-user lp__card-del" aria-label="Delete card" @click.stop="deleteCard(card)">×</button>
+            </li>
+          </ul>
+          <p v-else class="lp__empty">No cards saved yet.</p>
         </div>
       </section>
     </div>
@@ -1669,5 +1779,58 @@ defineExpose({})
 .lp__item--map {
   display: block;
   padding: 1px 0;
+}
+
+/* ---- Map Cards ---- */
+.lp__cards-body { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 6px; }
+.lp__cards-list { gap: 2px; }
+.lp__item--card {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 1px 0;
+}
+.lp__card-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: transparent;
+  border: 0;
+  color: rgba(230, 232, 236, 0.88);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+.lp__card-row:hover { background: rgba(59, 130, 246, 0.09); color: #fff; }
+.lp__card-row:disabled { opacity: 0.54; cursor: not-allowed; }
+.lp__card-row--applying { opacity: 0.72; cursor: wait; }
+.lp__card-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: rgba(148, 163, 184, 0.7);
+}
+.lp__card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp__card-meta {
+  font-size: 10px;
+  color: rgba(230, 232, 236, 0.36);
+  white-space: nowrap;
+  flex: none;
+}
+.lp__card-del {
+  flex: none;
+  margin-right: 4px;
 }
 </style>

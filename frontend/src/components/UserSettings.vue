@@ -65,7 +65,7 @@ const groups = computed(() => [
     title: 'Panels',
     items: [
       { kind: 'switch', key: 'blurOnPanel', label: 'Blur map behind panels', help: 'Dim the map while editing layers or browsing tools.' },
-      { kind: 'switch', key: 'autoCloseOthers', label: 'Auto-close other panels', help: 'Opening Layers closes Tools and vice versa.' },
+      { kind: 'switch', key: 'autoCloseOthers', label: 'Auto-close other panels', help: 'Opening Layers closes List and vice versa.' },
       { kind: 'switch', key: 'showLegend', label: 'Show legend', help: 'Bottom-center legend chip with active layers.' },
     ],
   },
@@ -73,22 +73,6 @@ const groups = computed(() => [
     key: 'pin',
     title: 'Pins & popups',
     items: [
-      { kind: 'select', key: 'labelDensity', label: 'Pin labels',
-        options: [
-          { value: 'off', label: 'Off' },
-          { value: 'hover', label: 'On hover' },
-          { value: 'always', label: 'Always' },
-        ],
-      },
-      { kind: 'select', key: 'popupAnchor', label: 'Popup position',
-        options: [
-          { value: 'auto', label: 'Auto' },
-          { value: 'top', label: 'Top' },
-          { value: 'right', label: 'Right' },
-          { value: 'bottom', label: 'Bottom' },
-          { value: 'left', label: 'Left' },
-        ],
-      },
       { kind: 'select', key: 'clickBehavior', label: 'Click on pin',
         options: [
           { value: 'popup', label: 'Open popup' },
@@ -98,15 +82,7 @@ const groups = computed(() => [
       },
     ],
   },
-  {
-    key: 'overlays',
-    title: 'Map overlays',
-    items: [
-      { kind: 'switch', key: 'showCompass', label: 'Compass', help: 'Top-right rotation indicator.' },
-      { kind: 'switch', key: 'showScale', label: 'Scale bar', help: 'Bottom-left distance scale.' },
-      { kind: 'switch', key: 'showMinimap', label: 'Minimap', help: 'Bottom-right overview map (Phase 2).', disabled: true },
-    ],
-  },
+
   {
     key: 'units',
     title: 'Units & cursor',
@@ -195,8 +171,7 @@ const shortcutGroups = computed(() => {
 // the author to choose preview behavior.
 const PREVIEWABLE_KEYS = new Set([
   'blurOnPanel', 'autoCloseOthers', 'showLegend',
-  'labelDensity', 'popupAnchor', 'clickBehavior',
-  'showCompass', 'showScale', 'showMinimap',
+  'clickBehavior',
   'coordUnits', 'distanceUnits', 'cursor',
   'toolbarSize',
   'tiltJoystickInverted',
@@ -317,12 +292,7 @@ function resetAll() {
       blurOnPanel: true,
       autoCloseOthers: true,
       showLegend: true,
-      labelDensity: 'hover',
-      popupAnchor: 'auto',
       clickBehavior: 'popup',
-      showCompass: false,
-      showScale: true,
-      showMinimap: false,
       coordUnits: 'decimal',
       distanceUnits: 'km',
       cursor: 'crosshair',

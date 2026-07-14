@@ -83,7 +83,7 @@ export const useMapStore = defineStore('map', () => {
     const fallbackName = recent.value.find((row) => row?.name && row.name !== localRecentName)?.name
     if (fallbackName) {
       await switchMap(fallbackName)
-    } else {
+    } else if (ui.prefs.showTemplatesOnEmpty) {
       // Fall back to the first template so the canvas never lands empty.
       templates.value = await call('expedition.api.map.list_templates')
       if (templates.value.length > 0) {

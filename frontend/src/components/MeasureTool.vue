@@ -243,12 +243,44 @@ function polygonArea(coords) {
 }
 
 function fmtLength(m) {
-  if (m < 1000) return `${m.toFixed(1)} m`
-  return `${(m / 1000).toFixed(2)} km`
+  const unit = ui.prefs.distanceUnits || 'km'
+  if (unit === 'mi') {
+    const miles = m * 0.000621371
+    if (miles < 0.1) {
+      const feet = m * 3.28084
+      return `${feet.toFixed(1)} ft`
+    }
+    return `${miles.toFixed(2)} mi`
+  } else if (unit === 'nm') {
+    const nm = m * 0.000539957
+    if (nm < 0.1) {
+      return `${m.toFixed(1)} m`
+    }
+    return `${nm.toFixed(2)} nm`
+  } else {
+    if (m < 1000) return `${m.toFixed(1)} m`
+    return `${(m / 1000).toFixed(2)} km`
+  }
 }
 function fmtArea(m2) {
-  if (m2 < 10_000) return `${m2.toFixed(0)} m²`
-  return `${(m2 / 1_000_000).toFixed(3)} km²`
+  const unit = ui.prefs.distanceUnits || 'km'
+  if (unit === 'mi') {
+    const sqMi = m2 * 3.861e-7
+    if (sqMi < 0.1) {
+      const sqFt = m2 * 10.7639
+      return `${sqFt.toFixed(0)} ft²`
+    }
+    return `${sqMi.toFixed(3)} mi²`
+  } else if (unit === 'nm') {
+    const sqNm = m2 * 2.91553e-7
+    if (sqNm < 0.1) {
+      return `${m2.toFixed(0)} m²`
+    }
+    return `${sqNm.toFixed(3)} nm²`
+  } else {
+    if (m2 < 10000) return `${m2.toFixed(0)} m²`
+    return `${(m2 / 1000000).toFixed(3)} km²`
+  }
 }
 </script>
 

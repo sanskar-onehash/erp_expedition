@@ -147,6 +147,7 @@ function active(id) {
   if (id === 'select') return ui.drawMode === 'off' && !ui.measureMode
   if (id === 'measure-line') return ui.measureMode === 'line'
   if (id === 'measure-area') return ui.measureMode === 'polygon'
+  if (id === 'timeline') return ui.timelineEnabled
   return ui.drawMode === id
 }
 
@@ -164,6 +165,10 @@ function trigger(id) {
   if (id === 'measure-area') {
     ui.cancelDraw()
     ui.startMeasure('polygon')
+    return
+  }
+  if (id === 'timeline') {
+    ui.toggleTimeline()
     return
   }
   ui.cancelMeasure()
@@ -425,6 +430,23 @@ function setDrawingColor(color) {
         </svg>
         <span class="mtt__key" aria-hidden="true">{{ tool.shortcut }}</span>
       </button>
+
+      <!-- Separator -->
+      <div class="mtt__sep" aria-hidden="true" />
+
+      <!-- Timeline playback -->
+      <button
+        type="button"
+        class="mtt__btn"
+        :class="{ 'mtt__btn--active': active('timeline') }"
+        title="Timeline playback"
+        aria-label="Timeline playback"
+        @click="trigger('timeline')"
+      >
+        <svg viewBox="0 0 24 24" class="mtt__icon" aria-hidden="true">
+          <path d="M12 6v6l3 3 M12 22a10 10 0 1 1 5.66-18.34 M16 3h5v5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
     </div>
     </div>
 
@@ -606,6 +628,12 @@ function setDrawingColor(color) {
   padding: 4px;
   backdrop-filter: blur(20px) saturate(160%);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.32);
+}
+.mtt__sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 2px 4px;
+  flex: none;
 }
 .mtt__btn {
   position: relative;

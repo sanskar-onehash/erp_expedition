@@ -10,7 +10,7 @@
  *
  * Phase 1 plan: ~/.claude-work/plans/quiet-canvas-quokka.md
  */
-import { ref, computed, onMounted, onBeforeUnmount, provide } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, provide, watch } from 'vue'
 import { useMapStore } from './state/map.js'
 import { useUiStore } from './state/ui.js'
 import { useLayersStore } from './state/layers.js'
@@ -30,6 +30,7 @@ import EmbeddedListView from './components/EmbeddedListView.vue'
 import MapToolTray from './components/MapToolTray.vue'
 import CoordReadout from './components/CoordReadout.vue'
 import MeasureTool from './components/MeasureTool.vue'
+import TimelineSlider from './components/TimelineSlider.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import UserSettings from './components/UserSettings.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
@@ -43,6 +44,17 @@ const zoneStore = useZonesStore()
 const iconStore = useIconsStore()
 const chromeRoot = ref(null)
 const embeddedListOpen = ref(false)
+
+watch(() => ui.leftPanel, (val) => {
+  if (val === 'layers' && ui.prefs.autoCloseOthers) {
+    embeddedListOpen.value = false
+  }
+})
+watch(embeddedListOpen, (val) => {
+  if (val && ui.prefs.autoCloseOthers) {
+    ui.closeLeftPanel()
+  }
+})
 const layoutItemEls = {}
 const layoutViewport = ref({ width: 0, height: 0 })
 const layoutItemSizes = ref({})
@@ -92,6 +104,7 @@ function runShortcut(id) {
   else if (id === 'fit-all') onToolbarTrigger('fit-all')
   else if (id === 'fit-visible') onToolbarTrigger('fit-visible')
   else if (id === 'tilt-reset') onToolbarTrigger('tilt-reset')
+  else if (id === 'timeline') ui.toggleTimeline()
   else dispatchShortcut(id)
 }
 
@@ -222,6 +235,8 @@ const GLYPHS = {
   eyeOff: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l16 16',
   layout: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
   list: 'M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01',
+  // Clock face with a play-triangle overlay — reads as "time playback".
+  timeline: 'M12 6v6l3 3 M12 22a10 10 0 1 1 5.66-18.34 M16 3h5v5',
 }
 
 // Top-left: map workspace. The badge still shows enabled layers because
@@ -479,6 +494,7 @@ function resetTilt() {
 // effect; no state machine, no toggle-vs-action ambiguity.
 function onToolbarTrigger(id) {
   if (id === 'layers') ui.toggleLeftPanel('layers')
+  else if (id === 'timeline') ui.toggleTimeline()
   else if (id === 'list') embeddedListOpen.value = !embeddedListOpen.value
   else if (id === 'search') ui.toggleSearch()
   else if (id === 'settings') ui.toggleSettings()
@@ -848,8 +864,15 @@ async function _fitAllBounds(m) {
       <CoordReadout />
     </div>
 
-    <!-- Bottom-center: legend of enabled layers (hidden when empty). -->
+    <!-- Bottom-center: timeline slider (above legend, when enabled). -->
+    <Transition name="tls-rise">
+      <div v-if="ui.timelineEnabled && !ui.chromeHidden" class="expedition__timeline chrome-hideable">
+        <TimelineSlider @close="ui.disableTimeline()" />
+      </div>
+    </Transition>
+
     <div
+      v-if="(ui.prefs.showLegend || ui.layoutCustomizing) && !ui.chromeHidden"
       :ref="(el) => registerLayoutItem('legend', el)"
       class="expedition__bc expedition__layout-item"
       :class="{ 'expedition__layout-item--dragging': layoutDrag?.id === 'legend' }"
@@ -857,7 +880,7 @@ async function _fitAllBounds(m) {
       @pointerdown.capture="(e) => onLayoutPointerDown('legend', e)"
     >
       <div v-if="ui.layoutCustomizing" class="expedition__layout-handle">{{ LAYOUT_LABELS.legend }}</div>
-      <Legend />
+      <Legend v-show="ui.prefs.showLegend" />
     </div>
 
     <div v-if="ui.layoutCustomizing" class="expedition__layout-overlay" aria-hidden="true">
@@ -1401,4 +1424,21 @@ async function _fitAllBounds(m) {
   opacity: 1;
   transform: translateX(50%) scale(1);
 }
+
+/* Timeline slider — bottom-center, floats above the Legend. */
+.expedition__timeline {
+  position: absolute;
+  bottom: 56px;    /* sits above the legend row */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 24;
+  pointer-events: none;
+}
+.expedition__timeline > * { pointer-events: auto; }
+
+.tls-rise-enter-active, .tls-rise-leave-active {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms ease;
+}
+.tls-rise-enter-from { transform: translateX(-50%) translateY(12px); opacity: 0; }
+.tls-rise-leave-to  { transform: translateX(-50%) translateY(12px); opacity: 0; }
 </style>

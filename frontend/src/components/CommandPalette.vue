@@ -100,7 +100,6 @@ function buildFlat() {
       }
     })(); close() } },
     { id: 'cmd:layers', label: 'Toggle layers panel', meta: 'command', run: () => { ui.toggleLeftPanel('layers'); close() } },
-    { id: 'cmd:tools', label: 'Toggle tools panel', meta: 'command', run: () => { ui.toggleRightPanel('tools'); close() } },
   ]
   for (const c of cmds) {
     if (!s || c.label.toLowerCase().includes(s)) items.push(c)

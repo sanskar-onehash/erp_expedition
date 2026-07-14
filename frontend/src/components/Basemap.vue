@@ -1204,7 +1204,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
   if (!map || !map.getStyle()) {
     return
   }
-  const fc = renderContext?.fc || layerStore.features[layerName]
+  const fc = renderContext?.fc || layerStore.getDisplayFeatures(layerName)
   if (!fc) return
   const parentName = renderContext?.parentName || parentLayerName(layerName)
   const renderName = renderContext?.renderName || layerName
@@ -1626,7 +1626,7 @@ function onPointClick(e) {
   const rawId = e.targetLayer || (f.layer && f.layer.id) || ''
   const renderName = layerNameFromRenderedLayerId(rawId)
   const layerName = parentLayerName(renderName)
-  const fc = layerStore.features[layerName]
+  const fc = layerStore.getDisplayFeatures(layerName)
   const layerMeta = fc?.layer || layerStore.layers.find((l) => l.name === layerName)
   const action = layerMeta?.click_action || 'popup'
   if (action === 'none') return
@@ -1642,7 +1642,7 @@ function onPointClick(e) {
   const src = map.getSource(sid)
   if (src && f.id != null) {
     // Clear all features' selected state.
-    for (const feat of layerStore.features[renderName]?.features || layerStore.features[layerName]?.features || []) {
+    for (const feat of layerStore.getDisplayFeatures(renderName)?.features || layerStore.getDisplayFeatures(layerName)?.features || []) {
       if (feat._id != null && feat._id !== f.id) {
         try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
       }
@@ -1858,7 +1858,7 @@ function _reAddAllLayers() {
   if (!map || !map.isStyleLoaded()) return
   _pruneStaleRenderedLayers()
   for (const layer of layerStore.layers) {
-    if (layerStore.features[layer.name]) {
+    if (layerStore.features[layer.name] || layerStore.getDisplayFeatures(layer.name)) {
       _addLayerOnMap(layer.name)
     }
   }
@@ -2374,7 +2374,14 @@ async function _flyToHome() {
     _scheduleHomeFitRetry()
     return
   }
-  if (_fitEnvelope(_zoneEnvelope())) _homeFitDone = true
+  if (_fitEnvelope(_zoneEnvelope())) {
+    _homeFitDone = true
+  } else {
+    const zoom = typeof ui.prefs.defaultZoom === 'number' ? ui.prefs.defaultZoom : map.getZoom()
+    const pitch = typeof ui.prefs.defaultPitch === 'number' ? ui.prefs.defaultPitch : map.getPitch()
+    map.easeTo({ zoom, pitch, duration: 1200 })
+    _homeFitDone = true
+  }
 }
 
 function _flyToInitialViewport() {
@@ -2415,13 +2422,14 @@ onMounted(() => {
   // without ever showing the same longitude twice in one view.
   const rect = mapEl.value.getBoundingClientRect()
   const minZoom = computeGlobeFitZoom(rect.width)
-  const startZoom = minZoom
+  const startZoom = typeof ui.prefs.defaultZoom === 'number' ? ui.prefs.defaultZoom : minZoom
+  const startPitch = typeof ui.prefs.defaultPitch === 'number' ? ui.prefs.defaultPitch : 0
   map = new maplibregl.Map({
     container: mapEl.value,
     style: resolveStyle(initialSkin),
     center: startCenter,
     zoom: startZoom,
-    pitch: 0,
+    pitch: startPitch,
     minZoom,
     renderWorldCopies: true,
     attributionControl: { compact: true },
@@ -2430,8 +2438,6 @@ onMounted(() => {
     const r = mapEl.value.getBoundingClientRect()
     map.setMinZoom(computeGlobeFitZoom(r.width))
   })
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right')
-  map.addControl(new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left')
   // Geolocate — Google's "where am I" blue dot.
   map.addControl(new maplibregl.GeolocateControl({
     positionOptions: { enableHighAccuracy: true, timeout: 6000 },
@@ -2751,6 +2757,7 @@ watch(
   () => [ui.measureMode, ui.prefs.cursor],
   () => _setMapCursor()
 )
+
 
 // Re-render the draft polygon whenever the vertex list changes.
 watch(
@@ -3211,4 +3218,5 @@ watch(
   font-size: 10px;
   padding: 1px 4px;
 }
+
 </style>

@@ -21,7 +21,9 @@ const allLayers = computed(() =>
 )
 const heatmapLayers = computed(() =>
   allLayers.value.filter((l) =>
-    l.enabled !== false && l.enabled !== 0 && ui.isHeatmapOn(l.name)
+    l.enabled !== false && l.enabled !== 0 &&
+    !layerStore.locallyHidden.has(l.name) &&
+    ui.isHeatmapOn(l.name)
   )
 )
 
@@ -30,8 +32,12 @@ function colorOf(l) {
   return style.color || l.color || '#3B82F6'
 }
 
-function toggle(name, enabled) {
-  layerStore.updateLayer(name, { enabled: enabled ? 0 : 1 })
+function toggle(name, serverEnabled) {
+  // Legend chips are quick-view only — they toggle local (session) visibility
+  // without persisting to the server. Server-disabled layers must be
+  // re-enabled from the panel; clicking their chip here does nothing.
+  if (!serverEnabled) return
+  layerStore.toggleLocalVisibility(name)
 }
 
 function edit(l) {
@@ -102,8 +108,11 @@ function groupSwatches(l) {
       :key="l.name"
       type="button"
       class="legend__chip"
-      :class="{ 'legend__chip--disabled': l.enabled === false || l.enabled === 0 }"
-      :title="(l.title || l.name) + ' (' + (l.source_doctype || '') + ')'"
+      :class="{
+        'legend__chip--disabled': l.enabled === false || l.enabled === 0 || layerStore.locallyHidden.has(l.name),
+        'legend__chip--server-disabled': l.enabled === false || l.enabled === 0,
+      }"
+      :title="(l.title || l.name) + ' (' + (l.source_doctype || '') + (l.enabled === false || l.enabled === 0 ? ' — disabled via panel' : '') + ')'"
       :aria-label="'Toggle ' + (l.title || l.name)"
       @click="toggle(l.name, l.enabled !== false && l.enabled !== 0)"
       @contextmenu.prevent="edit(l)"
@@ -144,6 +153,9 @@ function groupSwatches(l) {
 .legend__chip:hover { background: rgba(255, 255, 255, 0.08); }
 .legend__chip--disabled {
   opacity: 0.5;
+}
+.legend__chip--server-disabled {
+  cursor: not-allowed;
 }
 .legend__chip--disabled .legend__label {
   text-decoration: line-through;

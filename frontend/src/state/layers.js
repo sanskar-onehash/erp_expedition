@@ -41,7 +41,20 @@ export const useLayersStore = defineStore('layers', () => {
   const sourceFields = ref({})      // doctype -> [{fieldname, fieldtype, label}] | null = pending
   const activeSearch = ref(null)    // { raw, parsed, summary, total, layerCounts }
 
-  const visibleLayers = computed(() => layers.value.filter(l => l.enabled !== 0))
+  // Names of layers hidden locally (session-only, not persisted).
+  // Legend chips toggle this; panel enable/disable persists via server.
+  const locallyHidden = ref(new Set())
+
+  function toggleLocalVisibility(layerName) {
+    const s = new Set(locallyHidden.value)
+    if (s.has(layerName)) s.delete(layerName)
+    else s.add(layerName)
+    locallyHidden.value = s
+  }
+
+  const visibleLayers = computed(() =>
+    layers.value.filter(l => l.enabled !== 0 && !locallyHidden.value.has(l.name))
+  )
 
   const featureListeners = new Set()
   function onFeaturesUpdated(fn) {
@@ -786,6 +799,8 @@ export const useLayersStore = defineStore('layers', () => {
     unfilteredFeatures,
     loading,
     lastFetched,
+    locallyHidden,
+    toggleLocalVisibility,
     visibleLayers,
     activeSearch,
     applySearch,

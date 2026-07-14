@@ -58,8 +58,11 @@ const pickerRoot = ref(null) // template ref for document-click-outside check
 
 const filteredMasters = computed(() => {
   if (!activeMapName.value) return []
+  // Only exclude enabled layers; disabled layers can be "re-added" via the
+  // picker which idempotently re-enables them on the server.
   const attached = new Set(
     activeLayers.value
+      .filter((l) => l.enabled !== false && l.enabled !== 0)
       .map((l) => `${l.source_doctype}::${l.title}`)
   )
   const q = pickerQuery.value.trim().toLowerCase()

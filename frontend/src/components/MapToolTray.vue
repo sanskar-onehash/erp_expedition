@@ -9,6 +9,12 @@ import UiNumberInput from './ui/UiNumberInput.vue'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
+
+const _SIZE_MAP = { xs: [22, 12], s: [28, 14], m: [32, 17], lg: [40, 18], xlg: [48, 20] }
+const sizeStyle = computed(() => {
+  const [btn, icon] = _SIZE_MAP[ui.prefs.toolbarSize || 'm'] || _SIZE_MAP.m
+  return { '--mtt-size': btn + 'px', '--mtt-icon': icon + 'px' }
+})
 const zoneStore = useZonesStore()
 const layout = inject('expeditionLayout', null)
 const tray = ref(null)
@@ -359,7 +365,7 @@ function setDrawingColor(color) {
       @pointerdown.capture="(e) => onLayoutPointerDown('toolsPrimary', e)"
     >
       <div v-if="layoutCustomizing" class="expedition__layout-handle">{{ layoutLabel('toolsPrimary') }}</div>
-      <div class="mtt__group" role="toolbar" aria-label="Map drawing tools">
+      <div class="mtt__group" role="toolbar" aria-label="Map drawing tools" :style="sizeStyle">
       <button
         type="button"
         class="mtt__btn"
@@ -447,7 +453,7 @@ function setDrawingColor(color) {
       @pointerdown.capture="(e) => onLayoutPointerDown('toolsStyle', e)"
     >
       <div v-if="layoutCustomizing" class="expedition__layout-handle">{{ layoutLabel('toolsStyle') }}</div>
-      <div class="mtt__group">
+      <div class="mtt__group" :style="sizeStyle">
       <button type="button" class="mtt__btn" title="Drawing color" aria-label="Drawing color" @click="styleOpen = !styleOpen">
         <span class="mtt__swatch" :style="{ background: ui.drawingColor }" />
         <span class="mtt__key" aria-hidden="true">{{ shortcutLabel('drawing-color') }}</span>
@@ -603,8 +609,8 @@ function setDrawingColor(color) {
 }
 .mtt__btn {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: var(--mtt-size, 32px);
+  height: var(--mtt-size, 32px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -617,7 +623,7 @@ function setDrawingColor(color) {
 .mtt__btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .mtt__btn--active { background: rgba(59, 130, 246, 0.20); color: #93C5FD; }
 .mtt__btn:disabled { opacity: 0.35; cursor: default; }
-.mtt__icon { width: 17px; height: 17px; }
+.mtt__icon { width: var(--mtt-icon, 17px); height: var(--mtt-icon, 17px); }
 .mtt__key {
   position: absolute;
   left: calc(100% + 6px);
@@ -642,7 +648,7 @@ function setDrawingColor(color) {
 .mtt__shape {
   position: relative;
   display: grid;
-  grid-template-rows: 32px 12px;
+  grid-template-rows: var(--mtt-size, 32px) 12px;
 }
 .mtt__shape > .mtt__btn {
   border-bottom-left-radius: 5px;
@@ -650,7 +656,7 @@ function setDrawingColor(color) {
 }
 .mtt__shape-more {
   position: relative;
-  width: 32px;
+  width: var(--mtt-size, 32px);
   height: 12px;
   display: flex;
   align-items: center;
@@ -672,15 +678,15 @@ function setDrawingColor(color) {
   height: 10px;
 }
 .mtt__swatch {
-  width: 17px;
-  height: 17px;
+  width: var(--mtt-icon, 17px);
+  height: var(--mtt-icon, 17px);
   border-radius: 5px;
   border: 2px solid rgba(255, 255, 255, 0.8);
 }
 .mtt__tilt-wrap {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: var(--mtt-size, 32px);
+  height: var(--mtt-size, 32px);
 }
 .mtt__pop {
   position: absolute;

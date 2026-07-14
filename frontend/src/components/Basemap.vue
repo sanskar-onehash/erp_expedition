@@ -885,7 +885,7 @@ function territoryWaterBeforeId() {
 function collectTerritoryCandidates() {
   const candidates = []
   for (const layerDoc of layerStore.layers || []) {
-    const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
+    const enabled = (layerDoc.enabled !== false && layerDoc.enabled !== 0) && !layerStore.locallyHidden.has(layerDoc.name)
     const baseStyle = layerStore.getLayerStyle(layerDoc.name) || {}
     if (!enabled || !territoryEnabled(layerDoc, baseStyle)) continue
     const layerColor = baseStyle.color || layerDoc.color || FALLBACK_COLOR
@@ -1216,7 +1216,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
   const sizeKey = style.size || layerDoc.size || 'm'
   const radius = SIZE_TO_RADIUS[sizeKey] || SIZE_TO_RADIUS.m
   const wantsCluster = !!(style.cluster || layerDoc.cluster)
-  const enabled = layerDoc.enabled !== false && layerDoc.enabled !== 0
+  const enabled = (layerDoc.enabled !== false && layerDoc.enabled !== 0) && !layerStore.locallyHidden.has(layerDoc.name)
   const heatOn = enabled && ui.isHeatmapOn(parentName)
   const minPinZoom = pinMinZoom(layerDoc, style)
 
@@ -1579,15 +1579,21 @@ function _addLayerOnMap(layerName, renderContext = null) {
     map.setPaintProperty(rid, 'circle-opacity', 0)
     map.setPaintProperty(shid, 'circle-opacity', 0)
     if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', 0)
-    // Clusters still show on top of the heatmap at very low zooms so
-    // the user can click into a dense blob.
+    // Clusters show on top of the heatmap at very low zooms (clickable),
+    // but only when the layer itself is enabled.
+    if (map.getLayer(cid)) map.setLayoutProperty(cid, 'visibility', enabled ? 'visible' : 'none')
+    if (map.getLayer(ccid)) map.setLayoutProperty(ccid, 'visibility', enabled ? 'visible' : 'none')
   } else {
     if (map.getLayer(hid)) map.removeLayer(hid)
-    // Restore pin-stack opacity to whatever `enabled` says.
-    map.setPaintProperty(lid, 'circle-opacity', enabled ? 1 : 0)
-    map.setPaintProperty(rid, 'circle-opacity', enabled ? 1 : 0)
-    map.setPaintProperty(shid, 'circle-opacity', enabled ? 0.45 : 0)
-    if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', enabled ? 1 : 0)
+    // Toggle all pin-stack layers via visibility so they're fully removed
+    // from hit-testing when the layer is hidden (opacity:0 still fires events).
+    const vis = enabled ? 'visible' : 'none'
+    map.setLayoutProperty(lid, 'visibility', vis)
+    map.setLayoutProperty(rid, 'visibility', vis)
+    map.setLayoutProperty(shid, 'visibility', vis)
+    if (map.getLayer(iid)) map.setLayoutProperty(iid, 'visibility', vis)
+    if (map.getLayer(cid)) map.setLayoutProperty(cid, 'visibility', vis)
+    if (map.getLayer(ccid)) map.setLayoutProperty(ccid, 'visibility', vis)
   }
 
   _bindPointLayerHandlers(lid)
@@ -2981,7 +2987,7 @@ watch(activeSkinId, (id) => {
 watch(
   () => layerStore.layers.map((l) => ({
     name: l.name,
-    enabled: l.enabled !== false && l.enabled !== 0,
+    enabled: (l.enabled !== false && l.enabled !== 0) && !layerStore.locallyHidden.has(l.name),
     color: l.color || l.style?.color || '',
     icon: l.icon || l.style?.icon || '',
     size: l.size || l.style?.size || '',

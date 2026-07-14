@@ -256,6 +256,20 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   async function _callFeatures(layerName, bounds, options = {}) {
+    const lyr = layers.value.find((l) => l.name === layerName)
+    if (lyr && lyr.data_source_type === "Client Script (JS)") {
+      if (lyr.js_script) {
+        try {
+          const fetchFunction = new Function('layer', 'bounds', 'options', lyr.js_script)
+          const result = await fetchFunction(lyr, bounds, options)
+          return result || { type: 'FeatureCollection', features: [] }
+        } catch (err) {
+          console.error('[expedition] Failed to execute client script for layer:', layerName, err)
+          return { type: 'FeatureCollection', features: [] }
+        }
+      }
+      return { type: 'FeatureCollection', features: [] }
+    }
     const args = { layer: layerName, bounds }
     if (options.groupKey != null) args.group_key = options.groupKey
     if (Array.isArray(options.extraFields) && options.extraFields.length) {

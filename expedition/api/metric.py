@@ -41,9 +41,24 @@ def _as_list(value: Any) -> list:
 
 
 def _field_exists(source_doctype: str, fieldname: str) -> bool:
+    if fieldname and ":" in fieldname:
+        try:
+            parts = fieldname.split(":")
+            if len(parts) == 2:
+                child_doctype, child_field = parts
+                parent_meta = frappe.get_meta(source_doctype)
+                valid_child = any(
+                    f.options == child_doctype and f.fieldtype == "Table"
+                    for f in parent_meta.fields
+                )
+                if valid_child:
+                    return _field_exists(child_doctype, child_field)
+        except Exception:
+            return False
     if fieldname in {"name", "owner", "creation", "modified", "modified_by", "docstatus"}:
         return True
     return bool(frappe.get_meta(source_doctype).get_field(fieldname))
+
 
 
 def _append_filter(filters: list, fieldname: str | None, op: str, value: Any) -> None:

@@ -32,6 +32,9 @@
   "campaign",
   "last_opened_at",
 
+  "tab_scripts",
+  "custom_script",
+
   "filters_json",
   "summary_json"
  ],
@@ -179,6 +182,18 @@
    "label": "Cached Summary",
    "read_only": 1,
    "description": "Cached aggregate counts (e.g. { customers: 1234, leads: 567 }). Recomputed hourly."
+  },
+  {
+   "fieldname": "tab_scripts",
+   "fieldtype": "Tab Break",
+   "label": "Scripts"
+  },
+  {
+   "fieldname": "custom_script",
+   "fieldtype": "Code",
+   "label": "Custom Script (Javascript)",
+   "options": "JS",
+   "description": "Javascript code executed when this specific map is loaded. Use it for map-specific events or overriding global actions."
   }
  ],
  "index_web_pages_for_search": 1,

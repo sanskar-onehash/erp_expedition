@@ -143,7 +143,11 @@ def load_full(name: str) -> dict:
         "map",
         "sequence",
         "enabled",
+        "data_source_type",
         "source_doctype",
+        "python_script",
+        "js_script",
+        "layer_script",
         "location_source",
         "location_link_field",
         "location_doctype",
@@ -776,3 +780,13 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
         new_zone.insert(ignore_permissions=True)
 
     return {"name": new_map.name, "title": new_map.title}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_global_settings() -> dict:
+    """Return site-wide global settings and script for the Expedition Map."""
+    doc = frappe.get_single("Expedition Settings")
+    return {
+        "global_script": getattr(doc, "global_script", "") or ""
+    }
+

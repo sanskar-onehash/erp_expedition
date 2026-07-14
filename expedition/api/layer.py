@@ -232,24 +232,32 @@ def _coerce_filter(filter_json: str | dict | None) -> list | None:
         return None
     if not isinstance(parsed, list):
         frappe.throw(
-            "Filter must be a Frappe filter list (array of [field, op, value] tuples)"
+            "Filter must be a Frappe filter list (array of [field, op, value] or [child_doctype, field, op, value] tuples)"
         )
-    # Light validation: each entry must be a 2- or 3-tuple.
     normalized = []
     for f in parsed:
-        if not isinstance(f, (list, tuple)) or len(f) not in (2, 3):
+        if not isinstance(f, (list, tuple)) or len(f) not in (2, 3, 4):
             frappe.throw("Malformed filter entry")
         if len(f) == 2:
             field, value = f
             op = "="
-        else:
+            normalized.append([field, op, value])
+        elif len(f) == 3:
             field, op, value = f
-        op_key = _operator_key(op)
-        if op_key in {"in", "not in", "between"}:
-            value = _parse_multi_value(value)
-        elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
-            value = f"%{value}%"
-        normalized.append([field, op, value])
+            op_key = _operator_key(op)
+            if op_key in {"in", "not in", "between"}:
+                value = _parse_multi_value(value)
+            elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
+                value = f"%{value}%"
+            normalized.append([field, op, value])
+        elif len(f) == 4:
+            dt, field, op, value = f
+            op_key = _operator_key(op)
+            if op_key in {"in", "not in", "between"}:
+                value = _parse_multi_value(value)
+            elif op_key in {"like", "not like"} and isinstance(value, str) and "%" not in value:
+                value = f"%{value}%"
+            normalized.append([dt, field, op, value])
     return normalized
 
 
@@ -463,18 +471,38 @@ def _parse_multi_value(value: Any) -> list:
 def _validate_filter_rows(source_doctype: str, filters: list | None) -> None:
     if not filters:
         return
-    field_map = _filter_field_map(source_doctype)
+    parent_meta = frappe.get_meta(source_doctype)
+    valid_child_doctypes = {
+        f.options for f in parent_meta.fields if f.fieldtype == "Table" and f.options
+    }
+    field_map_cache = {source_doctype: _filter_field_map(source_doctype)}
+
     for raw in filters:
-        if len(raw) == 3:
+        child_doctype = None
+        if len(raw) == 4:
+            child_doctype, field, op, value = raw
+            if child_doctype not in valid_child_doctypes:
+                frappe.throw(
+                    f"Child DocType '{child_doctype}' is not a valid child table for {source_doctype}",
+                    frappe.ValidationError,
+                )
+            if child_doctype not in field_map_cache:
+                field_map_cache[child_doctype] = _filter_field_map(child_doctype)
+            field_map = field_map_cache[child_doctype]
+        elif len(raw) == 3:
             field, op, value = raw
+            field_map = field_map_cache[source_doctype]
         elif len(raw) == 2:
             field, value = raw
             op = "="
+            field_map = field_map_cache[source_doctype]
         else:
             frappe.throw("Malformed filter entry", frappe.ValidationError)
+
         if field not in field_map:
+            doctype_name = child_doctype if child_doctype else source_doctype
             frappe.throw(
-                f"Field '{field}' is not filterable on {source_doctype}",
+                f"Field '{field}' is not filterable on {doctype_name}",
                 frappe.ValidationError,
             )
         meta = field_map[field]
@@ -2157,6 +2185,88 @@ def get_text_search_matches(
     return {"names": [name for name in names if name], "truncated": len(rows) > limit}
 
 
+def _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup):
+    """Execute a python script to return layer data, and format it as GeoJSON."""
+    context = {
+        "bounds": bounds,
+        "limit": limit,
+        "offset": offset,
+        "frappe": frappe,
+    }
+    
+    script_output = frappe.safe_eval(
+        layer_doc.python_script or "",
+        globals_dict={"frappe": frappe, "context": context},
+        locals_dict=context
+    )
+    
+    if not isinstance(script_output, list):
+        script_output = []
+        
+    features = []
+    total = len(script_output)
+    
+    limit = min(int(limit or 5000), 10000)
+    offset = max(int(offset or 0), 0)
+    sliced_output = script_output[offset : offset + limit]
+    
+    for item in sliced_output:
+        if not isinstance(item, dict):
+            continue
+        
+        geom = item.get("geometry")
+        if not geom:
+            lat = item.get("latitude")
+            lng = item.get("longitude")
+            if lat is not None and lng is not None:
+                geom = {"type": "Point", "coordinates": [float(lng), float(lat)]}
+                
+        if not geom:
+            continue
+            
+        props = item.get("properties") or {}
+        if not isinstance(props, dict):
+            props = {"value": props}
+            
+        props["_name"] = item.get("id") or item.get("name") or "custom_pin"
+        props["_doctype"] = layer_doc.name
+        
+        features.append({
+            "type": "Feature",
+            "geometry": geom,
+            "properties": props
+        })
+        
+    response_style = {
+        "color": layer_doc.color,
+        "icon": layer_doc.icon,
+        "size": layer_doc.size,
+        "pin_min_zoom": getattr(layer_doc, "pin_min_zoom", 0) or 0,
+        "cluster": layer_doc.cluster,
+        "heatmap": layer_doc.heatmap,
+        "territory_enabled": getattr(layer_doc, "territory_enabled", 0),
+        "territory_color": getattr(layer_doc, "territory_color", "") or "",
+        "territory_opacity": getattr(layer_doc, "territory_opacity", None),
+        "territory_padding_meters": getattr(layer_doc, "territory_padding_meters", None),
+        "stroke_color": layer_doc.stroke_color,
+        "stroke_width": layer_doc.stroke_width,
+        "fill_opacity": layer_doc.fill_opacity,
+    }
+    
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "total": total,
+        "truncated": total > offset + len(features),
+        "layer": {
+            "name": layer_doc.name,
+            "title": layer_doc.title,
+            "click_action": layer_doc.click_action or "popup",
+            "style": response_style,
+        }
+    }
+
+
 @frappe.whitelist(allow_guest=True)
 def get_features(
     layer: str,
@@ -2167,36 +2277,7 @@ def get_features(
     offset: int = 0,
     render_popup: bool | int | str = True,
 ) -> dict:
-    """
-    Return a GeoJSON FeatureCollection for the given Expedition Layer.
-
-    Args:
-            layer: name of the Expedition Layer doc
-            bounds: optional {south, west, north, east} viewport filter
-            group_key: optional virtual group key; when present, the
-                    layer's base filters are combined with the group's
-                    derived filter so the group behaves like a separate
-                    filtered layer.
-            extra_fields: optional source fields to include in feature
-                    properties for session-local client search.
-            limit:  hard cap (default 5000 — clusters take care of the rest)
-            offset: pagination offset
-            render_popup: false skips popup_template rendering while still
-                    building the same feature context for preview flows.
-
-    Returns:
-            {type: "FeatureCollection", features: [...], total: int, truncated: bool}
-
-    Open to guests so the canvas renders for anonymous visitors on
-    public maps. Row-level permission on the source DocType is enforced
-    via `assert_source_read` — guests will see zero rows for source
-    doctypes they cannot read.
-    """
-    # Expedition Layer itself is meta-only metadata; the real permission
-    # boundary is the source DocType checked below. We intentionally do
-    # not gate on `has_permission("Expedition Layer")` so the source
-    # DocType's own permission model is the single source of truth.
-
+    """Return a GeoJSON FeatureCollection for the given Expedition Layer."""
     layer_doc = frappe.get_doc("Expedition Layer", layer)
     render_popup = str(render_popup).lower() not in {"0", "false", "no"}
     if not layer_doc.enabled:
@@ -2207,7 +2288,36 @@ def get_features(
             "truncated": False,
         }
 
-    # Hard rule: server-side permission check on the source DocType.
+    data_source_type = getattr(layer_doc, "data_source_type", "DocType")
+    if data_source_type == "Python Script":
+        if layer_doc.map:
+            from expedition.api.permission import assert_map_read
+            assert_map_read(layer_doc.map)
+        return _get_features_from_python_script(layer_doc, bounds, limit, offset, render_popup)
+    elif data_source_type == "Client Script (JS)":
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "total": 0,
+            "truncated": False,
+            "layer": {
+                "name": layer_doc.name,
+                "title": layer_doc.title,
+                "click_action": layer_doc.click_action or "popup",
+                "style": {
+                    "color": layer_doc.color,
+                    "icon": layer_doc.icon,
+                    "size": layer_doc.size,
+                    "pin_min_zoom": getattr(layer_doc, "pin_min_zoom", 0) or 0,
+                    "cluster": layer_doc.cluster,
+                    "heatmap": layer_doc.heatmap,
+                    "stroke_color": layer_doc.stroke_color,
+                    "stroke_width": layer_doc.stroke_width,
+                    "fill_opacity": layer_doc.fill_opacity,
+                }
+            }
+        }
+
     assert_source_read(layer_doc.source_doctype)
     _assert_location_read(layer_doc)
 
@@ -3750,15 +3860,36 @@ def reorder(map_name: str, layer_names: list[str]) -> dict:
 
 @frappe.whitelist()
 def get_filter_schema(source_doctype: str) -> dict:
-    """Return filterable field metadata for a source DocType.
-
-    This intentionally mirrors the information Frappe's list/report filters
-    need: field labels, fieldtypes, options, and the operator set that makes
-    sense for each field. The client still serializes to the existing
-    Frappe-style `filter_json` list.
-    """
+    """Return filterable field metadata for a source DocType including child tables."""
     assert_source_read(source_doctype)
     fields = list(_filter_field_map(source_doctype).values())
+    
+    # Load child table fields
+    parent_meta = frappe.get_meta(source_doctype)
+    for f in parent_meta.fields:
+        if f.fieldtype == "Table" and f.options:
+            child_doctype = f.options
+            try:
+                child_fields_map = _filter_field_map(child_doctype)
+                for cf in child_fields_map.values():
+                    c_fieldname = f"{child_doctype}:{cf['fieldname']}"
+                    c_label = f"{cf.get('label') or cf['fieldname']} ({f.label or f.fieldname})"
+                    fields.append({
+                        "fieldname": c_fieldname,
+                        "fieldtype": cf["fieldtype"],
+                        "label": c_label,
+                        "options": cf.get("options") or "",
+                        "reqd": cf.get("reqd") or 0,
+                        "hidden": cf.get("hidden") or 0,
+                        "read_only": cf.get("read_only") or 0,
+                        "standard": cf.get("standard") or 0,
+                        "operators": cf.get("operators") or [],
+                        "child_doctype": child_doctype,
+                        "child_fieldname": cf["fieldname"],
+                    })
+            except Exception:
+                pass
+
     fields.sort(
         key=lambda f: (
             str(f.get("label") or f["fieldname"]).casefold(),

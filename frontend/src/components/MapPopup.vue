@@ -91,6 +91,21 @@ const hasLinkedRecordConfig = computed(() =>
   Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
 )
 
+watch(feature, (newVal) => {
+  if (newVal) {
+    window.dispatchEvent(
+      new CustomEvent('expedition:feature-selected', {
+        detail: {
+          feature: JSON.parse(JSON.stringify(newVal)),
+          layer: JSON.parse(JSON.stringify(layer.value)),
+        },
+      })
+    )
+  } else {
+    window.dispatchEvent(new CustomEvent('expedition:feature-deselected'))
+  }
+}, { immediate: true })
+
 function close() { ui.selectedFeature = null }
 function onKey(e) { if (e.key === 'Escape' && feature.value) close() }
 

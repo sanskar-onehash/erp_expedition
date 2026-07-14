@@ -1,5 +1,5 @@
 /**
- * Expedition public SDK — `window.expedition`.
+ * Expedition public SDK — `window.expedition` and `window.Expedition`.
  *
  * Lowercase to match the namespace the www/expedition.html template
  * injects for user/csrf/build context. Two ways to use it:
@@ -10,13 +10,33 @@
 import { mountExpedition } from './core/mount.js'
 
 export function initExpeditionSDK({ app }) {
-  // Expose a small, stable surface. Resist the urge to add to this
-  // without a versioned contract — every addition is a promise.
   window.expedition = Object.assign(window.expedition || {}, {
     /** Mount the full Expedition app into `el`. */
     mount: (el, opts) => mountExpedition(el, opts),
   })
-  // `version` is replaced at build time by the __EXPEDITION_BUILD__
-  // define in vite.config.js.
   window.expedition.version = __EXPEDITION_BUILD__
+
+  // Initialize the developer extension registries
+  window.Expedition = window.Expedition || {}
+  window.Expedition.Actions = window.Expedition.Actions || {
+    registry: {},
+    register(id, config) {
+      this.registry[id] = config
+    },
+    get(id) {
+      return this.registry[id]
+    },
+    list() {
+      return Object.values(this.registry)
+    }
+  }
+  window.Expedition.Sources = window.Expedition.Sources || {
+    registry: {},
+    register(id, config) {
+      this.registry[id] = config
+    },
+    get(id) {
+      return this.registry[id]
+    }
+  }
 }

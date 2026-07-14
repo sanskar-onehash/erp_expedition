@@ -42,6 +42,22 @@ export const useMapStore = defineStore('map', () => {
 
   async function bootstrap() {
     const ui = useUiStore()
+
+    // Fetch and execute global site script
+    try {
+      const settings = await call('expedition.api.map.get_global_settings')
+      if (settings && settings.global_script) {
+        try {
+          const runGlobal = new Function('Expedition', settings.global_script)
+          runGlobal(window.Expedition)
+        } catch (err) {
+          console.error('[expedition] Failed to execute global script:', err)
+        }
+      }
+    } catch (err) {
+      console.warn('[expedition] Failed to load global settings:', err)
+    }
+
     // Try the user's "recent" list first; if anything goes wrong (e.g.
     // a guest visitor where list_for_user returns 403) fall through to
     // the public templates so the canvas never lands empty.

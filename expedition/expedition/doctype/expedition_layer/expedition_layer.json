@@ -12,7 +12,11 @@
   "enabled",
 
   "tab_source",
+  "data_source_type",
   "source_doctype",
+  "python_script",
+  "js_script",
+  "layer_script",
   "location_source",
   "location_link_field",
   "location_doctype",
@@ -122,14 +126,47 @@
    "label": "Source"
   },
   {
+   "fieldname": "data_source_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Data Source Type",
+   "options": "DocType\nPython Script\nClient Script (JS)",
+   "default": "DocType",
+   "reqd": 1
+  },
+  {
    "fieldname": "source_doctype",
    "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Source DocType",
    "options": "DocType",
-   "reqd": 1,
+   "depends_on": "eval:doc.data_source_type=='DocType'",
    "description": "The DocType whose rows appear on the map."
+  },
+  {
+   "fieldname": "python_script",
+   "fieldtype": "Code",
+   "label": "Server Script (Python)",
+   "options": "Python",
+   "depends_on": "eval:doc.data_source_type=='Python Script'",
+   "description": "Python code executed on the backend to construct layer features. Must return a list of dicts with coordinate fields."
+  },
+  {
+   "fieldname": "js_script",
+   "fieldtype": "Code",
+   "label": "Client Script (JS)",
+   "options": "JS",
+   "depends_on": "eval:doc.data_source_type=='Client Script (JS)'",
+   "description": "Javascript code executed on the frontend to return GeoJSON coordinates/features."
+  },
+  {
+   "fieldname": "layer_script",
+   "fieldtype": "Code",
+   "label": "Layer Lifecycle Script (Javascript)",
+   "options": "JS",
+   "description": "Javascript code executed during the lifecycle of this layer (events: 'add', 'remove'). Receives (Expedition, map, layer, event)."
   },
   {
    "fieldname": "location_source",

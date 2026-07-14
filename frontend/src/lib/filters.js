@@ -4,8 +4,16 @@ export function parseFilterRows(json) {
     const parsed = typeof json === 'string' ? JSON.parse(json) : json
     if (!Array.isArray(parsed)) return []
     return parsed
-      .filter((row) => Array.isArray(row) && (row.length === 2 || row.length === 3))
-      .map(([field, op, value]) => ({ field, op: op || '=', value: value ?? '' }))
+      .filter((row) => Array.isArray(row) && (row.length === 2 || row.length === 3 || row.length === 4))
+      .map((row) => {
+        if (row.length === 4) {
+          const [child_doctype, field, op, value] = row
+          return { field: `${child_doctype}:${field}`, op: op || '=', value: value ?? '' }
+        } else {
+          const [field, op, value] = row
+          return { field, op: op || '=', value: value ?? '' }
+        }
+      })
   } catch {
     return []
   }
@@ -14,7 +22,13 @@ export function parseFilterRows(json) {
 export function serializeFilterRows(rows) {
   const out = (rows || [])
     .filter((r) => r && r.field && r.op)
-    .map((r) => [r.field, r.op, r.value])
+    .map((r) => {
+      if (r.field.includes(':')) {
+        const [child_doctype, fieldname] = r.field.split(':')
+        return [child_doctype, fieldname, r.op, r.value]
+      }
+      return [r.field, r.op, r.value]
+    })
   return out.length ? JSON.stringify(out) : ''
 }
 

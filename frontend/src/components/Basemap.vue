@@ -1592,6 +1592,17 @@ function _addLayerOnMap(layerName, renderContext = null) {
 
   _bindPointLayerHandlers(lid)
   _bindPointLayerHandlers(iid)
+
+  // Execute the layer-level custom JS script if present
+  if (layerDoc && layerDoc.layer_script) {
+    try {
+      const runLayerScript = new Function('Expedition', 'map', 'layer', 'event', layerDoc.layer_script)
+      runLayerScript(window.Expedition, map, layerDoc, 'add')
+    } catch (err) {
+      console.error('[expedition] Failed to execute layer script (add):', layerDoc.name, err)
+    }
+  }
+
   // Force a redraw. Without this, on first paint the canvas can
   // appear blank even though the source + layers exist — MapLibre
   // has been observed to skip the next render frame when a source
@@ -1673,6 +1684,16 @@ async function onClusterClick(e) {
 
 function _removeLayerFromMap(layerName) {
   if (!map) return
+  // Fetch layerDoc to execute its lifecycle script for 'remove'
+  const layerDoc = layerStore.layers.find((l) => l.name === layerName)
+  if (layerDoc && layerDoc.layer_script) {
+    try {
+      const runLayerScript = new Function('Expedition', 'map', 'layer', 'event', layerDoc.layer_script)
+      runLayerScript(window.Expedition, map, layerDoc, 'remove')
+    } catch (err) {
+      console.error('[expedition] Failed to execute layer script (remove):', layerDoc.name, err)
+    }
+  }
   _removeGroupedArtifacts(layerName)
   const groupPrefix = `${layerName}${VIRTUAL_GROUP_SEPARATOR}`
   for (const key of Object.keys(_virtualGroupFetchKeys)) {
@@ -2319,6 +2340,19 @@ function applySkin(skinId) {
   }
 }
 
+function _runActiveMapCustomScript() {
+  if (!map || !map.isStyleLoaded()) return
+  const mapDoc = mapStore.activeMap?.map
+  if (mapDoc && mapDoc.custom_script) {
+    try {
+      const runMapScript = new Function('Expedition', 'map', mapDoc.custom_script)
+      runMapScript(window.Expedition, map)
+    } catch (err) {
+      console.error('[expedition] Failed to execute map custom script:', err)
+    }
+  }
+}
+
 onMounted(() => {
   const startCenter = [0, 0]
   const initialSkin = getSkin(activeSkinId.value)
@@ -2372,6 +2406,7 @@ onMounted(() => {
     _reAddZones()
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
+    _runActiveMapCustomScript()
   })
 
   // Right-click context menu. We use MapLibre's `contextmenu` event
@@ -3009,6 +3044,9 @@ watch(
     _resetFirstFetch()
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
+    if (map.isStyleLoaded()) {
+      _runActiveMapCustomScript()
+    }
   },
 )
 

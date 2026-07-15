@@ -168,6 +168,14 @@ def unassign(
     _assert_doc_write(source_doctype, source_name)
     _validate_assignment_field(source_doctype, fieldname)
 
+    if fieldname == "__frappe_assign":
+        from frappe.desk.form.assign_to import remove as remove_assignment
+        # Standard Frappe assignment doesn't know who to remove unless specified, 
+        # but in bulk unassign, we assume the current user is removing themselves
+        # or we remove all. We'll remove the current user.
+        remove_assignment(source_doctype, source_name, frappe.session.user, ignore_permissions=False)
+        return {"source_doctype": source_doctype, "source_name": source_name, "fieldname": fieldname, "value": None}
+
     doc = frappe.get_doc(source_doctype, source_name)
     doc.set(fieldname, None)
     doc.save(ignore_permissions=False)

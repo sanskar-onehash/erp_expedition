@@ -2071,6 +2071,7 @@ function onZoneClick(e) {
     ui.selectZone(zone)
     ui.selectedFeature = {
       _lngLat: e.lngLat,
+      geometry: zone.geometry,
       properties: {
         _name: zone.name,
         _doctype: 'Expedition Zone',

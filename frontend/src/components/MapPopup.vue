@@ -665,7 +665,7 @@ async function createTodo() {
     const promises = []
 
     if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = ui.selectedZone
+      const zoneDoc = feature.value
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
       
@@ -756,7 +756,7 @@ async function assignRecord() {
     const promises = []
 
     if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = ui.selectedZone
+      const zoneDoc = feature.value
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
       
@@ -766,8 +766,15 @@ async function assignRecord() {
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
           targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
-          if (assignField.value !== '__frappe_assign' && f.properties) {
-            f.properties[assignField.value] = assignUser.value
+          if (f.properties) {
+            if (assignField.value === '__frappe_assign') {
+              let current = []
+              try { current = JSON.parse(f.properties._assign || '[]') } catch (e) {}
+              if (!current.includes(assignUser.value)) current.push(assignUser.value)
+              f.properties._assign = JSON.stringify(current)
+            } else {
+              f.properties[assignField.value] = assignUser.value
+            }
           }
         }
       }
@@ -828,7 +835,7 @@ async function unassignRecord() {
     const promises = []
 
     if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = ui.selectedZone
+      const zoneDoc = feature.value
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
       
@@ -838,7 +845,16 @@ async function unassignRecord() {
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
           targets.push({ doctype: f.properties._doctype, name: f.properties._name })
-          if (f.properties) f.properties[assignField.value] = ''
+          if (f.properties) {
+            if (assignField.value === '__frappe_assign') {
+              let current = []
+              try { current = JSON.parse(f.properties._assign || '[]') } catch (e) {}
+              current = current.filter(u => u !== frappe.session.user)
+              f.properties._assign = JSON.stringify(current)
+            } else {
+              f.properties[assignField.value] = ''
+            }
+          }
         }
       }
       if (targets.length) {

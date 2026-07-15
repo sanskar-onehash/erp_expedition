@@ -38,12 +38,16 @@ export function initExpeditionSDK({ app }) {
     }
 
     function pointInGeometry(lng, lat, geometry) {
-      if (geometry.type === 'Polygon') {
-        const ring = geometry.coordinates?.[0]
+      if (!geometry) return false
+      const g = geometry.type === 'Feature' ? geometry.geometry : geometry
+      if (!g) return false
+      
+      if (g.type === 'Polygon') {
+        const ring = g.coordinates?.[0]
         return ring ? pointInRing(lng, lat, ring) : false
       }
-      if (geometry.type === 'MultiPolygon') {
-        const polys = geometry.coordinates || []
+      if (g.type === 'MultiPolygon') {
+        const polys = g.coordinates || []
         return polys.some(poly => poly[0] ? pointInRing(lng, lat, poly[0]) : false)
       }
       return false
@@ -51,14 +55,17 @@ export function initExpeditionSDK({ app }) {
 
     const layersStore = useLayersStore()
     const allFeatures = []
-    const layerNames = layerName ? [layerName] : Object.keys(layersStore.features)
+    
+    // Some proxies don't play well with Object.keys, so just grab the object directly
+    const featsMap = layersStore.features || {}
+    const layerNames = layerName ? [layerName] : Object.keys(featsMap)
 
     for (const name of layerNames) {
-      const fc = layersStore.features[name]
+      const fc = featsMap[name]
       if (!fc || !Array.isArray(fc.features)) continue
       for (const f of fc.features) {
         const coords = f.geometry?.coordinates
-        if (Array.isArray(coords) && coords.length === 2) {
+        if (Array.isArray(coords) && coords.length >= 2) {
           const [lng, lat] = coords
           if (pointInGeometry(lng, lat, geom)) {
             allFeatures.push(f)

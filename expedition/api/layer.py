@@ -1225,7 +1225,7 @@ def get_linked_records(
 ) -> dict[str, Any]:
     """Return compact linked payment/business rows for a popup source row."""
     layer_doc = frappe.get_doc("Expedition Layer", layer)
-    if not layer_doc.enabled:
+    if not layer_doc.enabled or not layer_doc.source_doctype:
         return {"groups": [], "total": 0}
 
     assert_source_read(layer_doc.source_doctype)

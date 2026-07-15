@@ -1144,8 +1144,8 @@ def _suggested_linked_record_metrics(
 LINKED_RECORD_SUMMARY_FIELDS = [
     ("outstanding_amount", "Outstanding"),
     ("paid_amount", "Paid Amount"),
-    ("grand_total", "Total"),
     ("rounded_total", "Total"),
+    ("grand_total", "Total"),
     ("base_grand_total", "Base Total"),
     ("advance_paid", "Advance"),
     ("amount", "Amount"),
@@ -1171,15 +1171,14 @@ def _linked_record_group_summary(
     metric: dict[str, Any],
 ) -> dict[str, Any]:
     totals = []
-    seen_fields: set[str] = set()
     field_order = []
     if metric.get("field"):
         field_order.append((metric["field"], metric["field"].replace("_", " ").title()))
-    field_order.extend(LINKED_RECORD_SUMMARY_FIELDS)
+        
     for fieldname, label in field_order:
-        if not fieldname or fieldname in seen_fields:
+        if not fieldname:
             continue
-        seen_fields.add(fieldname)
+            
         total = 0.0
         count = 0
         for row in rows:
@@ -1188,8 +1187,10 @@ def _linked_record_group_summary(
                 continue
             total += value
             count += 1
+            
         if not count:
             continue
+            
         totals.append(
             {
                 "field": fieldname,
@@ -4387,10 +4388,6 @@ def suggest_money_metrics(source_doctype: str, limit: int = 12) -> dict:
                 link_fieldname.lower(),
             )
             base_filters = _money_metric_base_filters(meta)
-            if dynamic_link_doctype_field:
-                base_filters = base_filters + [
-                    [dynamic_link_doctype_field, "=", source_doctype]
-                ]
             count_key = _unique_metric_key(
                 _metric_key_from_parts(doctype, link_fieldname, "count"),
                 seen_keys,
@@ -4426,14 +4423,7 @@ def suggest_money_metrics(source_doctype: str, limit: int = 12) -> dict:
                         "dynamic_link_doctype_field": dynamic_link_doctype_field,
                         "aggregate": aggregate,
                         "field": fieldname,
-                        "filters": (
-                            _money_metric_base_filters(meta, fieldname)
-                            + (
-                                [[dynamic_link_doctype_field, "=", source_doctype]]
-                                if dynamic_link_doctype_field
-                                else []
-                            )
-                        ),
+                        "filters": _money_metric_base_filters(meta, fieldname),
                         "category": "money",
                         "_rank": (*base_rank, 0, fieldname.lower()),
                     }

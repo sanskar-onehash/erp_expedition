@@ -481,9 +481,53 @@ const hiddenFieldCount = computed(() => {
   const visible = visibleGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
   return Math.max(0, filteredSecondaryRows.value.length - visible)
 })
-const linkedRecordGroups = computed(() =>
-  linkedRecords.value.filter((group) => Array.isArray(group.rows) && group.rows.length)
-)
+const linkedRecordGroups = computed(() => {
+  const map = {}
+  for (const group of linkedRecords.value || []) {
+    if (!Array.isArray(group.rows) || !group.rows.length) continue
+    const dt = group.source_doctype || 'Unknown'
+    if (!map[dt]) {
+      map[dt] = {
+        key: 'merged-' + dt,
+        label: dt,
+        source_doctype: dt,
+        suggested: false,
+        summary: { totals: [], statuses: [], row_count: 0 },
+        rows: [],
+        fields: group.fields || [],
+        field: group.field
+      }
+    }
+    const merged = map[dt]
+    if (group.suggested) merged.suggested = true
+    merged.summary.row_count = Math.max(merged.summary.row_count, group.summary?.row_count || 0)
+
+    const serverTotals = Array.isArray(group.summary?.totals) ? group.summary.totals : []
+    for (const st of serverTotals) {
+      if (!merged.summary.totals.find(t => t.field === st.field && t.label === st.label)) {
+        merged.summary.totals.push({ ...st })
+      }
+    }
+
+    const serverStatuses = Array.isArray(group.summary?.statuses) ? group.summary.statuses : []
+    for (const st of serverStatuses) {
+      const existing = merged.summary.statuses.find(s => s.label === st.label)
+      if (existing) {
+        existing.count = Math.max(existing.count, st.count)
+      } else {
+        merged.summary.statuses.push({ ...st })
+      }
+    }
+
+    const rows = Array.isArray(group.rows) ? group.rows : []
+    for (const r of rows) {
+      if (!merged.rows.find(existing => existing.name === r.name)) {
+        merged.rows.push(r)
+      }
+    }
+  }
+  return Object.values(map)
+})
 const linkedRecordCount = computed(() =>
   linkedRecordGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
 )
@@ -906,7 +950,7 @@ function linkedRecordAmount(row, group) {
 function linkedRecordGroupSummary(group) {
   const serverTotals = Array.isArray(group?.summary?.totals) ? group.summary.totals : []
   if (serverTotals.length) {
-    return serverTotals.slice(0, 3).map((item) => ({
+    return serverTotals.map((item) => ({
       field: item.field,
       label: item.label || String(item.field || '').replace(/_/g, ' '),
       value: formatValue(item.value),
@@ -921,15 +965,7 @@ function linkedRecordGroupSummary(group) {
     base_grand_total: 'Base Total',
     advance_paid: 'Advance',
   }
-  const fields = [
-    group?.field,
-    'outstanding_amount',
-    'paid_amount',
-    'grand_total',
-    'rounded_total',
-    'base_grand_total',
-    'advance_paid',
-  ].filter(Boolean)
+  const fields = [group?.field].filter(Boolean)
   const seen = new Set()
   const summary = []
   for (const field of fields) {

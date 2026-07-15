@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 0,
- "creation": "2026-06-19 10:00:00.000000",
+ "creation": "2026-07-15 08:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 0,
  "engine": "InnoDB",
@@ -138,7 +138,7 @@
  "owner": "Administrator",
  "permissions": [
   {
-   "create": 0,
+   "create": 1,
    "delete": 0,
    "email": 1,
    "export": 1,
@@ -147,7 +147,7 @@
    "report": 1,
    "role": "Expedition User",
    "share": 1,
-   "write": 0
+   "write": 1
   }
  ],
  "quick_entry": 0,

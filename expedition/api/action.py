@@ -172,3 +172,48 @@ def unassign(
     doc.set(fieldname, None)
     doc.save(ignore_permissions=False)
     return {"source_doctype": source_doctype, "source_name": source_name, "fieldname": fieldname, "value": None}
+
+
+@frappe.whitelist()
+def bulk_action(action_type: str, targets: str, **kwargs) -> dict:
+    import json
+    target_list = json.loads(targets)
+    if not target_list:
+        return {"status": "empty"}
+    
+    if len(target_list) > 50:
+        frappe.enqueue(
+            "expedition.api.action._process_bulk_action",
+            queue="default",
+            action_type=action_type,
+            target_list=target_list,
+            kwargs=kwargs,
+        )
+        return {"status": "queued", "count": len(target_list)}
+    else:
+        return _process_bulk_action(action_type, target_list, kwargs)
+
+def _process_bulk_action(action_type, target_list, kwargs):
+    success = 0
+    errors = []
+    for target in target_list:
+        dt = target.get("doctype")
+        dn = target.get("name")
+        if not dt or not dn:
+            continue
+        try:
+            if action_type == "assign":
+                assign(source_doctype=dt, source_name=dn, fieldname=kwargs.get("fieldname"), user=kwargs.get("user"))
+            elif action_type == "assign_to":
+                assign_to(source_doctype=dt, source_name=dn, user=kwargs.get("user"), description=kwargs.get("description"), priority=kwargs.get("priority"), date=kwargs.get("date"))
+            elif action_type == "unassign":
+                unassign(source_doctype=dt, source_name=dn, fieldname=kwargs.get("fieldname"))
+            elif action_type == "create_todo":
+                desc = kwargs.get("description")
+                if target.get("title"):
+                    desc = f"Follow up on {target.get('title')}"
+                create_todo(source_doctype=dt, source_name=dn, description=desc, allocated_to=kwargs.get("allocated_to"), priority=kwargs.get("priority"), date=kwargs.get("date"))
+            success += 1
+        except Exception as e:
+            errors.append(f"{dt} {dn}: {str(e)}")
+    return {"status": "completed", "success": success, "errors": len(errors)}

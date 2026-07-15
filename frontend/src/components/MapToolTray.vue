@@ -58,7 +58,7 @@ watch(selectedZone, (zone) => {
   if (suppressEditAutoOpen.value) {
     suppressEditAutoOpen.value = false
   } else {
-    editOpen.value = !!zone
+    editOpen.value = !!zone && ui.zoneEditMode
   }
   edit.value = zone ? {
     title: zone.title || '',
@@ -210,6 +210,7 @@ async function saveSelectedZone() {
   const mapName = mapStore.activeMap?.map?.name
   if (!zone?.name || !mapName) return
   closeEditPanel()
+  ui.setZoneEditMode(false)
   const updated = await zoneStore.updateZone(mapName, zone.name, edit.value)
 }
 

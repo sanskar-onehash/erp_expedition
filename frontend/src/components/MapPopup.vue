@@ -618,15 +618,40 @@ async function createTodo() {
   actionError.value = ''
   todoCreated.value = ''
   try {
-    const name = await call('expedition.api.action.create_todo', {
+    const promises = []
+    promises.push(call('expedition.api.action.create_todo', {
       source_doctype: sourceDoctype.value,
       source_name: sourceName.value,
       description: todoDescription.value || `Follow up on ${title.value}`,
       allocated_to: todoAllocatedTo.value || '',
       date: todoDate.value || null,
       priority: todoPriority.value || 'Medium',
-    })
-    todoCreated.value = name || 'created'
+    }))
+
+    if (sourceDoctype.value === 'Expedition Zone') {
+      const zoneDoc = ui.selectedZone
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
+      const targets = []
+      for (const f of features) {
+        if (f.properties?._doctype && f.properties?._name) {
+          targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
+        }
+      }
+      if (targets.length) {
+        promises.push(call('expedition.api.action.bulk_action', {
+          action_type: 'create_todo',
+          targets: JSON.stringify(targets),
+          description: todoDescription.value,
+          allocated_to: todoAllocatedTo.value || '',
+          date: todoDate.value || null,
+          priority: todoPriority.value || 'Medium',
+        }))
+      }
+    }
+
+    const results = await Promise.all(promises)
+    const resultVal = typeof results[0] === 'string' ? results[0] : (results[0]?.status || 'created')
+    todoCreated.value = resultVal
     window.frappe?.show_alert?.({ message: 'ToDo created', indicator: 'green' })
     showTodoPanel.value = false
   } catch (e) {
@@ -678,23 +703,62 @@ async function assignRecord() {
   assignBusy.value = true
   actionError.value = ''
   try {
+    const promises = []
+
     if (assignField.value === '__frappe_assign') {
-      await call('expedition.api.action.assign_to', {
+      promises.push(call('expedition.api.action.assign_to', {
         source_doctype: sourceDoctype.value,
         source_name: sourceName.value,
         user: assignUser.value,
         description: `Assignment for ${title.value}`,
-      })
-      showAssignPanel.value = false
-      return
+      }))
+    } else {
+      promises.push(call('expedition.api.action.assign', {
+        source_doctype: sourceDoctype.value,
+        source_name: sourceName.value,
+        fieldname: assignField.value,
+        user: assignUser.value,
+      }))
     }
-    await call('expedition.api.action.assign', {
-      source_doctype: sourceDoctype.value,
-      source_name: sourceName.value,
-      fieldname: assignField.value,
-      user: assignUser.value,
-    })
-    if (feature.value?.properties) feature.value.properties[assignField.value] = assignUser.value
+
+    if (sourceDoctype.value === 'Expedition Zone') {
+      const zoneDoc = ui.selectedZone
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
+      const targets = []
+      for (const f of features) {
+        if (f.properties?._doctype && f.properties?._name) {
+          targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
+          if (assignField.value !== '__frappe_assign' && f.properties) {
+            f.properties[assignField.value] = assignUser.value
+          }
+        }
+      }
+      
+      if (targets.length) {
+        if (assignField.value === '__frappe_assign') {
+          promises.push(call('expedition.api.action.bulk_action', {
+            action_type: 'assign_to',
+            targets: JSON.stringify(targets),
+            user: assignUser.value,
+          }))
+        } else {
+          promises.push(call('expedition.api.action.bulk_action', {
+            action_type: 'assign',
+            targets: JSON.stringify(targets),
+            fieldname: assignField.value,
+            user: assignUser.value,
+          }))
+        }
+      }
+    }
+
+    await Promise.all(promises)
+    if (feature.value?.properties && assignField.value !== '__frappe_assign') {
+      feature.value.properties[assignField.value] = assignUser.value
+    }
+    if (assignField.value === '__frappe_assign') {
+      showAssignPanel.value = false
+    }
   } catch (e) {
     actionError.value = e.message || String(e)
   } finally {
@@ -707,11 +771,33 @@ async function unassignRecord() {
   assignBusy.value = true
   actionError.value = ''
   try {
-    await call('expedition.api.action.unassign', {
+    const promises = []
+    promises.push(call('expedition.api.action.unassign', {
       source_doctype: sourceDoctype.value,
       source_name: sourceName.value,
       fieldname: assignField.value,
-    })
+    }))
+
+    if (sourceDoctype.value === 'Expedition Zone') {
+      const zoneDoc = ui.selectedZone
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
+      const targets = []
+      for (const f of features) {
+        if (f.properties?._doctype && f.properties?._name) {
+          targets.push({ doctype: f.properties._doctype, name: f.properties._name })
+          if (f.properties) f.properties[assignField.value] = ''
+        }
+      }
+      if (targets.length) {
+        promises.push(call('expedition.api.action.bulk_action', {
+          action_type: 'unassign',
+          targets: JSON.stringify(targets),
+          fieldname: assignField.value,
+        }))
+      }
+    }
+
+    await Promise.all(promises)
     if (feature.value?.properties) feature.value.properties[assignField.value] = ''
   } catch (e) {
     actionError.value = e.message || String(e)

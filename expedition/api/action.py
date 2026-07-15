@@ -210,7 +210,7 @@ def _process_bulk_action(action_type, target_list, kwargs):
                 unassign(source_doctype=dt, source_name=dn, fieldname=kwargs.get("fieldname"))
             elif action_type == "create_todo":
                 desc = kwargs.get("description")
-                if target.get("title"):
+                if not desc and target.get("title"):
                     desc = f"Follow up on {target.get('title')}"
                 create_todo(source_doctype=dt, source_name=dn, description=desc, allocated_to=kwargs.get("allocated_to"), priority=kwargs.get("priority"), date=kwargs.get("date"))
             success += 1

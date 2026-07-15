@@ -619,24 +619,21 @@ async function createTodo() {
   todoCreated.value = ''
   try {
     const promises = []
-    promises.push(call('expedition.api.action.create_todo', {
-      source_doctype: sourceDoctype.value,
-      source_name: sourceName.value,
-      description: todoDescription.value || `Follow up on ${title.value}`,
-      allocated_to: todoAllocatedTo.value || '',
-      date: todoDate.value || null,
-      priority: todoPriority.value || 'Medium',
-    }))
 
     if (sourceDoctype.value === 'Expedition Zone') {
       const zoneDoc = ui.selectedZone
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
+      
+      // Add the zone itself so it gets the ToDo
+      targets.push({ doctype: sourceDoctype.value, name: sourceName.value, title: title.value })
+      
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
           targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
         }
       }
+      
       if (targets.length) {
         promises.push(call('expedition.api.action.bulk_action', {
           action_type: 'create_todo',
@@ -647,6 +644,15 @@ async function createTodo() {
           priority: todoPriority.value || 'Medium',
         }))
       }
+    } else {
+      promises.push(call('expedition.api.action.create_todo', {
+        source_doctype: sourceDoctype.value,
+        source_name: sourceName.value,
+        description: todoDescription.value || `Follow up on ${title.value}`,
+        allocated_to: todoAllocatedTo.value || '',
+        date: todoDate.value || null,
+        priority: todoPriority.value || 'Medium',
+      }))
     }
 
     const results = await Promise.all(promises)
@@ -705,26 +711,14 @@ async function assignRecord() {
   try {
     const promises = []
 
-    if (assignField.value === '__frappe_assign') {
-      promises.push(call('expedition.api.action.assign_to', {
-        source_doctype: sourceDoctype.value,
-        source_name: sourceName.value,
-        user: assignUser.value,
-        description: `Assignment for ${title.value}`,
-      }))
-    } else {
-      promises.push(call('expedition.api.action.assign', {
-        source_doctype: sourceDoctype.value,
-        source_name: sourceName.value,
-        fieldname: assignField.value,
-        user: assignUser.value,
-      }))
-    }
-
     if (sourceDoctype.value === 'Expedition Zone') {
       const zoneDoc = ui.selectedZone
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
+      
+      // Add the zone itself so it gets assigned
+      targets.push({ doctype: sourceDoctype.value, name: sourceName.value, title: title.value })
+
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
           targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
@@ -750,6 +744,22 @@ async function assignRecord() {
           }))
         }
       }
+    } else {
+      if (assignField.value === '__frappe_assign') {
+        promises.push(call('expedition.api.action.assign_to', {
+          source_doctype: sourceDoctype.value,
+          source_name: sourceName.value,
+          user: assignUser.value,
+          description: `Assignment for ${title.value}`,
+        }))
+      } else {
+        promises.push(call('expedition.api.action.assign', {
+          source_doctype: sourceDoctype.value,
+          source_name: sourceName.value,
+          fieldname: assignField.value,
+          user: assignUser.value,
+        }))
+      }
     }
 
     await Promise.all(promises)
@@ -772,16 +782,15 @@ async function unassignRecord() {
   actionError.value = ''
   try {
     const promises = []
-    promises.push(call('expedition.api.action.unassign', {
-      source_doctype: sourceDoctype.value,
-      source_name: sourceName.value,
-      fieldname: assignField.value,
-    }))
 
     if (sourceDoctype.value === 'Expedition Zone') {
       const zoneDoc = ui.selectedZone
       const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
       const targets = []
+      
+      // Add the zone itself so it gets unassigned
+      targets.push({ doctype: sourceDoctype.value, name: sourceName.value })
+
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
           targets.push({ doctype: f.properties._doctype, name: f.properties._name })
@@ -795,6 +804,12 @@ async function unassignRecord() {
           fieldname: assignField.value,
         }))
       }
+    } else {
+      promises.push(call('expedition.api.action.unassign', {
+        source_doctype: sourceDoctype.value,
+        source_name: sourceName.value,
+        fieldname: assignField.value,
+      }))
     }
 
     await Promise.all(promises)

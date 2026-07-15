@@ -63,6 +63,8 @@ const showMoreFields = ref(false)
 const showAssignPanel = ref(false)
 let userSearchTimer = null
 
+const customHtmls = ref('')
+
 const showTodoPanel = ref(false)
 const todoDescription = ref('')
 const todoAllocatedTo = ref('')
@@ -91,7 +93,7 @@ const hasLinkedRecordConfig = computed(() =>
   Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
 )
 
-watch(feature, (newVal) => {
+watch(feature, async (newVal) => {
   if (newVal) {
     window.dispatchEvent(
       new CustomEvent('expedition:feature-selected', {
@@ -101,8 +103,21 @@ watch(feature, (newVal) => {
         },
       })
     )
+    
+    customHtmls.value = ''
+    if (window.Expedition?.Popup?.registry) {
+       const doctype = newVal.properties?._doctype
+       const hooks = window.Expedition.Popup.registry[doctype] || []
+       for (const fn of hooks) {
+           try {
+               const html = await fn(newVal)
+               if (html) customHtmls.value += html
+           } catch(e) { console.error('[expedition] Popup custom html error:', e) }
+       }
+    }
   } else {
     window.dispatchEvent(new CustomEvent('expedition:feature-deselected'))
+    customHtmls.value = ''
   }
 }, { immediate: true })
 
@@ -1395,6 +1410,7 @@ function formatDate(s) {
         </div>
 
         <div v-if="feature.properties._popup_html && sourceDoctype !== 'Expedition Zone'" class="mp__custom" v-html="feature.properties._popup_html" />
+        <div v-if="customHtmls && sourceDoctype !== 'Expedition Zone'" class="mp__custom" v-html="customHtmls" />
 
         <div v-if="metricRows.length" class="mp__metric-grid" aria-label="Linked field metrics">
           <div v-for="metric in metricRows" :key="metric.key" class="mp__metric-card">

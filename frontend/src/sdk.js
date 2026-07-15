@@ -98,4 +98,12 @@ export function initExpeditionSDK({ app }) {
       return this.registry[id]
     }
   }
+
+  window.Expedition.Popup = window.Expedition.Popup || {
+    registry: {},
+    registerCustomHtml(doctype, fn) {
+      if (!this.registry[doctype]) this.registry[doctype] = []
+      this.registry[doctype].push(fn)
+    }
+  }
 }

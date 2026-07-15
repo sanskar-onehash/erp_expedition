@@ -101,9 +101,14 @@ export function initExpeditionSDK({ app }) {
 
   window.Expedition.Popup = window.Expedition.Popup || {
     registry: {},
+    tabs: {},
     registerCustomHtml(doctype, fn) {
       if (!this.registry[doctype]) this.registry[doctype] = []
       this.registry[doctype].push(fn)
+    },
+    registerTab(doctype, id, title, renderFn) {
+      if (!this.tabs[doctype]) this.tabs[doctype] = []
+      this.tabs[doctype].push({ id, title, renderFn })
     }
   }
 }

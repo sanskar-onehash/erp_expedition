@@ -64,6 +64,8 @@ const showAssignPanel = ref(false)
 let userSearchTimer = null
 
 const customHtmls = ref('')
+const customTabs = ref([])
+const customTabContents = ref({})
 
 const showTodoPanel = ref(false)
 const todoDescription = ref('')
@@ -115,9 +117,25 @@ watch(feature, async (newVal) => {
            } catch(e) { console.error('[expedition] Popup custom html error:', e) }
        }
     }
+    
+    customTabs.value = []
+    customTabContents.value = {}
+    if (window.Expedition?.Popup?.tabs) {
+       const doctype = newVal.properties?._doctype
+       const tabHooks = window.Expedition.Popup.tabs[doctype] || []
+       for (const t of tabHooks) {
+           customTabs.value.push({ id: t.id, title: t.title })
+           try {
+               const html = await t.renderFn(newVal)
+               if (html) customTabContents.value[t.id] = html
+           } catch(e) { console.error('[expedition] Popup tab error:', e) }
+       }
+    }
   } else {
     window.dispatchEvent(new CustomEvent('expedition:feature-deselected'))
     customHtmls.value = ''
+    customTabs.value = []
+    customTabContents.value = {}
   }
 }, { immediate: true })
 
@@ -1236,6 +1254,16 @@ function formatDate(s) {
         Records
         <span v-if="linkedRecordCount" class="mp__tab-count">{{ linkedRecordCount }}</span>
       </button>
+      <button
+        v-for="tab in customTabs"
+        :key="tab.id"
+        type="button"
+        class="mp__tab"
+        :class="{ 'mp__tab--active': activeTab === tab.id }"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.title }}
+      </button>
     </nav>
 
     <div v-if="sourceDoctype && sourceName && assignmentFields.length && showAssignPanel" class="mp__assign-panel">
@@ -1631,6 +1659,9 @@ function formatDate(s) {
             </div>
           </section>
         </div>
+      </section>
+      <section v-for="tab in customTabs" :key="tab.id" v-show="activeTab === tab.id" class="mp__section mp__custom-tab">
+        <div v-html="customTabContents[tab.id]"></div>
       </section>
     </div>
   </div>

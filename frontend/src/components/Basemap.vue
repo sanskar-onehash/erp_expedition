@@ -2379,7 +2379,7 @@ async function _flyToHome() {
   } else {
     const zoom = typeof ui.prefs.defaultZoom === 'number' ? ui.prefs.defaultZoom : map.getZoom()
     const pitch = typeof ui.prefs.defaultPitch === 'number' ? ui.prefs.defaultPitch : map.getPitch()
-    map.easeTo({ zoom, pitch, duration: 1200 })
+    map.easeTo({ center: [78.9629, 20.5937], zoom, pitch, duration: 1200 })
     _homeFitDone = true
   }
 }
@@ -2415,7 +2415,7 @@ function _runActiveMapCustomScript() {
 }
 
 onMounted(() => {
-  const startCenter = [0, 0]
+  const startCenter = [78.9629, 20.5937]
   const initialSkin = getSkin(activeSkinId.value)
   // Floor zoom-out so a single world is always at least viewport-wide.
   // With world copies enabled this gives horizontal globe wrapping

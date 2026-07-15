@@ -1143,7 +1143,7 @@ def _suggested_linked_record_metrics(
 
 LINKED_RECORD_SUMMARY_FIELDS = [
     ("outstanding_amount", "Outstanding"),
-    ("paid_amount", "Paid"),
+    ("paid_amount", "Paid Amount"),
     ("grand_total", "Total"),
     ("rounded_total", "Total"),
     ("base_grand_total", "Base Total"),

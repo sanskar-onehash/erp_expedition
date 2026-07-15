@@ -2908,7 +2908,7 @@ function close() {
             <p v-else class="le__suggestion-empty">No unused suggestions found.</p>
           </div>
           <div class="le__metric-list">
-            <article v-for="(metric, index) in linkedMetricRows" :key="`${metric.key || index}:${index}`" class="le__metric-card">
+            <article v-for="(metric, index) in linkedMetricRows" :key="index" class="le__metric-card">
               <div class="le__metric-head">
                 <input
                   class="le__input le__input--sm"

@@ -814,7 +814,7 @@ function linkedRecordGroupSummary(group) {
   const rows = Array.isArray(group?.rows) ? group.rows : []
   const labels = {
     outstanding_amount: 'Outstanding',
-    paid_amount: 'Paid',
+    paid_amount: 'Paid Amount',
     grand_total: 'Total',
     rounded_total: 'Total',
     base_grand_total: 'Base Total',
@@ -1348,7 +1348,6 @@ function formatDate(s) {
             <div class="mp__activity-title">Activity</div>
             <div v-if="activityStatus" class="mp__activity-subtitle">{{ activityStatus.label }} for {{ activityStatus.days }}d</div>
           </div>
-          <button type="button" class="mp__visit-btn" @click="scheduleVisit">Log Visit</button>
         </div>
         <div class="mp__history-list">
           <div v-if="aggregate && !aggregateLoading" class="mp__history-summary">

@@ -4,11 +4,25 @@
 from __future__ import annotations
 
 import frappe
+from expedition.api.permission import map_permission
+
+
+def _assert_pin_read(source_name: str) -> None:
+    if not frappe.db.exists("Expedition Map Pin", source_name):
+        frappe.throw(f"Unknown Expedition Map Pin {source_name}", frappe.DoesNotExistError)
+    pin = frappe.get_doc("Expedition Map Pin", source_name)
+    if pin.visibility == "private" and pin.owner != frappe.session.user:
+        frappe.throw("Not permitted to read private pin", frappe.PermissionError)
+    if not map_permission(pin.map, "read"):
+        frappe.throw("Not permitted to read pin map", frappe.PermissionError)
 
 
 def _assert_doc_read(source_doctype: str, source_name: str) -> None:
     if not source_doctype or not source_name:
         frappe.throw("Source document is required", frappe.ValidationError)
+    if source_doctype == "Expedition Map Pin":
+        _assert_pin_read(source_name)
+        return
     if not frappe.db.exists(source_doctype, source_name):
         frappe.throw(
             f"Unknown {source_doctype} {source_name}",

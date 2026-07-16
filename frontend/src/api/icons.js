@@ -172,7 +172,14 @@ export async function registerColoredIcons(map, specs, pixelSize = 28) {
         ? await _renderImageDataUrl(spec.imageDataUrl, pixelSize)
       : await _renderSymbol(available.get(id), pixelSize, color)
     if (!img) continue
-    map.addImage(imageId, img, { sdf: false })
+    if (map.hasImage(imageId)) continue
+    try {
+      map.addImage(imageId, img, { sdf: false })
+    } catch (e) {
+      if (!String(e?.message || e).includes(`An image named "${imageId}" already exists`)) {
+        throw e
+      }
+    }
   }
 }
 

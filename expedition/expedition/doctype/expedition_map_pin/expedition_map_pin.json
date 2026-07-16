@@ -1,0 +1,159 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-16 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "map",
+  "pin_type",
+  "status",
+  "location_section",
+  "latitude",
+  "longitude",
+  "details_section",
+  "description",
+  "visibility",
+  "linked_doctype",
+  "linked_name",
+  "style_section",
+  "icon",
+  "color",
+  "metadata_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "map",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Map",
+   "options": "Expedition Map",
+   "reqd": 1
+  },
+  {
+   "default": "note",
+   "fieldname": "pin_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Pin Type"
+  },
+  {
+   "default": "open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "open\nresolved\narchived"
+  },
+  {
+   "fieldname": "location_section",
+   "fieldtype": "Section Break",
+   "label": "Location"
+  },
+  {
+   "fieldname": "latitude",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Latitude",
+   "reqd": 1
+  },
+  {
+   "fieldname": "longitude",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Longitude",
+   "reqd": 1
+  },
+  {
+   "fieldname": "details_section",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "default": "map",
+   "fieldname": "visibility",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Visibility",
+   "options": "map\nprivate"
+  },
+  {
+   "fieldname": "linked_doctype",
+   "fieldtype": "Link",
+   "label": "Linked DocType",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "linked_name",
+   "fieldtype": "Data",
+   "label": "Linked Name"
+  },
+  {
+   "fieldname": "style_section",
+   "fieldtype": "Section Break",
+   "label": "Style"
+  },
+  {
+   "default": "pin-marker",
+   "fieldname": "icon",
+   "fieldtype": "Data",
+   "label": "Icon"
+  },
+  {
+   "default": "#F59E0B",
+   "fieldname": "color",
+   "fieldtype": "Color",
+   "label": "Color"
+  },
+  {
+   "fieldname": "metadata_json",
+   "fieldtype": "Code",
+   "label": "Metadata JSON"
+  }
+ ],
+ "is_submittable": 0,
+ "issingle": 0,
+ "istable": 0,
+ "modified": "2026-07-16 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Expedition",
+ "name": "Expedition Map Pin",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Expedition User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 0,
+ "search_fields": "title,pin_type,status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "title",
+ "track_changes": 1
+}

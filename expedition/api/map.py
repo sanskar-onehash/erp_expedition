@@ -14,6 +14,8 @@ the canvas actually needs that aren't in the standard CRUD path:
   - templates: list of public templates users can clone
 """
 
+import json
+
 import frappe
 import frappe.share
 from expedition.api.permission import (
@@ -126,7 +128,7 @@ def _has_zone_stroke_style() -> bool:
 @frappe.whitelist(allow_guest=True)
 def load_full(name: str) -> dict:
     """
-    Return a map document with its layers, zones, and the basemap
+    Return a map document with its layers, zones, pins, and the basemap
     style applied. Used by the canvas on first render.
 
     Public maps (`is_public=1` or `is_template=1`) are browseable by
@@ -242,6 +244,43 @@ def load_full(name: str) -> dict:
     for zone in zones:
         zone.setdefault("stroke_style", "solid")
 
+    pin_fields = [
+        "name",
+        "title",
+        "map",
+        "pin_type",
+        "status",
+        "latitude",
+        "longitude",
+        "description",
+        "visibility",
+        "linked_doctype",
+        "linked_name",
+        "icon",
+        "color",
+        "metadata_json",
+        "owner",
+        "modified",
+    ]
+    pins = frappe.get_all(
+        "Expedition Map Pin",
+        filters={"map": name, "status": ["!=", "archived"]},
+        fields=pin_fields,
+        order_by="modified asc",
+    )
+    pins = [
+        pin
+        for pin in pins
+        if pin.get("visibility") != "private" or pin.get("owner") == frappe.session.user
+    ]
+    for pin in pins:
+        if pin.get("metadata_json"):
+            try:
+                pin["metadata"] = json.loads(pin.get("metadata_json") or "{}")
+            except Exception:
+                pin["metadata"] = None
+        pin.pop("metadata_json", None)
+
     # Touch last_opened_at asynchronously (cheap DB write)
     frappe.enqueue(
         "expedition.doctype.expedition_map.expedition_map.touch_last_opened",
@@ -254,6 +293,7 @@ def load_full(name: str) -> dict:
         "map": map_doc.as_dict(),
         "layers": layers,
         "zones": zones,
+        "pins": pins,
         "permissions": {
             "write": 1 if map_permission(name, "write") else 0,
             "share": 1 if map_permission(name, "share") else 0,
@@ -813,6 +853,42 @@ def clone_template(template_name: str, title: str | None = None) -> dict:
             new_zone.stroke_style = getattr(tz, "stroke_style", None) or "solid"
         new_zone.tag = tz.tag
         new_zone.insert(ignore_permissions=True)
+
+    # Clone manual pins.
+    template_pins = frappe.get_all(
+        "Expedition Map Pin",
+        filters={"map": template_name, "status": ["!=", "archived"]},
+        fields=[
+            "title",
+            "pin_type",
+            "status",
+            "latitude",
+            "longitude",
+            "description",
+            "visibility",
+            "linked_doctype",
+            "linked_name",
+            "icon",
+            "color",
+            "metadata_json",
+        ],
+    )
+    for tp in template_pins:
+        new_pin = frappe.new_doc("Expedition Map Pin")
+        new_pin.map = new_map.name
+        new_pin.title = tp.title
+        new_pin.pin_type = tp.pin_type
+        new_pin.status = tp.status
+        new_pin.latitude = tp.latitude
+        new_pin.longitude = tp.longitude
+        new_pin.description = tp.description
+        new_pin.visibility = tp.visibility
+        new_pin.linked_doctype = tp.linked_doctype
+        new_pin.linked_name = tp.linked_name
+        new_pin.icon = tp.icon
+        new_pin.color = tp.color
+        new_pin.metadata_json = tp.metadata_json
+        new_pin.insert(ignore_permissions=True)
 
     return {"name": new_map.name, "title": new_map.title}
 

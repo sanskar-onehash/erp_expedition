@@ -13,7 +13,6 @@ import App from './App.vue'
 import { initExpeditionSDK } from './sdk.js'
 
 const app = createApp(App)
+initExpeditionSDK({ app })
 app.use(createPinia())
 app.mount('#expedition-root')
-
-initExpeditionSDK({ app })

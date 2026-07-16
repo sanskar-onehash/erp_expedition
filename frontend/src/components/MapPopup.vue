@@ -22,12 +22,18 @@ import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { call } from '../api/client.js'
 import { useUiStore } from '../state/ui.js'
 import { useMapStore } from '../state/map.js'
+import { usePinsStore } from '../state/pins.js'
+import { useIconsStore } from '../state/icons.js'
 import { wrapLng } from '../lib/geo.js'
 import { deskDocRoute, openDeskDoc } from '../lib/desk.js'
+import { ICON_PATHS } from '../api/icons.js'
 import UiSelect from './ui/UiSelect.vue'
+import UiColorInput from './ui/UiColorInput.vue'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
+const pinsStore = usePinsStore()
+const iconStore = useIconsStore()
 
 const cardEl = ref(null)
 // screen position of the popup's anchor point in CSS pixels (relative
@@ -61,6 +67,13 @@ const activeTab = ref('details')
 const fieldSearch = ref('')
 const showMoreFields = ref(false)
 const showAssignPanel = ref(false)
+const showPinStylePanel = ref(false)
+const pinStyleColor = ref('#F59E0B')
+const pinStyleIcon = ref('pin-marker')
+const pinStyleBusy = ref(false)
+const pinIconBusy = ref(false)
+const pinUploadTitle = ref('')
+const pinUploadScope = ref('Personal')
 let userSearchTimer = null
 
 const customHtmls = ref('')
@@ -77,6 +90,12 @@ const todoUserOptions = ref([])
 const todoUserSearchLoading = ref(false)
 let todoUserSearchTimer = null
 
+const COLOR_PRESETS = ['#F59E0B', '#22C55E', '#3B82F6', '#EF4444', '#A855F7', '#14B8A6', '#F97316']
+const UPLOAD_SCOPE_OPTIONS = [
+  { v: 'Personal', label: 'Personal' },
+  { v: 'Global', label: 'Global' },
+]
+
 const feature = computed(() => ui.selectedFeature)
 const layer = computed(() => {
   const f = feature.value
@@ -91,12 +110,32 @@ const sourceName = computed(() => {
   const f = feature.value
   return f && f.properties && f.properties._name
 })
+const isManualPin = computed(() => sourceDoctype.value === 'Expedition Map Pin')
 const hasLinkedRecordConfig = computed(() =>
   Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
 )
+const iconSections = computed(() => [
+  { key: 'builtin', label: 'Built-in', icons: iconStore.builtin },
+  { key: 'personal', label: 'Personal', icons: iconStore.personal },
+  { key: 'global', label: 'Global', icons: iconStore.global },
+].filter((section) => section.icons.length || section.key !== 'global' || iconStore.canManageGlobal))
+
+function isBuiltinIcon(icon) {
+  return icon?.source === 'builtin'
+}
+
+function iconLabel(icon) {
+  return icon?.title || icon?.key || 'Icon'
+}
 
 watch(feature, async (newVal) => {
   if (newVal) {
+    showPinStylePanel.value = false
+    if (newVal.properties?._doctype === 'Expedition Map Pin') {
+      pinStyleColor.value = newVal.properties?.color || '#F59E0B'
+      pinStyleIcon.value = newVal.properties?.icon || 'pin-marker'
+      iconStore.loadIcons().catch(() => {})
+    }
     window.dispatchEvent(
       new CustomEvent('expedition:feature-selected', {
         detail: {
@@ -184,6 +223,67 @@ async function runCustomAction(act) {
     console.error(`[expedition] Custom action ${act.id} failed`, e)
   } finally {
     customActionsBusy.value = false
+  }
+}
+
+function togglePinStylePanel() {
+  showPinStylePanel.value = !showPinStylePanel.value
+  if (showPinStylePanel.value) {
+    pinStyleColor.value = feature.value?.properties?.color || '#F59E0B'
+    pinStyleIcon.value = feature.value?.properties?.icon || 'pin-marker'
+    showTodoPanel.value = false
+    showAssignPanel.value = false
+    iconStore.loadIcons().catch(() => {})
+  }
+}
+
+async function savePinStyle() {
+  const mapName = mapStore.activeMap?.map?.name
+  const pinName = sourceName.value
+  if (!mapName || !pinName) return
+  pinStyleBusy.value = true
+  actionError.value = ''
+  try {
+    const updated = await pinsStore.updatePin(mapName, pinName, {
+      color: pinStyleColor.value,
+      icon: pinStyleIcon.value,
+    })
+    if (feature.value?.properties) {
+      feature.value.properties.color = updated.color || pinStyleColor.value
+      feature.value.properties.icon = updated.icon || pinStyleIcon.value
+    }
+    showPinStylePanel.value = false
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    pinStyleBusy.value = false
+  }
+}
+
+async function uploadPinIconFromEvent(event) {
+  const file = event.target?.files?.[0]
+  if (!file) return
+  pinIconBusy.value = true
+  actionError.value = ''
+  try {
+    const imageDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    const icon = await iconStore.uploadIcon({
+      title: pinUploadTitle.value || file.name.replace(/\.[^.]+$/, ''),
+      scope: pinUploadScope.value,
+      imageDataUrl,
+    })
+    pinStyleIcon.value = icon.key
+    pinUploadTitle.value = ''
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    pinIconBusy.value = false
+    if (event.target) event.target.value = ''
   }
 }
 
@@ -666,6 +766,7 @@ function toggleTodoPanel() {
     todoDate.value = getTodayDateString()
     todoPriority.value = 'Medium'
     showAssignPanel.value = false
+    showPinStylePanel.value = false
   }
 }
 
@@ -755,6 +856,8 @@ function toggleAssignPanel() {
   if (showAssignPanel.value) {
     activeTab.value = 'details'
     searchUsers(assignUser.value)
+    showTodoPanel.value = false
+    showPinStylePanel.value = false
   } else {
     userSearchOpen.value = false
   }
@@ -1221,6 +1324,17 @@ function formatDate(s) {
         <span>Assign</span>
       </button>
       <button
+        v-if="isManualPin"
+        type="button"
+        class="mp__action"
+        :class="{ 'mp__action--active': showPinStylePanel }"
+        :disabled="pinStyleBusy"
+        @click="togglePinStylePanel"
+        title="Style this pin"
+      >
+        <span>Style</span>
+      </button>
+      <button
         v-for="act in customActions"
         :key="act.id"
         type="button"
@@ -1234,6 +1348,71 @@ function formatDate(s) {
       <button type="button" class="mp__action mp__action--ghost" :disabled="copyBusy" @click="copyDocLink" title="Copy source document link">
         <span>{{ copyBusy ? 'Copied' : 'Copy Link' }}</span>
       </button>
+    </div>
+
+    <div v-if="isManualPin && showPinStylePanel" class="mp__assign-panel mp__pin-style-panel">
+      <div class="mp__todo-header">
+        <span class="mp__todo-title">Pin Style</span>
+      </div>
+      <div class="mp__pin-style-form">
+        <label class="mp__todo-field">
+          <span class="mp__todo-label">Color</span>
+          <UiColorInput
+            v-model="pinStyleColor"
+            :presets="COLOR_PRESETS"
+            placeholder="#F59E0B or rgba(245,158,11,0.8)"
+            @blur="pinStyleColor = pinStyleColor.trim()"
+          />
+        </label>
+
+        <div class="mp__todo-field">
+          <span class="mp__todo-label">Icon</span>
+          <div v-for="section in iconSections" :key="section.key" class="mp__pin-icon-section">
+            <div class="mp__pin-icon-section-title">{{ section.label }}</div>
+            <div class="mp__pin-icon-grid">
+              <button
+                v-for="icon in section.icons"
+                :key="icon.key"
+                type="button"
+                class="mp__pin-icon-cell"
+                :class="{ 'mp__pin-icon-cell--active': pinStyleIcon === icon.key }"
+                :title="iconLabel(icon)"
+                @click="pinStyleIcon = icon.key"
+              >
+                <svg v-if="isBuiltinIcon(icon)" class="mp__pin-icon-preview" viewBox="0 0 24 24" aria-hidden="true">
+                  <path :d="ICON_PATHS[icon.key] || ''" fill="currentColor" />
+                </svg>
+                <span v-else-if="icon.icon_format !== 'Image'" class="mp__pin-icon-preview mp__pin-icon-preview--custom" v-html="icon.svg_content" />
+                <img v-else class="mp__pin-icon-preview mp__pin-icon-preview--image" :src="icon.image_data_url" alt="">
+              </button>
+            </div>
+          </div>
+
+          <div v-if="iconStore.canCreate" class="mp__pin-icon-upload">
+            <input v-model="pinUploadTitle" class="mp__assign-input" type="text" placeholder="Icon name">
+            <UiSelect
+              v-if="iconStore.canManageGlobal"
+              v-model="pinUploadScope"
+              :options="UPLOAD_SCOPE_OPTIONS"
+              value-key="v"
+              label-key="label"
+              :searchable="false"
+              compact
+            />
+            <label class="mp__todo-btn mp__todo-btn--ghost" :class="{ 'mp__todo-btn--disabled': pinIconBusy }">
+              Upload Image
+              <input class="mp__pin-icon-file" type="file" accept="image/*" :disabled="pinIconBusy" @change="uploadPinIconFromEvent">
+            </label>
+          </div>
+        </div>
+
+        <div class="mp__todo-buttons">
+          <button type="button" class="mp__todo-btn mp__todo-btn--ghost" @click="showPinStylePanel = false">Cancel</button>
+          <button type="button" class="mp__todo-btn mp__todo-btn--primary" :disabled="pinStyleBusy" @click="savePinStyle">
+            {{ pinStyleBusy ? 'Saving...' : 'Save' }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <nav class="mp__tabs" aria-label="Popup sections">
@@ -2755,6 +2934,85 @@ function formatDate(s) {
 .mp__todo-btn--primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.mp__todo-btn--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.mp__pin-style-panel {
+  max-height: 360px;
+  overflow: auto;
+}
+.mp__pin-style-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mp__pin-style-form :deep(.ui-color) {
+  min-width: 0;
+}
+.mp__pin-style-form :deep(.ui-color__input) {
+  background: rgba(255, 255, 255, 0.07);
+}
+.mp__pin-icon-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.mp__pin-icon-section + .mp__pin-icon-section {
+  margin-top: 5px;
+}
+.mp__pin-icon-section-title {
+  color: rgba(230, 232, 236, 0.46);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.mp__pin-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+}
+.mp__pin-icon-cell {
+  height: 28px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #E6E8EC;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mp__pin-icon-cell--active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.18);
+}
+.mp__pin-icon-preview {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mp__pin-icon-preview--custom :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+.mp__pin-icon-preview--image {
+  object-fit: contain;
+}
+.mp__pin-icon-upload {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(80px, auto) auto;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.mp__pin-icon-file {
+  display: none;
 }
 
 .mp__zone-details {

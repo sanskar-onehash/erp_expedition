@@ -9,6 +9,7 @@ import { useLayersStore } from './layers.js'
 import { useUiStore } from './ui.js'
 import { useInsightsStore } from './insights.js'
 import { useZonesStore } from './zones.js'
+import { usePinsStore } from './pins.js'
 import { SKINS } from '../api/skins.js'
 
 // Maps the legacy `basemap_style` enum (light / dark / monochrome) onto
@@ -97,7 +98,7 @@ export const useMapStore = defineStore('map', () => {
      * Open a map and reset the per-map state. Used both for the initial
      * bootstrap and for the map switcher in the left rail.
      *
-     * load_full returns the full envelope: { map, layers, zones }.
+     * load_full returns the full envelope: { map, layers, zones, pins }.
      * We stash the whole envelope on activeMap AND seed the layer
      * store in the same step.
      */
@@ -105,6 +106,7 @@ export const useMapStore = defineStore('map', () => {
     const ui = useUiStore()
     const insights = useInsightsStore()
     const zones = useZonesStore()
+    const pins = usePinsStore()
     const payload = await call('expedition.api.map.load_full', { name })
     activeMap.value = payload
     if (payload && Array.isArray(payload.layers)) {
@@ -121,6 +123,9 @@ export const useMapStore = defineStore('map', () => {
             typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry,
         }))
       )
+    }
+    if (payload && Array.isArray(payload.pins)) {
+      pins.setForMap(payload.map?.name || name, payload.pins)
     }
     // Clear per-map transient state so the right rail / hover rings
     // don't carry over from the previous map.

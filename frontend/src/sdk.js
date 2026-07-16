@@ -19,6 +19,39 @@ export function initExpeditionSDK({ app }) {
 
   // Initialize the developer extension registries
   window.Expedition = window.Expedition || {}
+
+  const contextActions = window.Expedition._contextActions || {}
+  window.Expedition._contextActions = contextActions
+
+  window.Expedition.registerMapContextAction = function(action = {}) {
+    if (!action || !action.id) throw new Error('Context action id is required')
+    contextActions[action.id] = {
+      group: 'custom',
+      order: 100,
+      ...action,
+    }
+    return () => {
+      delete contextActions[action.id]
+    }
+  }
+
+  window.Expedition.unregisterMapContextAction = function(id) {
+    if (id) delete contextActions[id]
+  }
+
+  window.Expedition.getMapContextActions = function(context = {}) {
+    return Object.values(contextActions)
+      .filter((action) => {
+        if (typeof action.when !== 'function') return true
+        try {
+          return action.when(context) !== false
+        } catch (err) {
+          console.error('[expedition] Context action visibility failed:', action.id, err)
+          return false
+        }
+      })
+      .sort((a, b) => (a.order ?? 100) - (b.order ?? 100))
+  }
   
   window.Expedition.getFeaturesInZone = function(zone, layerName) {
     if (!zone || !zone.geometry) return []

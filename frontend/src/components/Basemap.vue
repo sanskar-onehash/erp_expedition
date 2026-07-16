@@ -33,6 +33,7 @@ import { useMapStore } from '../state/map.js'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
 import { useZonesStore } from '../state/zones.js'
+import { usePinsStore } from '../state/pins.js'
 import { useIconsStore } from '../state/icons.js'
 import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
@@ -65,6 +66,7 @@ const MAPLIBRE_MAX_ZOOM = 24
 // Punchy Apple-red fallback so even unconfigured layers read as
 // primary data points.
 const FALLBACK_COLOR = '#FF3B30'
+const DEFAULT_MANUAL_PIN_ICON = 'pin-marker'
 
 /**
  * Compute the lowest zoom where one Mercator world is at least as wide
@@ -283,15 +285,20 @@ const ui = useUiStore()
 const mapStore = useMapStore()
 const layerStore = useLayersStore()
 const zoneStore = useZonesStore()
+const pinsStore = usePinsStore()
 const iconStore = useIconsStore()
 let map = null
 let unsubscribeFeatures = null
 let lastLoadedFeatures = {}  // layer.name -> last FeatureCollection, for re-add on styledata
 let unsubscribeZones = null
+let unsubscribePins = null
+let unsubscribeIconPins = null
 let unsubscribeZoneTags = null
 let _virtualGroupFetchKeys = {}
 let _sourceClusterState = {}
 let _zoneHandlersBound = false
+let _pinHandlersBound = false
+let _pinBoundLayers = new Set()
 let _zoneDrag = null
 let _mapPointerStart = null
 let _mapWasDragged = false
@@ -355,7 +362,7 @@ function _hasRenderedLayer(layerName) {
 
 function _hasInteractivePointAt(point) {
   if (!map || !point) return false
-  const layers = [..._interactivePointLayers].filter((id) => map.getLayer(id))
+  const layers = [..._interactivePointLayers, pinLayerId(), pinIconLayerId()].filter((id) => map.getLayer(id))
   if (!layers.length) return false
   try {
     return map.queryRenderedFeatures(point, { layers }).length > 0
@@ -376,6 +383,17 @@ function zoneSelectedLayerId() { return 'lyr-zones-selected' }
 function zoneDraftLayerId() { return 'lyr-zones-draft' }
 function zoneDraftFillLayerId() { return 'lyr-zones-draft-fill' }
 function zoneDraftVertexLayerId() { return 'lyr-zones-draft-verts' }
+function pinSourceId() { return 'src-manual-pins' }
+function pinHaloLayerId() { return 'lyr-manual-pins-halo' }
+function pinLayerId() { return 'lyr-manual-pins' }
+function pinIconLayerId() { return 'lyr-manual-pins-icon' }
+function pinLabelLayerId() { return 'lyr-manual-pins-label' }
+
+function normalizeManualPinIcon(icon) {
+  const key = String(icon || '').trim()
+  if (!key || key === 'pin') return DEFAULT_MANUAL_PIN_ICON
+  return key
+}
 
 // True while a polygon draw is in progress and doubleClickZoom has been
 // disabled. Module-scope so the bare `map.on('click', ...)` handler and
@@ -2128,6 +2146,203 @@ function selectZoneFeature(e) {
   }
 }
 
+// -------- Manual pins (map annotations) -----
+
+function _pinsFeatureCollection() {
+  const mapName = mapStore.activeMap?.map?.name
+  const list = (mapName && pinsStore.byMap[mapName]) || []
+  const iconSpecs = new Map()
+  const features = list
+    .filter((pin) => pin && pin.status !== 'archived' && pin.latitude != null && pin.longitude != null)
+    .map((pin) => {
+      const icon = normalizeManualPinIcon(pin.icon)
+      const color = pin.color || '#F59E0B'
+      const spec = iconRenderSpec(icon, color)
+      if (spec) iconSpecs.set(spec.imageId, spec)
+      return {
+        type: 'Feature',
+        id: pin.name,
+        geometry: {
+          type: 'Point',
+          coordinates: [wrapLng(Number(pin.longitude)), Number(pin.latitude)],
+        },
+        properties: {
+          name: pin.name,
+          title: pin.title || pin.name,
+          pin_type: pin.pin_type || 'note',
+          status: pin.status || 'open',
+      color,
+      icon,
+      ...(spec ? { _display_icon_image: spec.imageId } : {}),
+          description: pin.description || '',
+          linked_doctype: pin.linked_doctype || '',
+          linked_name: pin.linked_name || '',
+        },
+      }
+    })
+  return {
+    type: 'FeatureCollection',
+    features,
+    iconSpecs: [...iconSpecs.values()],
+  }
+}
+
+function _reAddPins() {
+  if (!map || !map.getStyle()) return
+  const pinData = _pinsFeatureCollection()
+  const fc = { type: 'FeatureCollection', features: pinData.features }
+  const sid = pinSourceId()
+  if (map.getSource(sid)) {
+    map.getSource(sid).setData(fc)
+  } else {
+    map.addSource(sid, { type: 'geojson', data: fc, promoteId: 'name' })
+  }
+  if (!map.getLayer(pinHaloLayerId())) {
+    map.addLayer({
+      id: pinHaloLayerId(),
+      type: 'circle',
+      source: sid,
+      filter: ['!', ['has', '_display_icon_image']],
+      paint: {
+        'circle-radius': 13,
+        'circle-color': 'rgba(11, 14, 20, 0.42)',
+        'circle-blur': 0.35,
+        'circle-translate': [0, 2],
+      },
+    })
+  } else {
+    map.setFilter(pinHaloLayerId(), ['!', ['has', '_display_icon_image']])
+  }
+  if (!map.getLayer(pinLayerId())) {
+    map.addLayer({
+      id: pinLayerId(),
+      type: 'circle',
+      source: sid,
+      filter: ['!', ['has', '_display_icon_image']],
+      paint: {
+        'circle-radius': 8,
+        'circle-color': ['coalesce', ['get', 'color'], '#F59E0B'],
+        'circle-stroke-color': '#FFFFFF',
+        'circle-stroke-width': 2,
+      },
+    })
+  } else {
+    map.setFilter(pinLayerId(), ['!', ['has', '_display_icon_image']])
+    map.setPaintProperty(pinLayerId(), 'circle-color', ['coalesce', ['get', 'color'], '#F59E0B'])
+  }
+  const iconSpecs = pinData.iconSpecs || []
+  if (iconSpecs.length) {
+    registerColoredIcons(map, iconSpecs, ICON_IMAGE_SIZE).then(() => {
+      if (!map.getLayer(pinIconLayerId())) {
+        map.addLayer({
+          id: pinIconLayerId(),
+          type: 'symbol',
+          source: sid,
+          filter: ['has', '_display_icon_image'],
+          layout: {
+            'icon-image': ['get', '_display_icon_image'],
+            'icon-size': iconSizeForRadius(13),
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+            'icon-anchor': 'center',
+          },
+          paint: {
+            'icon-opacity': 1,
+          },
+        })
+        _bindPinHandlers()
+      } else {
+        map.setFilter(pinIconLayerId(), ['has', '_display_icon_image'])
+        map.setLayoutProperty(pinIconLayerId(), 'icon-image', ['get', '_display_icon_image'])
+        _bindPinHandlers()
+      }
+    }).catch((e) => {
+      console.warn('[expedition] manual pin icon register failed', iconSpecs, e)
+    })
+  } else if (map.getLayer(pinIconLayerId())) {
+    map.removeLayer(pinIconLayerId())
+  }
+  if (!map.getLayer(pinLabelLayerId())) {
+    map.addLayer({
+      id: pinLabelLayerId(),
+      type: 'symbol',
+      source: sid,
+      minzoom: 8,
+      layout: {
+        'text-field': ['get', 'title'],
+        'text-size': 11,
+        'text-font': ['Open Sans Regular'],
+        'text-anchor': 'top',
+        'text-offset': [0, 1.05],
+        'text-allow-overlap': false,
+      },
+      paint: {
+        'text-color': '#E6E8EC',
+        'text-halo-color': 'rgba(11, 14, 20, 0.78)',
+        'text-halo-width': 1.5,
+      },
+    })
+  }
+  _bindPinHandlers()
+}
+
+function _bindPinHandlers() {
+  if (!map) return
+  for (const layerIdValue of [..._pinBoundLayers]) {
+    if (!map.getLayer(layerIdValue)) _pinBoundLayers.delete(layerIdValue)
+  }
+  for (const layerIdValue of [pinLayerId(), pinIconLayerId()]) {
+    if (!map.getLayer(layerIdValue) || _pinBoundLayers.has(layerIdValue)) continue
+    map.on('click', layerIdValue, onPinClick)
+    map.on('mouseenter', layerIdValue, () => _setMapCursor('pointer'))
+    map.on('mouseleave', layerIdValue, () => _setMapCursor())
+    _pinBoundLayers.add(layerIdValue)
+  }
+  _pinHandlersBound = _pinBoundLayers.size > 0
+}
+
+function onPinClick(e) {
+  if (ui.drawMode !== 'off' || ui.measureMode) return
+  const f = e.features?.[0]
+  if (!f?.properties?.name) return
+  const mapName = mapStore.activeMap?.map?.name
+  const pin = (mapName && pinsStore.byMap?.[mapName] || []).find((row) => row.name === f.properties.name)
+  if (!pin) return
+  ui.selectedFeature = {
+    _lngLat: e.lngLat,
+    geometry: {
+      type: 'Point',
+      coordinates: [wrapLng(Number(pin.longitude)), Number(pin.latitude)],
+    },
+    properties: {
+      _name: pin.name,
+      _doctype: 'Expedition Map Pin',
+      _popup_fields: ['title', 'pin_type', 'note', 'status', 'color'],
+      _label: pin.title || pin.name,
+      title: pin.title || pin.name,
+      pin_type: pin.pin_type || 'note',
+      note: pin.description || '',
+      status: pin.status || 'open',
+      color: pin.color || '#F59E0B',
+      icon: normalizeManualPinIcon(pin.icon),
+      linked_doctype: pin.linked_doctype || '',
+      linked_name: pin.linked_name || '',
+    },
+    layer: {
+      name: 'Expedition Map Pin',
+      title: 'Manual Pin',
+      click_action: 'popup',
+      field_labels: {
+        title: 'Title',
+        pin_type: 'Pin Type',
+        note: 'Note',
+        status: 'Status',
+        color: 'Color',
+      },
+    },
+  }
+}
+
 function offsetPosition(position, deltaLng, deltaLat) {
   if (!Array.isArray(position)) return position
   return [wrapLng(Number(position[0]) + deltaLng), Number(position[1]) + deltaLat]
@@ -2458,6 +2673,7 @@ onMounted(() => {
     _applyIndiaBoundaryFix()
     _reAddAllLayers()
     _reAddZones()
+    _reAddPins()
   })
 
   // Initial bootstrap: paint any layers that already have features.
@@ -2465,6 +2681,7 @@ onMounted(() => {
     _applyIndiaBoundaryFix()
     _reAddAllLayers()
     _reAddZones()
+    _reAddPins()
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
     _runActiveMapCustomScript()
@@ -2625,6 +2842,33 @@ onMounted(() => {
     { deep: true }
   )
 
+  unsubscribePins = watch(
+    () => pinsStore.byMap,
+    () => {
+      const tryAdd = () => {
+        if (!map) return true
+        _reAddPins()
+        if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
+        return !!map.getSource(pinSourceId())
+      }
+      if (tryAdd()) return
+      const onStyle = () => {
+        if (tryAdd()) map.off('styledata', onStyle)
+      }
+      map.on('styledata', onStyle)
+    },
+    { deep: true }
+  )
+
+  unsubscribeIconPins = watch(
+    () => iconStore.version,
+    () => {
+      if (!map) return
+      _reAddPins()
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint()
+    }
+  )
+
   // Re-paint zones when the tag filter changes (ui.zoneTags).
   unsubscribeZoneTags = watch(
     () => ui.zoneTags,
@@ -2652,6 +2896,7 @@ onMounted(() => {
       getCenter: () => map && normalizeLngLat(map.getCenter()),
       getZoom: () => map && map.getZoom(),
       getMap: () => map,
+      registerContextAction: (action) => window.Expedition?.registerMapContextAction?.(action),
       finishDrawing: () => _finishDrawing(),
       getLayerDiagnostics: () => {
         if (!map) return []
@@ -2687,6 +2932,23 @@ onMounted(() => {
               type: 'Feature',
               geometry: z.geometry,
               properties: { name: z.name, title: z.title, kind: 'zone' },
+            })),
+        }
+      },
+      getPins: () => {
+        const activeMapName = mapStore.activeMap?.map?.name
+        const list = (activeMapName && pinsStore.byMap?.[activeMapName]) || []
+        return {
+          type: 'FeatureCollection',
+          features: list
+            .filter((pin) => pin && pin.latitude != null && pin.longitude != null)
+            .map((pin) => ({
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: [wrapLng(Number(pin.longitude)), Number(pin.latitude)],
+              },
+              properties: { ...pin, kind: 'manual_pin' },
             })),
         }
       },
@@ -2978,6 +3240,8 @@ onBeforeUnmount(() => {
   }
   if (unsubscribeFeatures) unsubscribeFeatures()
   if (unsubscribeZones) unsubscribeZones()
+  if (unsubscribePins) unsubscribePins()
+  if (unsubscribeIconPins) unsubscribeIconPins()
   if (unsubscribeZoneTags) unsubscribeZoneTags()
   if (typeof window !== 'undefined' && window.expeditionMap) {
     window.expeditionMap = null

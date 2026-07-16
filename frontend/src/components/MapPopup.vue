@@ -124,10 +124,16 @@ watch(feature, async (newVal) => {
        const doctype = newVal.properties?._doctype
        const tabHooks = window.Expedition.Popup.tabs[doctype] || []
        for (const t of tabHooks) {
-           customTabs.value.push({ id: t.id, title: t.title })
+           const tabObj = { id: t.id, title: t.title, count: null }
+           customTabs.value.push(tabObj)
            try {
-               const html = await t.renderFn(newVal)
-               if (html) customTabContents.value[t.id] = html
+               const res = await t.renderFn(newVal)
+               if (res && typeof res === 'object') {
+                   if (res.html) customTabContents.value[t.id] = res.html
+                   if (res.count !== undefined) tabObj.count = res.count
+               } else {
+                   if (res) customTabContents.value[t.id] = res
+               }
            } catch(e) { console.error('[expedition] Popup tab error:', e) }
        }
     }
@@ -1263,6 +1269,7 @@ function formatDate(s) {
         @click="activeTab = tab.id"
       >
         {{ tab.title }}
+        <span v-if="tab.count" class="mp__tab-count">{{ tab.count }}</span>
       </button>
     </nav>
 

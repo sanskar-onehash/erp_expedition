@@ -72,6 +72,7 @@ const pinStyleColor = ref('#F59E0B')
 const pinStyleIcon = ref('pin-marker')
 const pinStyleBusy = ref(false)
 const pinIconBusy = ref(false)
+const pinDeleteBusy = ref(false)
 const pinUploadTitle = ref('')
 const pinUploadScope = ref('Personal')
 let userSearchTimer = null
@@ -284,6 +285,29 @@ async function uploadPinIconFromEvent(event) {
   } finally {
     pinIconBusy.value = false
     if (event.target) event.target.value = ''
+  }
+}
+
+async function deleteManualPin() {
+  const mapName = mapStore.activeMap?.map?.name
+  const pinName = sourceName.value
+  if (!mapName || !pinName) return
+  const ok = await ui.ask({
+    title: 'Delete pin?',
+    body: 'This custom pin will be removed from the map.',
+    confirmLabel: 'Delete',
+    destructive: true,
+  })
+  if (!ok) return
+  pinDeleteBusy.value = true
+  actionError.value = ''
+  try {
+    await pinsStore.deletePin(mapName, pinName)
+    close()
+  } catch (e) {
+    actionError.value = e.message || String(e)
+  } finally {
+    pinDeleteBusy.value = false
   }
 }
 
@@ -1335,6 +1359,16 @@ function formatDate(s) {
         <span>Style</span>
       </button>
       <button
+        v-if="isManualPin"
+        type="button"
+        class="mp__action mp__action--danger"
+        :disabled="pinDeleteBusy"
+        @click="deleteManualPin"
+        title="Delete this custom pin"
+      >
+        <span>{{ pinDeleteBusy ? 'Deleting...' : 'Delete' }}</span>
+      </button>
+      <button
         v-for="act in customActions"
         :key="act.id"
         type="button"
@@ -1942,6 +1976,15 @@ function formatDate(s) {
 .mp__action:hover,
 .mp__action--active { background: rgba(59, 130, 246, 0.18); border-color: rgba(59, 130, 246, 0.34); color: #BFDBFE; }
 .mp__action--ghost { margin-left: auto; padding-left: 8px; padding-right: 8px; }
+.mp__action--danger {
+  border-color: rgba(239, 68, 68, 0.24);
+  color: #FCA5A5;
+}
+.mp__action--danger:hover {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.38);
+  color: #FECACA;
+}
 .mp__action:disabled { opacity: 0.55; cursor: default; }
 .mp__action svg { flex: none; }
 

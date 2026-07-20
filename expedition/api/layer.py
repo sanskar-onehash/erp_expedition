@@ -2351,6 +2351,7 @@ def _get_features_from_python_script(
 
     features = []
     total = len(script_output)
+    popup_template = (layer_doc.popup_template or "").strip()
 
     limit = min(int(limit or 5000), 10000)
     offset = max(int(offset or 0), 0)
@@ -2373,9 +2374,45 @@ def _get_features_from_python_script(
         props = item.get("properties") or {}
         if not isinstance(props, dict):
             props = {"value": props}
+        else:
+            props = dict(props)
 
-        props["_name"] = item.get("id") or item.get("name") or "custom_pin"
-        props["_doctype"] = layer_doc.name
+        props["_name"] = (
+            props.get("_name")
+            or item.get("source_name")
+            or item.get("name")
+            or item.get("id")
+            or "custom_pin"
+        )
+        props["_doctype"] = (
+            props.get("_doctype")
+            or item.get("source_doctype")
+            or item.get("doctype")
+            or getattr(layer_doc, "source_doctype", None)
+            or layer_doc.name
+        )
+
+        if popup_template and render_popup:
+            try:
+                source_doctype = props.get("_doctype")
+                source_name = props.get("_name")
+                if source_doctype and frappe.db.exists("DocType", source_doctype):
+                    ctx = _full_row_context(source_doctype, source_name, props)
+                else:
+                    ctx = dict(props)
+                    ctx["doc"] = frappe._dict(props)
+                ctx["layer"] = {
+                    "title": layer_doc.title,
+                    "name": layer_doc.name,
+                }
+                props["_popup_html"] = _render_popup_template(popup_template, ctx)
+            except (
+                frappe.exceptions.ValidationError,
+                frappe.exceptions.SecurityException,
+            ):
+                raise
+            except Exception:
+                props["_popup_html"] = ""
 
         features.append({"type": "Feature", "geometry": geom, "properties": props})
 

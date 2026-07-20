@@ -2327,10 +2327,14 @@ def _get_features_from_python_script(
     """Execute a python script to return layer data, and format it as GeoJSON."""
     from frappe.utils.safe_exec import safe_exec as frappe_safe_exec
 
+    filters = _coerce_filter(layer_doc.filter_json) or []
     context = {
         "bounds": bounds,
         "limit": limit,
         "offset": offset,
+        "source_doctype": layer_doc.source_doctype or "",
+        "filter_json": layer_doc.filter_json or "",
+        "filters": filters,
     }
     if kwargs:
         context.update(kwargs)
@@ -2476,6 +2480,8 @@ def get_features(
             from expedition.api.permission import assert_map_read
 
             assert_map_read(layer_doc.map)
+        if layer_doc.source_doctype:
+            assert_source_read(layer_doc.source_doctype)
         return _get_features_from_python_script(
             layer_doc, bounds, limit, offset, render_popup, kwargs
         )
@@ -3702,6 +3708,7 @@ def list_for_map(map_name: str) -> list[dict]:
         "name",
         "title",
         "map",
+        "data_source_type",
         "source_doctype",
         "location_source",
         "location_link_field",
@@ -4064,6 +4071,7 @@ def update(layer_name: str, **fields) -> dict:
 
     allowed = {
         "title",
+        "source_doctype",
         "color",
         "size",
         "pin_min_zoom",
@@ -4115,6 +4123,8 @@ def update(layer_name: str, **fields) -> dict:
     changed = False
     for k, v in fields.items():
         if k in allowed:
+            if k == "source_doctype" and v:
+                assert_source_read(v)
             setattr(doc, k, v)
             changed = True
     if "filter_json" in fields:
@@ -4785,6 +4795,7 @@ def _layer_to_dto(doc) -> dict:
         "name": doc.name,
         "title": doc.title,
         "map": doc.map,
+        "data_source_type": getattr(doc, "data_source_type", None) or "DocType",
         "source_doctype": doc.source_doctype,
         "location_source": getattr(doc, "location_source", None) or "Direct Fields",
         "location_link_field": getattr(doc, "location_link_field", None) or "",
@@ -5025,6 +5036,7 @@ def list_masters() -> list[dict]:
     _lm_fields = [
         "name",
         "title",
+        "data_source_type",
         "source_doctype",
         "location_source",
         "location_link_field",

@@ -50,6 +50,7 @@ const isMaster = computed(() => {
 const form = ref({
   name: null,
   title: '',
+  data_source_type: 'DocType',
   source_doctype: '',
   location_source: 'Direct Fields',
   location_link_field: '',
@@ -195,6 +196,7 @@ const filteredLocationDts = computed(() => {
     : sourceDts.value
   return items.slice(0, 80)
 })
+const isPythonScriptLayer = computed(() => form.value.data_source_type === 'Python Script')
 
 async function loadSourceDoctypes() {
   if (sourceDts.value.length) return
@@ -221,6 +223,7 @@ watch(
       form.value = {
         name: null,
         title: '',
+        data_source_type: 'DocType',
         source_doctype: '',
         location_source: 'Direct Fields',
         location_link_field: '',
@@ -286,6 +289,7 @@ watch(
       form.value = {
         name: l.name,
         title: l.title,
+        data_source_type: l.data_source_type || 'DocType',
         source_doctype: l.source_doctype,
         location_source: l.location_source || 'Direct Fields',
         location_link_field: l.location_link_field || '',
@@ -1728,12 +1732,12 @@ async function save() {
       }
     }
     form.value.pin_min_zoom = normalizePinMinZoom(form.value.pin_min_zoom)
-    if (form.value.location_source === 'Linked DocType' && !form.value.location_link_field) {
+    if (!isPythonScriptLayer.value && form.value.location_source === 'Linked DocType' && !form.value.location_link_field) {
       error.value = 'Choose the Link field that points to the location document.'
       saving.value = false
       return
     }
-    if (form.value.location_source === 'Reverse Linked DocType') {
+    if (!isPythonScriptLayer.value && form.value.location_source === 'Reverse Linked DocType') {
       if (!form.value.location_doctype) {
         error.value = 'Choose the location DocType.'
         saving.value = false
@@ -1745,7 +1749,7 @@ async function save() {
         return
       }
     }
-    if (form.value.location_source === 'Dynamic Link DocType' && !form.value.location_doctype) {
+    if (!isPythonScriptLayer.value && form.value.location_source === 'Dynamic Link DocType' && !form.value.location_doctype) {
       error.value = 'Choose the location DocType.'
       saving.value = false
       return
@@ -1823,8 +1827,14 @@ async function save() {
         })
       }
     } else {
+      if (isPythonScriptLayer.value && form.value.filter_rows.length && !form.value.source_doctype) {
+        error.value = 'Source DocType is required when filters are configured.'
+        saving.value = false
+        return
+      }
       const editFields = {
         title: form.value.title,
+        ...(isPythonScriptLayer.value ? { source_doctype: form.value.source_doctype } : {}),
         color: form.value.color,
         size: form.value.size,
         pin_min_zoom: Number(form.value.pin_min_zoom) || 0,
@@ -1956,9 +1966,9 @@ function close() {
           <input v-model="form.title" class="le__input" type="text" placeholder="e.g. Customers — APAC" />
         </label>
 
-        <!-- Source DocType (create only) -->
-        <label v-if="isCreate" class="le__field le__link-field">
-          <span class="le__label">Source DocType</span>
+        <!-- Source DocType -->
+        <label v-if="isCreate || isPythonScriptLayer" class="le__field le__link-field">
+          <span class="le__label">Source DocType <span v-if="isPythonScriptLayer" class="le__hint">(filter schema)</span></span>
           <input
             v-model="form.source_doctype"
             class="le__input"
@@ -1985,7 +1995,7 @@ function close() {
           </div>
         </label>
 
-        <div class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer" class="le__field le__link-field">
           <span class="le__label">Location source</span>
           <UiSelect
             :model-value="form.location_source"
@@ -1999,7 +2009,7 @@ function close() {
           />
         </div>
 
-        <div v-if="form.location_source === 'Linked DocType'" class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer && form.location_source === 'Linked DocType'" class="le__field le__link-field">
           <span class="le__label">Location link field</span>
           <UiSelect
             :model-value="form.location_link_field"
@@ -2015,7 +2025,7 @@ function close() {
           />
         </div>
 
-        <div v-if="form.location_source === 'Reverse Linked DocType' || form.location_source === 'Dynamic Link DocType'" class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer && (form.location_source === 'Reverse Linked DocType' || form.location_source === 'Dynamic Link DocType')" class="le__field le__link-field">
           <span class="le__label">Location DocType</span>
           <input
             v-model="form.location_doctype"
@@ -2044,7 +2054,7 @@ function close() {
           </div>
         </div>
 
-        <div v-if="form.location_source === 'Reverse Linked DocType'" class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer && form.location_source === 'Reverse Linked DocType'" class="le__field le__link-field">
           <span class="le__label">Reverse link field</span>
           <UiSelect
             :model-value="form.location_reverse_link_field"
@@ -2060,7 +2070,7 @@ function close() {
           />
         </div>
 
-        <div v-if="isCreate" class="le__row">
+        <div v-if="isCreate && !isPythonScriptLayer" class="le__row">
           <div class="le__field le__field--half le__link-field">
             <span class="le__label">Lat field</span>
             <UiSelect
@@ -2095,7 +2105,7 @@ function close() {
           </div>
         </div>
 
-        <div class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer" class="le__field le__link-field">
           <span class="le__label">Location popup fields</span>
           <div class="le__chips le__chips--inline">
             <span v-for="(fieldname, index) in locationFieldRows" :key="fieldname" class="le__token">
@@ -2121,7 +2131,7 @@ function close() {
         </div>
 
         <!-- Label field (uses source row's text) -->
-        <div class="le__field le__link-field">
+        <div v-if="!isPythonScriptLayer" class="le__field le__link-field">
           <span class="le__label">Label field <span class="le__hint">(used as the pin popup title)</span></span>
           <UiSelect
             :model-value="form.label_field"
@@ -2298,7 +2308,7 @@ function close() {
         </div>
 
         <!-- Group By / Segmentation -->
-        <div class="le__filter">
+        <div v-if="!isPythonScriptLayer" class="le__filter">
           <div class="le__filter-header">
             <span class="le__label">Group By <span class="le__hint">(color/icon by value)</span></span>
             <button type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">

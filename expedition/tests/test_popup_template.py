@@ -191,6 +191,22 @@ def _make_layer_with_popup_fields(fields):
     return doc
 
 
+def _make_python_script_layer(script, popup_template="", source_doctype=""):
+    return frappe.get_doc(
+        {
+            "doctype": "Expedition Layer",
+            "title": "Test layer for popup_template",
+            "data_source_type": "Python Script",
+            "source_doctype": source_doctype,
+            "python_script": script,
+            "latitude_field": "latitude",
+            "longitude_field": "longitude",
+            "label_field": "title",
+            "popup_template": popup_template,
+        }
+    ).insert(ignore_permissions=True)
+
+
 def _make_linked_source(title, pin_name):
     doc = frappe.get_doc(
         {
@@ -461,6 +477,86 @@ class TestPopupTemplate(unittest.TestCase):
         self.assertIn(
             self.pin_b.name, titles["BravoTestPin"]["properties"]["_popup_html"]
         )
+
+    def test_python_script_layer_preserves_explicit_source_identity(self):
+        script = f"""
+result = [
+    {{
+        "id": "script-feature-id",
+        "latitude": 10.0,
+        "longitude": 20.0,
+        "properties": {{
+            "_doctype": "{TEST_DOCTYPE}",
+            "_name": "{self.pin_a.name}",
+            "_label": "Script Alpha",
+            "title": "Script Alpha",
+        }},
+    }}
+]
+"""
+        layer = _make_python_script_layer(script)
+        result = layer_api.get_features(layer=layer.name, limit=10000)
+        self.assertEqual(len(result["features"]), 1)
+        props = result["features"][0]["properties"]
+        self.assertEqual(props["_doctype"], TEST_DOCTYPE)
+        self.assertEqual(props["_name"], self.pin_a.name)
+        self.assertEqual(props["_label"], "Script Alpha")
+
+    def test_python_script_layer_receives_layer_filters_in_context(self):
+        script = f"""
+result = [
+    {{
+        "latitude": 10.0,
+        "longitude": 20.0,
+        "properties": {{
+            "_doctype": "{TEST_DOCTYPE}",
+            "_name": "{self.pin_a.name}",
+            "_label": "Script Alpha",
+            "source_doctype": context.get("source_doctype"),
+            "filter_json": context.get("filter_json"),
+            "filters": context.get("filters"),
+        }},
+    }}
+]
+"""
+        layer = _make_python_script_layer(script, source_doctype=TEST_DOCTYPE)
+        layer.filter_json = frappe.as_json([["category", "=", "Customer"]])
+        layer.save(ignore_permissions=True)
+
+        result = layer_api.get_features(layer=layer.name, limit=10000)
+        self.assertEqual(len(result["features"]), 1)
+        props = result["features"][0]["properties"]
+        self.assertEqual(props["source_doctype"], TEST_DOCTYPE)
+        self.assertEqual(props["filters"], [["category", "=", "Customer"]])
+        self.assertEqual(
+            frappe.parse_json(props["filter_json"]), [["category", "=", "Customer"]]
+        )
+
+    def test_python_script_layer_renders_popup_template_with_computed_html(self):
+        script = f"""
+result = [
+    {{
+        "latitude": 10.0,
+        "longitude": 20.0,
+        "properties": {{
+            "_doctype": "{TEST_DOCTYPE}",
+            "_name": "{self.pin_a.name}",
+            "_label": "Script Alpha",
+            "title": "Script Alpha",
+            "customer_address_html": "334<br>Tô Hiến Thành<br>Việt Nam<br>",
+        }},
+    }}
+]
+"""
+        layer = _make_python_script_layer(
+            script,
+            popup_template="<strong>{{ title }}</strong><br>{{ customer_address_html }}",
+        )
+        result = layer_api.get_features(layer=layer.name, limit=10000)
+        self.assertEqual(len(result["features"]), 1)
+        html = result["features"][0]["properties"]["_popup_html"]
+        self.assertIn("<strong>Script Alpha</strong>", html)
+        self.assertIn("334<br>Tô Hiến Thành<br>Việt Nam<br>", html)
 
     def test_preview_popup_template_renders_draft_against_feature(self):
         layer = _make_layer(popup_template="")

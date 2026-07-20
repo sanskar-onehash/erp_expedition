@@ -135,8 +135,8 @@
    "in_standard_filter": 1,
    "label": "Source DocType",
    "options": "DocType",
-   "depends_on": "eval:doc.data_source_type=='DocType'",
-   "description": "The DocType whose rows appear on the map."
+   "depends_on": "eval:doc.data_source_type!='Client Script (JS)'",
+   "description": "DocType source for normal layers. For Python Script layers, this optionally provides filter schema, permissions, and popup context."
   },
   {
    "fieldname": "python_script",

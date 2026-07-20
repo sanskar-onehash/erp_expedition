@@ -561,7 +561,10 @@ export const useLayersStore = defineStore('layers', () => {
         .filter(Boolean)
         .filter((field, idx, arr) => arr.indexOf(field) === idx)
       const needsRefresh = searchFields.some((field) => !_featureCollectionHasField(fc, fields, field))
-      if (hasTextSearch || needsRefresh) missing.push({ layerName: layer.name, extraFields })
+      const needsFullScriptFetch = layer?.data_source_type === 'Python Script'
+      if (needsFullScriptFetch || hasTextSearch || needsRefresh) {
+        missing.push({ layerName: layer.name, extraFields })
+      }
     }
     await Promise.all(missing.map((item) =>
       fetchFeatures(item.layerName, null, {

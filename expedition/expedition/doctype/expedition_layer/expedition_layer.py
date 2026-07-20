@@ -129,6 +129,9 @@ class ExpeditionLayer(Document):
     def _validate_source_doctype(self):
         if not self.source_doctype:
             return
+        if (self.data_source_type or "DocType") == "Python Script":
+            frappe.get_meta(self.source_doctype)
+            return
         source_meta = frappe.get_meta(self.source_doctype)
         location_source = self.location_source or "Direct Fields"
         location_doctype = self.source_doctype
@@ -187,6 +190,8 @@ class ExpeditionLayer(Document):
     def _validate_filter_json(self):
         if not self.filter_json:
             return
+        if not self.source_doctype:
+            frappe.throw("Source DocType is required when filters are configured")
         try:
             frappe.parse_json(self.filter_json)
         except Exception:

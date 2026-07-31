@@ -177,6 +177,41 @@ async function onRefreshLayerEvent(e) {
   }
 }
 
+async function onSelectFeatureEvent(e) {
+  const detail = e.detail || {}
+  const doctype = String(detail.doctype || '').trim()
+  const name = String(detail.name || '').trim()
+  const layerName = String(detail.layerName || '').trim()
+  if (!doctype || !name) return
+
+  if (layerName) {
+    await layers.refetchLayer(layerName)
+  }
+
+  const candidates = layerName
+    ? [layerName]
+    : Object.keys(layers.features || {})
+  for (const candidate of candidates) {
+    const fc = layers.getDisplayFeatures(candidate) || layers.features?.[candidate]
+    const feature = (fc?.features || []).find((item) => {
+      const props = item?.properties || {}
+      return String(props._doctype || '') === doctype && String(props._name || item.id || '') === name
+    })
+    if (!feature) continue
+
+    const layerDoc = layers.layers.find((l) => l.name === candidate) || feature.layer || { name: candidate }
+    const coords = feature.geometry?.type === 'Point' ? feature.geometry.coordinates : null
+    ui.clearSelectedZone()
+    ui.selectedFeature = {
+      layer: layerDoc,
+      properties: feature.properties || {},
+      _id: feature.id || feature.properties?._id || feature.properties?._name,
+      _lngLat: Array.isArray(coords) ? { lng: coords[0], lat: coords[1] } : undefined,
+    }
+    return
+  }
+}
+
 onMounted(async () => {
   updateLayoutViewport()
   window.addEventListener('resize', updateLayoutViewport)
@@ -188,6 +223,7 @@ onMounted(async () => {
   await mapStore.bootstrap()
   window.addEventListener('expedition:fit-data', onFitDataEvent)
   window.addEventListener('expedition:refresh-layer', onRefreshLayerEvent)
+  window.addEventListener('expedition:select-feature', onSelectFeatureEvent)
   document.addEventListener('keydown', onGlobalKeydown, true)
   document.addEventListener('keyup', onGlobalKeyup, true)
   window.addEventListener('blur', onWindowBlur)
@@ -201,6 +237,7 @@ onBeforeUnmount(() => {
   _layoutResizeObserver?.disconnect?.()
   window.removeEventListener('expedition:fit-data', onFitDataEvent)
   window.removeEventListener('expedition:refresh-layer', onRefreshLayerEvent)
+  window.removeEventListener('expedition:select-feature', onSelectFeatureEvent)
   document.removeEventListener('keydown', onGlobalKeydown, true)
   document.removeEventListener('keyup', onGlobalKeyup, true)
   window.removeEventListener('blur', onWindowBlur)

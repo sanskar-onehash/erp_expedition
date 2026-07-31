@@ -184,21 +184,23 @@ async function onSelectFeatureEvent(e) {
   const layerName = String(detail.layerName || '').trim()
   if (!doctype || !name) return
 
-  if (layerName) {
-    await layers.refetchLayer(layerName)
-  }
-
   const candidates = layerName
     ? [layerName]
     : Object.keys(layers.features || {})
-  for (const candidate of candidates) {
-    const fc = layers.getDisplayFeatures(candidate) || layers.features?.[candidate]
-    const feature = (fc?.features || []).find((item) => {
-      const props = item?.properties || {}
-      return String(props._doctype || '') === doctype && String(props._name || item.id || '') === name
-    })
-    if (!feature) continue
 
+  const findFeature = () => {
+    for (const candidate of candidates) {
+      const fc = layers.getDisplayFeatures(candidate) || layers.features?.[candidate]
+      const feature = (fc?.features || []).find((item) => {
+        const props = item?.properties || {}
+        return String(props._doctype || '') === doctype && String(props._name || item.id || '') === name
+      })
+      if (feature) return { feature, layerName: candidate }
+    }
+    return null
+  }
+
+  const selectFeature = (feature, candidate) => {
     const layerDoc = layers.layers.find((l) => l.name === candidate) || feature.layer || { name: candidate }
     const coords = feature.geometry?.type === 'Point' ? feature.geometry.coordinates : null
     ui.clearSelectedZone()
@@ -208,8 +210,36 @@ async function onSelectFeatureEvent(e) {
       _id: feature.id || feature.properties?._id || feature.properties?._name,
       _lngLat: Array.isArray(coords) ? { lng: coords[0], lat: coords[1] } : undefined,
     }
+  }
+
+  const found = findFeature()
+  if (found) {
+    selectFeature(found.feature, found.layerName)
     return
   }
+
+  const coordinates = Array.isArray(detail.coordinates) ? detail.coordinates : null
+  if (detail.properties || coordinates) {
+    selectFeature({
+      type: 'Feature',
+      id: name,
+      geometry: coordinates ? { type: 'Point', coordinates } : null,
+      properties: {
+        ...(detail.properties || {}),
+        _doctype: doctype,
+        _name: name,
+      },
+    }, layerName)
+  }
+
+  if (!layerName || detail.refresh === false) return
+
+  layers.refetchLayer(layerName).then(() => {
+    const refreshed = findFeature()
+    if (refreshed) selectFeature(refreshed.feature, refreshed.layerName)
+  }).catch((err) => {
+    console.warn('[expedition] select feature refresh failed', err)
+  })
 }
 
 onMounted(async () => {

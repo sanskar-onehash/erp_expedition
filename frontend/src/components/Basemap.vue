@@ -371,6 +371,140 @@ function _hasInteractivePointAt(point) {
   }
 }
 
+function featureIdentity(feature) {
+  const props = feature?.properties || {}
+  const doctype = String(props._doctype || '').trim()
+  const name = String(props._name || feature?.id || '').trim()
+  if (doctype && name) return `${doctype}:${name}`
+  return `${feature?.layer?.id || 'layer'}:${name || JSON.stringify(feature?.geometry?.coordinates || [])}`
+}
+
+function featureLocationKey(feature) {
+  const props = feature?.properties || {}
+  const explicit = props.delivery_address_name
+    || props.customer_address_name
+    || props.address_name
+    || props._location_name
+    || props._location?.name
+  if (explicit) return `address:${String(explicit)}`
+  const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null
+  if (Array.isArray(coords) && coords.length >= 2) {
+    return `coord:${Number(coords[0]).toFixed(6)},${Number(coords[1]).toFixed(6)}`
+  }
+  return ''
+}
+
+function layerMetaForRenderedFeature(feature) {
+  const rawId = feature?.layer?.id || ''
+  const renderName = layerNameFromRenderedLayerId(rawId)
+  const layerName = parentLayerName(renderName)
+  const fc = layerStore.getDisplayFeatures(layerName)
+  return {
+    renderName,
+    layerName,
+    layer: fc?.layer || layerStore.layers.find((l) => l.name === layerName) || { name: layerName },
+  }
+}
+
+function locationTitleForFeature(feature) {
+  const props = feature?.properties || {}
+  return props.delivery_address_name
+    || props.customer_address_name
+    || props.address_name
+    || props._location_name
+    || props.customer_name
+    || props.customer
+    || 'Shared Location'
+}
+
+function locationAddressHtmlForFeature(feature) {
+  const props = feature?.properties || {}
+  return props.delivery_address_html
+    || props.customer_address_html
+    || props.address_html
+    || props._location?.address_html
+    || ''
+}
+
+function createLocationAggregateFeature(activeFeature, features, lngLat) {
+  if (!map || !activeFeature || !Array.isArray(features)) return null
+  const activeKey = featureLocationKey(activeFeature)
+  if (!activeKey) return null
+  const unique = []
+  const seen = new Set()
+  for (const item of features) {
+    if (featureLocationKey(item) !== activeKey) continue
+    const identity = featureIdentity(item)
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    const meta = layerMetaForRenderedFeature(item)
+    const props = item.properties || {}
+    if ((meta.layer.click_action || 'popup') === 'none') continue
+    if (!props._doctype || !props._name) continue
+    unique.push({
+      id: item.id,
+      layer: meta.layer,
+      layerName: meta.layerName,
+      properties: props,
+      geometry: item.geometry || null,
+    })
+  }
+  if (unique.length < 2) return null
+
+  const coords = activeFeature.geometry?.type === 'Point' ? activeFeature.geometry.coordinates : [lngLat.lng, lngLat.lat]
+  const title = locationTitleForFeature(activeFeature)
+  const addressHtml = locationAddressHtmlForFeature(activeFeature)
+  return {
+    layer: {
+      name: '__location_aggregate__',
+      title: 'Location',
+      click_action: 'popup',
+    },
+    properties: {
+      _doctype: 'Expedition Location',
+      _name: activeKey,
+      _label: title,
+      _location_title: title,
+      _location_address_html: addressHtml,
+      _location_features: unique,
+      _location_count: unique.length,
+    },
+    _id: activeKey,
+    _lngLat: { lng: coords[0], lat: coords[1] },
+  }
+}
+
+function selectRenderedFeature(feature, layerMeta, layerName, renderName, lngLat) {
+  const action = layerMeta?.click_action || 'popup'
+  if (action === 'none') return
+  if (action === 'open_form' || action === 'redirect') {
+    const props = feature.properties || {}
+    if (props._doctype && props._name) {
+      openDeskDoc(props._doctype, props._name)
+      return
+    }
+  }
+  // Clear previous selection on the source, then mark the clicked one.
+  const sid = sourceId(renderName)
+  const src = map.getSource(sid)
+  if (src && feature.id != null) {
+    // Clear all features' selected state.
+    for (const feat of layerStore.getDisplayFeatures(renderName)?.features || layerStore.getDisplayFeatures(layerName)?.features || []) {
+      if (feat._id != null && feat._id !== feature.id) {
+        try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
+      }
+    }
+    try { map.setFeatureState({ source: sid, id: feature.id }, { selected: true }) } catch (_) {}
+  }
+  ui.selectedFeature = {
+    layer: layerMeta || { name: layerName },
+    properties: feature.properties || {},
+    _id: feature.id,
+    // Capture the click point so MapPopup can anchor + camera-follow.
+    _lngLat: { lng: lngLat.lng, lat: lngLat.lat },
+  }
+}
+
 // Zone source/layer ids. All zones live in a single source so we
 // don't pay addSource/removeSource overhead per draw.
 function zoneSourceId() { return 'src-zones' }
@@ -1655,25 +1789,22 @@ function onPointClick(e) {
       return
     }
   }
-  // Clear previous selection on the source, then mark the clicked one.
-  const sid = sourceId(renderName)
-  const src = map.getSource(sid)
-  if (src && f.id != null) {
-    // Clear all features' selected state.
-    for (const feat of layerStore.getDisplayFeatures(renderName)?.features || layerStore.getDisplayFeatures(layerName)?.features || []) {
-      if (feat._id != null && feat._id !== f.id) {
-        try { map.setFeatureState({ source: sid, id: feat._id }, { selected: false }) } catch (_) {}
+
+  const pointLayers = [..._interactivePointLayers].filter((id) => map.getLayer(id))
+  if (pointLayers.length) {
+    try {
+      const rendered = map.queryRenderedFeatures(e.point, { layers: pointLayers })
+      const aggregate = createLocationAggregateFeature(f, rendered, e.lngLat)
+      if (aggregate) {
+        ui.selectedFeature = aggregate
+        return
       }
+    } catch (_) {
+      // Fall back to the clicked feature if the rendered stack query races a style update.
     }
-    try { map.setFeatureState({ source: sid, id: f.id }, { selected: true }) } catch (_) {}
   }
-  ui.selectedFeature = {
-    layer: layerMeta || { name: layerName },
-    properties: f.properties || {},
-    _id: f.id,
-    // Capture the click point so MapPopup can anchor + camera-follow.
-    _lngLat: { lng: e.lngLat.lng, lat: e.lngLat.lat },
-  }
+
+  selectRenderedFeature(f, layerMeta, layerName, renderName, e.lngLat)
 }
 
 function onPointMouseEnter() {

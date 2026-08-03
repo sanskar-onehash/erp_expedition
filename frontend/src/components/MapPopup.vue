@@ -111,7 +111,14 @@ const sourceName = computed(() => {
   const f = feature.value
   return f && f.properties && f.properties._name
 })
+const isLocationAggregate = computed(() => sourceDoctype.value === 'Expedition Location')
 const isManualPin = computed(() => sourceDoctype.value === 'Expedition Map Pin')
+const stackContext = computed(() => feature.value?._stack || null)
+const hasStackContext = computed(() =>
+  !isLocationAggregate.value &&
+  Array.isArray(stackContext.value?.records) &&
+  stackContext.value.records.length > 1
+)
 const hasLinkedRecordConfig = computed(() =>
   Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
 )
@@ -425,13 +432,21 @@ watch(feature, async (v) => {
     assignFieldOpen.value = false
     actionError.value = ''
     todoCreated.value = ''
-    activeTab.value = 'details'
+    activeTab.value = v.properties?._doctype === 'Expedition Location'
+      ? 'location-summary'
+      : 'details'
     fieldSearch.value = ''
     showMoreFields.value = false
     showAssignPanel.value = false
     showTodoPanel.value = false
-    loadHistory()
-    loadLinkedRecords()
+    if (v.properties?._doctype === 'Expedition Location') {
+      history.value = []
+      aggregate.value = null
+      linkedRecords.value = []
+    } else {
+      loadHistory()
+      loadLinkedRecords()
+    }
   } else {
     screen.value = null
     history.value = []
@@ -472,6 +487,10 @@ const title = computed(() => {
 const subtitle = computed(() => {
   const f = feature.value
   if (!f) return ''
+  if (isLocationAggregate.value) {
+    const count = Number(f.properties?._location_count) || locationAggregateRecords.value.length
+    return `${count} records at this location`
+  }
   const layer = f.layer || {}
   const src = f.properties._doctype
   const lname = layer.title || layer.name
@@ -644,6 +663,156 @@ const hiddenFieldCount = computed(() => {
   const visible = visibleGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
   return Math.max(0, filteredSecondaryRows.value.length - visible)
 })
+const locationAggregateRecords = computed(() => {
+  const records = feature.value?.properties?._location_features
+  return Array.isArray(records) ? records : []
+})
+
+function aggregateDoctypeLabel(doctype, singular = false) {
+  const key = String(doctype || '')
+  const lower = key.toLowerCase()
+  if (key === 'Serial No') return singular ? 'Product' : 'Products'
+  if (key === 'Issue') return singular ? 'Issue' : 'Issues'
+  if (lower.includes('invoice') || lower.includes('payment')) return singular ? 'Payment' : 'Payments'
+  return key ? (singular ? key : `${key}s`) : (singular ? 'Record' : 'Records')
+}
+
+function aggregateRecordTitle(record) {
+  const p = record?.properties || {}
+  return p.subject
+    || p.item_name
+    || p.item_code
+    || p.customer_name
+    || p.customer
+    || p._label
+    || p.name
+    || p._name
+    || 'Untitled'
+}
+
+function aggregateRecordMeta(record) {
+  const p = record?.properties || {}
+  const values = [
+    p.serial_no,
+    p.status,
+    p.issue_type,
+    p.item_group,
+    p.outstanding_amount != null ? formatValue(p.outstanding_amount) : null,
+    p.due_date,
+    p.posting_date,
+  ].filter((value) => value != null && value !== '')
+  return values.slice(0, 3).join(' · ')
+}
+
+function paymentAmount(record) {
+  const p = record?.properties || {}
+  const value = p.outstanding_amount
+    ?? p.unpaid_amount
+    ?? p.pending_amount
+    ?? p.grand_total
+    ?? p.rounded_total
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount : 0
+}
+
+function isPaymentRecord(record) {
+  const doctype = String(record?.properties?._doctype || '').toLowerCase()
+  return doctype.includes('invoice') || doctype.includes('payment')
+}
+
+function isOpenIssueRecord(record) {
+  if (record?.properties?._doctype !== 'Issue') return false
+  const status = String(record.properties?.status || '').toLowerCase()
+  return !['closed', 'resolved'].includes(status)
+}
+
+function isOverduePaymentRecord(record) {
+  if (!isPaymentRecord(record)) return false
+  const status = String(record.properties?.status || '').toLowerCase()
+  return status.includes('overdue') || status.includes('unpaid') || status.includes('pending') || paymentAmount(record) > 0
+}
+
+const locationSummaryMetrics = computed(() => {
+  const records = locationAggregateRecords.value
+  const products = records.filter((record) => record?.properties?._doctype === 'Serial No')
+  const issues = records.filter(isOpenIssueRecord)
+  const payments = records.filter(isOverduePaymentRecord)
+  const outstanding = payments.reduce((sum, record) => sum + paymentAmount(record), 0)
+  return [
+    { key: 'products', label: 'Products', value: products.length },
+    { key: 'issues', label: 'Open Issues', value: issues.length },
+    { key: 'payments', label: 'Overdue', value: payments.length },
+    { key: 'outstanding', label: 'Outstanding', value: outstanding ? formatValue(outstanding) : '0' },
+  ]
+})
+
+function summaryGroupField(record) {
+  const p = record?.properties || {}
+  if (p._doctype === 'Serial No') return p.item_name || p.item_code || 'Installed Product'
+  if (p._doctype === 'Issue') return p.status || 'Issue'
+  if (isPaymentRecord(record)) return p.status || 'Payment'
+  return p._doctype || 'Record'
+}
+
+const locationSummaryGroups = computed(() => {
+  const byType = new Map()
+  for (const record of locationAggregateRecords.value) {
+    const doctype = record?.properties?._doctype || 'Record'
+    const label = aggregateDoctypeLabel(doctype)
+    if (!byType.has(label)) byType.set(label, new Map())
+    const rows = byType.get(label)
+    const key = summaryGroupField(record)
+    rows.set(key, (rows.get(key) || 0) + 1)
+  }
+  return Array.from(byType.entries()).map(([title, rows]) => ({
+    title,
+    rows: Array.from(rows.entries()).map(([label, count]) => ({ label, count })),
+  }))
+})
+
+function recordCoordinates(record) {
+  const coords = record?.geometry?.type === 'Point' ? record.geometry.coordinates : null
+  if (Array.isArray(coords) && coords.length >= 2) return { lng: coords[0], lat: coords[1] }
+  return feature.value?._lngLat || null
+}
+
+function selectStackRecord(index) {
+  const records = stackContext.value?.records || locationAggregateRecords.value
+  const locationFeature = stackContext.value?.locationFeature || feature.value
+  if (!Array.isArray(records) || !records.length) return
+  const nextIndex = ((index % records.length) + records.length) % records.length
+  const record = records[nextIndex]
+  ui.selectedFeature = {
+    layer: record.layer || { name: record.layerName },
+    properties: record.properties || {},
+    _id: record.id || record.properties?._id || record.properties?._name,
+    _lngLat: recordCoordinates(record),
+    _stack: {
+      locationFeature,
+      records,
+      index: nextIndex,
+    },
+  }
+}
+
+function openAggregateRecord(record) {
+  const index = locationAggregateRecords.value.indexOf(record)
+  if (index >= 0) selectStackRecord(index)
+}
+
+function backToLocation() {
+  const locationFeature = stackContext.value?.locationFeature
+  if (locationFeature) ui.selectedFeature = locationFeature
+}
+
+function previousStackRecord() {
+  selectStackRecord(Number(stackContext.value?.index || 0) - 1)
+}
+
+function nextStackRecord() {
+  selectStackRecord(Number(stackContext.value?.index || 0) + 1)
+}
+
 const linkedRecordGroups = computed(() => {
   const map = {}
   for (const group of linkedRecords.value || []) {
@@ -1319,7 +1488,7 @@ function formatDate(s) {
       <button class="mp__close" type="button" @click="close" aria-label="Close">×</button>
     </header>
 
-    <div v-if="sourceDoctype && sourceName" class="mp__actions" aria-label="Record actions">
+    <div v-if="sourceDoctype && sourceName && !isLocationAggregate" class="mp__actions" aria-label="Record actions">
       <button v-if="clickAction !== 'none'" type="button" class="mp__action" @click="openForm" title="Open the source document">
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
           <path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"
@@ -1382,6 +1551,12 @@ function formatDate(s) {
       <button type="button" class="mp__action mp__action--ghost" :disabled="copyBusy" @click="copyDocLink" title="Copy source document link">
         <span>{{ copyBusy ? 'Copied' : 'Copy Link' }}</span>
       </button>
+    </div>
+
+    <div v-if="hasStackContext" class="mp__stack-nav" aria-label="Stack navigation">
+      <button type="button" class="mp__stack-btn" @click="previousStackRecord">‹ Previous</button>
+      <button type="button" class="mp__stack-btn mp__stack-btn--primary" @click="backToLocation">Back to Location</button>
+      <button type="button" class="mp__stack-btn" @click="nextStackRecord">Next ›</button>
     </div>
 
     <div v-if="isManualPin && showPinStylePanel" class="mp__assign-panel mp__pin-style-panel">
@@ -1450,11 +1625,30 @@ function formatDate(s) {
     </div>
 
     <nav class="mp__tabs" aria-label="Popup sections">
-      <button type="button" class="mp__tab" :class="{ 'mp__tab--active': activeTab === 'details' }" @click="activeTab = 'details'">
+      <template v-if="isLocationAggregate">
+        <button
+          type="button"
+          class="mp__tab"
+          :class="{ 'mp__tab--active': activeTab === 'location-summary' }"
+          @click="activeTab = 'location-summary'"
+        >
+          Summary
+        </button>
+        <button
+          type="button"
+          class="mp__tab"
+          :class="{ 'mp__tab--active': activeTab === 'location-pins' }"
+          @click="activeTab = 'location-pins'"
+        >
+          Pins
+          <span class="mp__tab-count">{{ locationAggregateRecords.length }}</span>
+        </button>
+      </template>
+      <button v-if="!isLocationAggregate" type="button" class="mp__tab" :class="{ 'mp__tab--active': activeTab === 'details' }" @click="activeTab = 'details'">
         Details
       </button>
       <button
-        v-if="sourceDoctype && sourceName && sourceDoctype !== 'Expedition Zone'"
+        v-if="sourceDoctype && sourceName && sourceDoctype !== 'Expedition Zone' && !isLocationAggregate"
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'activity' }"
@@ -1464,7 +1658,7 @@ function formatDate(s) {
         <span v-if="aggregate && aggregate.total" class="mp__tab-count">{{ aggregate.total }}</span>
       </button>
       <button
-        v-if="linkedRecordTabVisible && sourceDoctype !== 'Expedition Zone'"
+        v-if="linkedRecordTabVisible && sourceDoctype !== 'Expedition Zone' && !isLocationAggregate"
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'records' }"
@@ -1474,7 +1668,7 @@ function formatDate(s) {
         <span v-if="linkedRecordCount" class="mp__tab-count">{{ linkedRecordCount }}</span>
       </button>
       <button
-        v-for="tab in customTabs"
+        v-for="tab in isLocationAggregate ? [] : customTabs"
         :key="tab.id"
         type="button"
         class="mp__tab"
@@ -1631,7 +1825,58 @@ function formatDate(s) {
     </div>
 
     <div class="mp__body">
-      <section v-if="activeTab === 'details'" class="mp__section">
+      <template v-if="isLocationAggregate">
+        <section v-show="activeTab === 'location-summary'" class="mp__section">
+          <div class="mp__location-aggregate">
+            <div v-if="feature.properties._location_address_html" class="mp__location-address" v-html="feature.properties._location_address_html" />
+            <div v-else class="mp__location-address">{{ feature.properties._location_title }}</div>
+
+            <div class="mp__summary-grid">
+              <div v-for="metric in locationSummaryMetrics" :key="metric.key" class="mp__summary-card">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+              </div>
+            </div>
+
+            <div class="mp__summary-groups">
+              <section v-for="group in locationSummaryGroups" :key="group.title" class="mp__summary-group">
+                <div class="mp__summary-group-title">{{ group.title }}</div>
+                <div class="mp__summary-lines">
+                  <div v-for="row in group.rows" :key="row.label" class="mp__summary-line">
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.count }}</strong>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'location-pins'" class="mp__section">
+          <div class="mp__location-aggregate">
+            <div v-if="feature.properties._location_address_html" class="mp__location-address" v-html="feature.properties._location_address_html" />
+            <div v-else class="mp__location-address">{{ feature.properties._location_title }}</div>
+
+            <div class="mp__aggregate-list">
+              <button
+                v-for="record in locationAggregateRecords"
+                :key="`${record.properties?._doctype || 'Record'}:${record.properties?._name || record.id}`"
+                type="button"
+                class="mp__aggregate-row"
+                @click="openAggregateRecord(record)"
+              >
+                <span class="mp__aggregate-kind">{{ aggregateDoctypeLabel(record.properties?._doctype, true) }}</span>
+                <span class="mp__aggregate-main">
+                  <strong>{{ aggregateRecordTitle(record) }}</strong>
+                  <small>{{ record.properties?._name || record.id }}</small>
+                </span>
+                <span v-if="aggregateRecordMeta(record)" class="mp__aggregate-meta">{{ aggregateRecordMeta(record) }}</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </template>
+      <section v-if="!isLocationAggregate && activeTab === 'details'" class="mp__section">
         <div v-if="sourceDoctype === 'Expedition Zone'" class="mp__zone-details">
           <div class="mp__zone-summary-box">
             <div class="mp__zone-row">
@@ -1988,6 +2233,38 @@ function formatDate(s) {
 .mp__action:disabled { opacity: 0.55; cursor: default; }
 .mp__action svg { flex: none; }
 
+.mp__stack-nav {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.mp__stack-btn {
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  color: rgba(230, 232, 236, 0.72);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  cursor: pointer;
+  font: 700 10px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__stack-btn:hover {
+  color: #BFDBFE;
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(96, 165, 250, 0.24);
+}
+.mp__stack-btn--primary {
+  color: #E6E8EC;
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(96, 165, 250, 0.26);
+}
+
 .mp__tabs {
   display: flex;
   gap: 4px;
@@ -2287,6 +2564,150 @@ function formatDate(s) {
   font-weight: 600;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.mp__location-aggregate {
+  display: grid;
+  gap: 9px;
+}
+.mp__location-address {
+  padding: 9px;
+  color: rgba(230, 232, 236, 0.78);
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.mp__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.mp__summary-card {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  background: rgba(59, 130, 246, 0.07);
+}
+.mp__summary-card span {
+  color: rgba(191, 219, 254, 0.72);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.mp__summary-card strong {
+  min-width: 0;
+  color: #E6E8EC;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__summary-groups {
+  display: grid;
+  gap: 7px;
+}
+.mp__summary-group {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(255, 255, 255, 0.04);
+}
+.mp__summary-group-title {
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.mp__summary-lines {
+  display: grid;
+  gap: 4px;
+}
+.mp__summary-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.mp__summary-line span {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(230, 232, 236, 0.72);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__summary-line strong {
+  color: #E6E8EC;
+  font-size: 11px;
+  font-weight: 800;
+}
+.mp__aggregate-list {
+  display: grid;
+  gap: 6px;
+}
+.mp__aggregate-row {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+  color: #E6E8EC;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.mp__aggregate-row:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.22);
+}
+.mp__aggregate-kind {
+  width: fit-content;
+  padding: 2px 6px;
+  color: rgba(191, 219, 254, 0.88);
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.20);
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.mp__aggregate-main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mp__aggregate-main strong,
+.mp__aggregate-main small,
+.mp__aggregate-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp__aggregate-main strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+.mp__aggregate-main small,
+.mp__aggregate-meta {
+  color: rgba(230, 232, 236, 0.52);
+  font-size: 10px;
 }
 
 .mp__linked-records {

@@ -8,7 +8,10 @@
 		window.expedition = window.expedition || {};
 		window.expedition.csrfToken = {{ csrf_token | tojson }};
 		window.expedition.build = {{ expedition_build | tojson }};
-		window.expeditionSession = { user: {{ expedition_user | tojson }} };
+		window.expeditionSession = {
+			user: {{ expedition_user | tojson }},
+			site: {{ expedition_site | tojson }}
+		};
 	</script>
 {% endblock %}
 

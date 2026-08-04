@@ -34,5 +34,6 @@ def get_context(context):
     context.expedition_build = __frontend_build__
     context.csrf_token = frappe.sessions.get_csrf_token()
     context.expedition_user = frappe.session.user
+    context.expedition_site = frappe.local.site
 
     return context

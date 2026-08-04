@@ -29,6 +29,7 @@ import { deskDocRoute, openDeskDoc } from '../lib/desk.js'
 import { ICON_PATHS } from '../api/icons.js'
 import UiSelect from './ui/UiSelect.vue'
 import UiColorInput from './ui/UiColorInput.vue'
+import RecordActivity from './comments/RecordActivity.vue'
 
 const ui = useUiStore()
 const mapStore = useMapStore()
@@ -64,6 +65,7 @@ const userSearchLoading = ref(false)
 const userSearchOpen = ref(false)
 const assignFieldOpen = ref(false)
 const activeTab = ref('details')
+const commentCount = ref(0)
 const fieldSearch = ref('')
 const showMoreFields = ref(false)
 const showAssignPanel = ref(false)
@@ -432,6 +434,7 @@ watch(feature, async (v) => {
     assignFieldOpen.value = false
     actionError.value = ''
     todoCreated.value = ''
+    commentCount.value = 0
     activeTab.value = v.properties?._doctype === 'Expedition Location'
       ? 'location-summary'
       : 'details'
@@ -1648,6 +1651,16 @@ function formatDate(s) {
         Details
       </button>
       <button
+        v-if="sourceDoctype && sourceName && !isLocationAggregate"
+        type="button"
+        class="mp__tab"
+        :class="{ 'mp__tab--active': activeTab === 'comments' }"
+        @click="activeTab = 'comments'"
+      >
+        Comments
+        <span v-if="commentCount" class="mp__tab-count">{{ commentCount }}</span>
+      </button>
+      <button
         v-if="sourceDoctype && sourceName && sourceDoctype !== 'Expedition Zone' && !isLocationAggregate"
         type="button"
         class="mp__tab"
@@ -1876,6 +1889,13 @@ function formatDate(s) {
           </div>
         </section>
       </template>
+      <section
+        v-if="!isLocationAggregate && sourceDoctype && sourceName"
+        v-show="activeTab === 'comments'"
+        class="mp__section mp__section--comments"
+      >
+        <RecordActivity :doctype="sourceDoctype" :name="sourceName" @count="commentCount = $event" />
+      </section>
       <section v-if="!isLocationAggregate && activeTab === 'details'" class="mp__section">
         <div v-if="sourceDoctype === 'Expedition Zone'" class="mp__zone-details">
           <div class="mp__zone-summary-box">
@@ -2198,6 +2218,7 @@ function formatDate(s) {
 
 .mp__body { padding: 10px 12px 12px; overflow-y: auto; flex: 1; }
 .mp__section { min-height: 0; }
+.mp__section--comments { padding: 11px 12px 13px; }
 .mp__empty { font-size: 12px; color: rgba(230, 232, 236, 0.5); padding: 12px 0; margin: 0; text-align: center; }
 .mp__custom { padding: 4px 8px 4px 0; }
 .mp__custom :deep(a) { color: #93C5FD; }

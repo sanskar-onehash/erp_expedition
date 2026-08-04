@@ -41,3 +41,32 @@ export async function call(method, args = {}) {
   const data = await res.json()
   return data.message
 }
+
+/** Send multipart RPC payloads (used by comments with file attachments). */
+export async function upload(method, fields = {}, files = []) {
+  const body = new FormData()
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null) {
+      body.append(key, typeof value === 'string' ? value : JSON.stringify(value))
+    }
+  }
+  for (const file of files || []) body.append('files', file, file.name)
+
+  const res = await fetch('/api/method/' + method, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Accept': 'application/json',
+      'X-Frappe-CSRF-Token': window.expedition?.csrfToken || '',
+    },
+    body,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw Object.assign(new Error(err.message || res.statusText), {
+      status: res.status,
+      _server: err,
+    })
+  }
+  return (await res.json()).message
+}

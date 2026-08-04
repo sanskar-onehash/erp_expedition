@@ -18,553 +18,624 @@
  *
  * Width: 320px. Same glass as the panels.
  */
-import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
-import { call } from '../api/client.js'
-import { useUiStore } from '../state/ui.js'
-import { useMapStore } from '../state/map.js'
-import { usePinsStore } from '../state/pins.js'
-import { useIconsStore } from '../state/icons.js'
-import { wrapLng } from '../lib/geo.js'
-import { deskDocRoute, openDeskDoc } from '../lib/desk.js'
-import { ICON_PATHS } from '../api/icons.js'
-import UiSelect from './ui/UiSelect.vue'
-import UiColorInput from './ui/UiColorInput.vue'
-import RecordActivity from './comments/RecordActivity.vue'
+import {
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  computed,
+  watch,
+  nextTick,
+} from "vue";
+import { call } from "../api/client.js";
+import { useUiStore } from "../state/ui.js";
+import { useMapStore } from "../state/map.js";
+import { usePinsStore } from "../state/pins.js";
+import { useIconsStore } from "../state/icons.js";
+import { wrapLng } from "../lib/geo.js";
+import { deskDocRoute, openDeskDoc } from "../lib/desk.js";
+import { ICON_PATHS } from "../api/icons.js";
+import UiSelect from "./ui/UiSelect.vue";
+import UiColorInput from "./ui/UiColorInput.vue";
+import RecordActivity from "./comments/RecordActivity.vue";
 
-const ui = useUiStore()
-const mapStore = useMapStore()
-const pinsStore = usePinsStore()
-const iconStore = useIconsStore()
+const ui = useUiStore();
+const mapStore = useMapStore();
+const pinsStore = usePinsStore();
+const iconStore = useIconsStore();
 
-const cardEl = ref(null)
+const cardEl = ref(null);
 // screen position of the popup's anchor point in CSS pixels (relative
 // to the .expedition container, which is the viewport). edge:
 // 'left' | 'right' — which side of the pin the card is on.
-const screen = ref(null)
-const edge = ref('left')
+const screen = ref(null);
+const edge = ref("left");
 
 // Visit history (Expedition Activity rows linked to the same source doc).
-const history = ref([])
-const historyLoading = ref(false)
-const historyError = ref('')
-const linkedRecords = ref([])
-const linkedRecordsLoading = ref(false)
-const linkedRecordsError = ref('')
+const history = ref([]);
+const historyLoading = ref(false);
+const historyError = ref("");
+const linkedRecords = ref([]);
+const linkedRecordsLoading = ref(false);
+const linkedRecordsError = ref("");
 // Aggregated stats: counts by year (active vs passive).
-const aggregate = ref(null)
-const aggregateLoading = ref(false)
-const actionError = ref('')
-const todoBusy = ref(false)
-const todoCreated = ref('')
-const assignBusy = ref(false)
-const copyBusy = ref(false)
-const assignField = ref('')
-const assignUser = ref('')
-const userOptions = ref([])
-const userSearchLoading = ref(false)
-const userSearchOpen = ref(false)
-const assignFieldOpen = ref(false)
-const activeTab = ref('details')
-const commentCount = ref(0)
-const fieldSearch = ref('')
-const showMoreFields = ref(false)
-const showAssignPanel = ref(false)
-const showPinStylePanel = ref(false)
-const pinStyleColor = ref('#F59E0B')
-const pinStyleIcon = ref('pin-marker')
-const pinStyleBusy = ref(false)
-const pinIconBusy = ref(false)
-const pinDeleteBusy = ref(false)
-const pinUploadTitle = ref('')
-const pinUploadScope = ref('Personal')
-let userSearchTimer = null
+const aggregate = ref(null);
+const aggregateLoading = ref(false);
+const actionError = ref("");
+const todoBusy = ref(false);
+const todoCreated = ref("");
+const assignBusy = ref(false);
+const copyBusy = ref(false);
+const assignField = ref("");
+const assignUser = ref("");
+const userOptions = ref([]);
+const userSearchLoading = ref(false);
+const userSearchOpen = ref(false);
+const assignFieldOpen = ref(false);
+const activeTab = ref("details");
+const commentCount = ref(0);
+const fieldSearch = ref("");
+const showMoreFields = ref(false);
+const showAssignPanel = ref(false);
+const showPinStylePanel = ref(false);
+const pinStyleColor = ref("#F59E0B");
+const pinStyleIcon = ref("pin-marker");
+const pinStyleBusy = ref(false);
+const pinIconBusy = ref(false);
+const pinDeleteBusy = ref(false);
+const pinUploadTitle = ref("");
+const pinUploadScope = ref("Personal");
+let userSearchTimer = null;
 
-const customHtmls = ref('')
-const customTabs = ref([])
-const customTabContents = ref({})
+const customHtmls = ref("");
+const customTabs = ref([]);
+const customTabContents = ref({});
 
-const showTodoPanel = ref(false)
-const todoDescription = ref('')
-const todoAllocatedTo = ref('')
-const todoDate = ref('')
-const todoPriority = ref('Medium')
-const todoUserSearchOpen = ref(false)
-const todoUserOptions = ref([])
-const todoUserSearchLoading = ref(false)
-let todoUserSearchTimer = null
+const showTodoPanel = ref(false);
+const todoDescription = ref("");
+const todoAllocatedTo = ref("");
+const todoDate = ref("");
+const todoPriority = ref("Medium");
+const todoUserSearchOpen = ref(false);
+const todoUserOptions = ref([]);
+const todoUserSearchLoading = ref(false);
+let todoUserSearchTimer = null;
 
-const COLOR_PRESETS = ['#F59E0B', '#22C55E', '#3B82F6', '#EF4444', '#A855F7', '#14B8A6', '#F97316']
+const COLOR_PRESETS = [
+  "#F59E0B",
+  "#22C55E",
+  "#3B82F6",
+  "#EF4444",
+  "#A855F7",
+  "#14B8A6",
+  "#F97316",
+];
 const UPLOAD_SCOPE_OPTIONS = [
-  { v: 'Personal', label: 'Personal' },
-  { v: 'Global', label: 'Global' },
-]
+  { v: "Personal", label: "Personal" },
+  { v: "Global", label: "Global" },
+];
 
-const feature = computed(() => ui.selectedFeature)
+const feature = computed(() => ui.selectedFeature);
 const layer = computed(() => {
-  const f = feature.value
-  return f ? f.layer || {} : {}
-})
-const clickAction = computed(() => layer.value.click_action || 'popup')
+  const f = feature.value;
+  return f ? f.layer || {} : {};
+});
+const clickAction = computed(() => layer.value.click_action || "popup");
 const sourceDoctype = computed(() => {
-  const f = feature.value
-  return f && f.properties && f.properties._doctype
-})
+  const f = feature.value;
+  return f && f.properties && f.properties._doctype;
+});
 const sourceName = computed(() => {
-  const f = feature.value
-  return f && f.properties && f.properties._name
-})
-const isLocationAggregate = computed(() => sourceDoctype.value === 'Expedition Location')
-const isManualPin = computed(() => sourceDoctype.value === 'Expedition Map Pin')
-const stackContext = computed(() => feature.value?._stack || null)
-const hasStackContext = computed(() =>
-  !isLocationAggregate.value &&
-  Array.isArray(stackContext.value?.records) &&
-  stackContext.value.records.length > 1
-)
-const hasLinkedRecordConfig = computed(() =>
-  Array.isArray(layer.value.linked_metrics) && layer.value.linked_metrics.length > 0
-)
-const iconSections = computed(() => [
-  { key: 'builtin', label: 'Built-in', icons: iconStore.builtin },
-  { key: 'personal', label: 'Personal', icons: iconStore.personal },
-  { key: 'global', label: 'Global', icons: iconStore.global },
-].filter((section) => section.icons.length || section.key !== 'global' || iconStore.canManageGlobal))
+  const f = feature.value;
+  return f && f.properties && f.properties._name;
+});
+const isLocationAggregate = computed(
+  () => sourceDoctype.value === "Expedition Location",
+);
+const isManualPin = computed(
+  () => sourceDoctype.value === "Expedition Map Pin",
+);
+const stackContext = computed(() => feature.value?._stack || null);
+const hasStackContext = computed(
+  () =>
+    !isLocationAggregate.value &&
+    Array.isArray(stackContext.value?.records) &&
+    stackContext.value.records.length > 1,
+);
+const hasLinkedRecordConfig = computed(
+  () =>
+    Array.isArray(layer.value.linked_metrics) &&
+    layer.value.linked_metrics.length > 0,
+);
+const iconSections = computed(() =>
+  [
+    { key: "builtin", label: "Built-in", icons: iconStore.builtin },
+    { key: "personal", label: "Personal", icons: iconStore.personal },
+    { key: "global", label: "Global", icons: iconStore.global },
+  ].filter(
+    (section) =>
+      section.icons.length ||
+      section.key !== "global" ||
+      iconStore.canManageGlobal,
+  ),
+);
 
 function isBuiltinIcon(icon) {
-  return icon?.source === 'builtin'
+  return icon?.source === "builtin";
 }
 
 function iconLabel(icon) {
-  return icon?.title || icon?.key || 'Icon'
+  return icon?.title || icon?.key || "Icon";
 }
 
-watch(feature, async (newVal) => {
-  if (newVal) {
-    showPinStylePanel.value = false
-    if (newVal.properties?._doctype === 'Expedition Map Pin') {
-      pinStyleColor.value = newVal.properties?.color || '#F59E0B'
-      pinStyleIcon.value = newVal.properties?.icon || 'pin-marker'
-      iconStore.loadIcons().catch(() => {})
-    }
-    window.dispatchEvent(
-      new CustomEvent('expedition:feature-selected', {
-        detail: {
-          feature: JSON.parse(JSON.stringify(newVal)),
-          layer: JSON.parse(JSON.stringify(layer.value)),
-        },
-      })
-    )
-    
-    customHtmls.value = ''
-    if (window.Expedition?.Popup?.registry) {
-       const doctype = newVal.properties?._doctype
-       const hooks = window.Expedition.Popup.registry[doctype] || []
-       for (const fn of hooks) {
-           try {
-               const html = await fn(newVal)
-               if (html) customHtmls.value += html
-           } catch(e) { console.error('[expedition] Popup custom html error:', e) }
-       }
-    }
-    
-    customTabs.value = []
-    customTabContents.value = {}
-    if (window.Expedition?.Popup?.tabs) {
-       const doctype = newVal.properties?._doctype
-       const tabHooks = window.Expedition.Popup.tabs[doctype] || []
-       for (const t of tabHooks) {
-           const tabObj = { id: t.id, title: t.title, count: null }
-           customTabs.value.push(tabObj)
-           try {
-               const res = await t.renderFn(newVal)
-               if (res && typeof res === 'object') {
-                   if (res.html) customTabContents.value[t.id] = res.html
-                   if (res.count !== undefined) tabObj.count = res.count
-               } else {
-                   if (res) customTabContents.value[t.id] = res
-               }
-           } catch(e) { console.error('[expedition] Popup tab error:', e) }
-       }
-    }
-  } else {
-    window.dispatchEvent(new CustomEvent('expedition:feature-deselected'))
-    customHtmls.value = ''
-    customTabs.value = []
-    customTabContents.value = {}
-  }
-}, { immediate: true })
+watch(
+  feature,
+  async (newVal) => {
+    if (newVal) {
+      showPinStylePanel.value = false;
+      if (newVal.properties?._doctype === "Expedition Map Pin") {
+        pinStyleColor.value = newVal.properties?.color || "#F59E0B";
+        pinStyleIcon.value = newVal.properties?.icon || "pin-marker";
+        iconStore.loadIcons().catch(() => {});
+      }
+      window.dispatchEvent(
+        new CustomEvent("expedition:feature-selected", {
+          detail: {
+            feature: JSON.parse(JSON.stringify(newVal)),
+            layer: JSON.parse(JSON.stringify(layer.value)),
+          },
+        }),
+      );
 
-function close() { ui.selectedFeature = null }
-function onKey(e) { if (e.key === 'Escape' && feature.value) close() }
+      customHtmls.value = "";
+      if (window.Expedition?.Popup?.registry) {
+        const doctype = newVal.properties?._doctype;
+        const hooks = window.Expedition.Popup.registry[doctype] || [];
+        for (const fn of hooks) {
+          try {
+            const html = await fn(newVal);
+            if (html) customHtmls.value += html;
+          } catch (e) {
+            console.error("[expedition] Popup custom html error:", e);
+          }
+        }
+      }
+
+      customTabs.value = [];
+      customTabContents.value = {};
+      if (window.Expedition?.Popup?.tabs) {
+        const doctype = newVal.properties?._doctype;
+        const tabHooks = window.Expedition.Popup.tabs[doctype] || [];
+        for (const t of tabHooks) {
+          const tabObj = { id: t.id, title: t.title, count: null };
+          customTabs.value.push(tabObj);
+          try {
+            const res = await t.renderFn(newVal);
+            if (res && typeof res === "object") {
+              if (res.html) customTabContents.value[t.id] = res.html;
+              if (res.count !== undefined) tabObj.count = res.count;
+            } else {
+              if (res) customTabContents.value[t.id] = res;
+            }
+          } catch (e) {
+            console.error("[expedition] Popup tab error:", e);
+          }
+        }
+      }
+    } else {
+      window.dispatchEvent(new CustomEvent("expedition:feature-deselected"));
+      customHtmls.value = "";
+      customTabs.value = [];
+      customTabContents.value = {};
+    }
+  },
+  { immediate: true },
+);
+
+function close() {
+  ui.selectedFeature = null;
+}
+function onKey(e) {
+  if (e.key === "Escape" && feature.value) close();
+}
 
 const customActions = computed(() => {
-  const list = window.Expedition?.Actions?.list?.() || []
+  const list = window.Expedition?.Actions?.list?.() || [];
   return list.filter((act) => {
-    const type = act.type || 'popup'
-    if (sourceDoctype.value === 'Expedition Zone') {
-      return type === 'zone'
+    const type = act.type || "popup";
+    if (sourceDoctype.value === "Expedition Zone") {
+      return type === "zone";
     } else {
-      if (type !== 'popup') return false
-      if (act.doctype && act.doctype !== sourceDoctype.value) return false
-      if (typeof act.visible === 'function') {
-        try { return act.visible(feature.value) } catch (e) { return false }
+      if (type !== "popup") return false;
+      if (act.doctype && act.doctype !== sourceDoctype.value) return false;
+      if (typeof act.visible === "function") {
+        try {
+          return act.visible(feature.value);
+        } catch (e) {
+          return false;
+        }
       }
-      return true
+      return true;
     }
-  })
-})
+  });
+});
 
-const customActionsBusy = ref(false)
+const customActionsBusy = ref(false);
 
 async function runCustomAction(act) {
-  if (customActionsBusy.value) return
-  customActionsBusy.value = true
-  actionError.value = ''
+  if (customActionsBusy.value) return;
+  customActionsBusy.value = true;
+  actionError.value = "";
   try {
-    if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = ui.selectedZone
-      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
-      await act.action(zoneDoc, features)
+    if (sourceDoctype.value === "Expedition Zone") {
+      const zoneDoc = ui.selectedZone;
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || [];
+      await act.action(zoneDoc, features);
     } else {
-      await act.action(feature.value)
+      await act.action(feature.value);
     }
   } catch (e) {
-    actionError.value = e.message || String(e)
-    console.error(`[expedition] Custom action ${act.id} failed`, e)
+    actionError.value = e.message || String(e);
+    console.error(`[expedition] Custom action ${act.id} failed`, e);
   } finally {
-    customActionsBusy.value = false
+    customActionsBusy.value = false;
   }
 }
 
 function togglePinStylePanel() {
-  showPinStylePanel.value = !showPinStylePanel.value
+  showPinStylePanel.value = !showPinStylePanel.value;
   if (showPinStylePanel.value) {
-    pinStyleColor.value = feature.value?.properties?.color || '#F59E0B'
-    pinStyleIcon.value = feature.value?.properties?.icon || 'pin-marker'
-    showTodoPanel.value = false
-    showAssignPanel.value = false
-    iconStore.loadIcons().catch(() => {})
+    pinStyleColor.value = feature.value?.properties?.color || "#F59E0B";
+    pinStyleIcon.value = feature.value?.properties?.icon || "pin-marker";
+    showTodoPanel.value = false;
+    showAssignPanel.value = false;
+    iconStore.loadIcons().catch(() => {});
   }
 }
 
 async function savePinStyle() {
-  const mapName = mapStore.activeMap?.map?.name
-  const pinName = sourceName.value
-  if (!mapName || !pinName) return
-  pinStyleBusy.value = true
-  actionError.value = ''
+  const mapName = mapStore.activeMap?.map?.name;
+  const pinName = sourceName.value;
+  if (!mapName || !pinName) return;
+  pinStyleBusy.value = true;
+  actionError.value = "";
   try {
     const updated = await pinsStore.updatePin(mapName, pinName, {
       color: pinStyleColor.value,
       icon: pinStyleIcon.value,
-    })
+    });
     if (feature.value?.properties) {
-      feature.value.properties.color = updated.color || pinStyleColor.value
-      feature.value.properties.icon = updated.icon || pinStyleIcon.value
+      feature.value.properties.color = updated.color || pinStyleColor.value;
+      feature.value.properties.icon = updated.icon || pinStyleIcon.value;
     }
-    showPinStylePanel.value = false
+    showPinStylePanel.value = false;
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    pinStyleBusy.value = false
+    pinStyleBusy.value = false;
   }
 }
 
 async function uploadPinIconFromEvent(event) {
-  const file = event.target?.files?.[0]
-  if (!file) return
-  pinIconBusy.value = true
-  actionError.value = ''
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  pinIconBusy.value = true;
+  actionError.value = "";
   try {
     const imageDataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
     const icon = await iconStore.uploadIcon({
-      title: pinUploadTitle.value || file.name.replace(/\.[^.]+$/, ''),
+      title: pinUploadTitle.value || file.name.replace(/\.[^.]+$/, ""),
       scope: pinUploadScope.value,
       imageDataUrl,
-    })
-    pinStyleIcon.value = icon.key
-    pinUploadTitle.value = ''
+    });
+    pinStyleIcon.value = icon.key;
+    pinUploadTitle.value = "";
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    pinIconBusy.value = false
-    if (event.target) event.target.value = ''
+    pinIconBusy.value = false;
+    if (event.target) event.target.value = "";
   }
 }
 
 async function deleteManualPin() {
-  const mapName = mapStore.activeMap?.map?.name
-  const pinName = sourceName.value
-  if (!mapName || !pinName) return
+  const mapName = mapStore.activeMap?.map?.name;
+  const pinName = sourceName.value;
+  if (!mapName || !pinName) return;
   const ok = await ui.ask({
-    title: 'Delete pin?',
-    body: 'This custom pin will be removed from the map.',
-    confirmLabel: 'Delete',
+    title: "Delete pin?",
+    body: "This custom pin will be removed from the map.",
+    confirmLabel: "Delete",
     destructive: true,
-  })
-  if (!ok) return
-  pinDeleteBusy.value = true
-  actionError.value = ''
+  });
+  if (!ok) return;
+  pinDeleteBusy.value = true;
+  actionError.value = "";
   try {
-    await pinsStore.deletePin(mapName, pinName)
-    close()
+    await pinsStore.deletePin(mapName, pinName);
+    close();
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    pinDeleteBusy.value = false
+    pinDeleteBusy.value = false;
   }
 }
 
-const zoneLoading = ref(false)
-const zoneError = ref('')
-const zoneMetrics = ref(null)
+const zoneLoading = ref(false);
+const zoneError = ref("");
+const zoneMetrics = ref(null);
 
 watch(feature, async (newVal) => {
-  if (newVal && newVal.properties && newVal.properties._doctype === 'Expedition Zone') {
-    zoneLoading.value = true
-    zoneError.value = ''
-    zoneMetrics.value = null
+  if (
+    newVal &&
+    newVal.properties &&
+    newVal.properties._doctype === "Expedition Zone"
+  ) {
+    zoneLoading.value = true;
+    zoneError.value = "";
+    zoneMetrics.value = null;
     try {
-      zoneMetrics.value = await call('expedition.api.metric.summarize_zone', {
-        zone_name: newVal.properties._name
-      })
+      zoneMetrics.value = await call("expedition.api.metric.summarize_zone", {
+        zone_name: newVal.properties._name,
+      });
     } catch (e) {
-      zoneError.value = e.message || String(e)
+      zoneError.value = e.message || String(e);
     } finally {
-      zoneLoading.value = false
+      zoneLoading.value = false;
     }
   } else {
-    zoneMetrics.value = null
+    zoneMetrics.value = null;
   }
-})
+});
 
 function recompute() {
-  const sel = ui.selectedFeature
-  if (!sel || !sel._lngLat) { screen.value = null; return }
-  const m = window.expeditionMap?.getMap?.()
-  if (!m) return
-  const p = m.project([sel._lngLat.lng, sel._lngLat.lat])
+  const sel = ui.selectedFeature;
+  if (!sel || !sel._lngLat) {
+    screen.value = null;
+    return;
+  }
+  const m = window.expeditionMap?.getMap?.();
+  if (!m) return;
+  const p = m.project([sel._lngLat.lng, sel._lngLat.lat]);
   // p is in CSS pixels relative to the map container, which is the
   // viewport (.expedition has fixed inset: 0).
-  const w = 360
-  const margin = 12
-  const cardH = measuredH.value || 220
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const w = 360;
+  const margin = 12;
+  const cardH = measuredH.value || 220;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   // Default: card opens to the right of the pin.
-  let openRight = true
-  let left = p.x + 16
+  let openRight = true;
+  let left = p.x + 16;
   if (left + w + margin > vw) {
     // Flip to the left side of the pin.
-    openRight = false
-    left = p.x - w - 16
+    openRight = false;
+    left = p.x - w - 16;
     if (left < margin) {
       // Pin is too close to both edges — dock to the side that has
       // more room.
       if (p.x < vw / 2) {
-        openRight = true
-        left = Math.max(margin, p.x + 16)
+        openRight = true;
+        left = Math.max(margin, p.x + 16);
       } else {
-        openRight = false
-        left = Math.min(vw - w - margin, p.x - w - 16)
+        openRight = false;
+        left = Math.min(vw - w - margin, p.x - w - 16);
       }
     }
   }
-  let top = p.y - 24
+  let top = p.y - 24;
   // Clamp vertically so the card never clips top/bottom. Allow the
   // user to scroll inside the card if its content is taller.
-  top = Math.max(margin, Math.min(top, vh - cardH - margin))
-  edge.value = openRight ? 'left' : 'right'
-  screen.value = { top, left }
+  top = Math.max(margin, Math.min(top, vh - cardH - margin));
+  edge.value = openRight ? "left" : "right";
+  screen.value = { top, left };
 }
 
 // After the card mounts, measure its real height and clamp again.
-const measuredH = ref(0)
+const measuredH = ref(0);
 function measure() {
-  if (!cardEl.value) return
-  const h = cardEl.value.offsetHeight
+  if (!cardEl.value) return;
+  const h = cardEl.value.offsetHeight;
   if (h !== measuredH.value) {
-    measuredH.value = h
-    recompute()
+    measuredH.value = h;
+    recompute();
   }
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', onKey)
-  await nextTick()
-  measure()
-  recompute()
-  const m = window.expeditionMap?.getMap?.()
+  window.addEventListener("keydown", onKey);
+  await nextTick();
+  measure();
+  recompute();
+  const m = window.expeditionMap?.getMap?.();
   if (m) {
-    m.on('move', recompute)
-    m.on('moveend', recompute)
-    m.on('zoom', recompute)
-    m.on('zoomend', recompute)
+    m.on("move", recompute);
+    m.on("moveend", recompute);
+    m.on("zoom", recompute);
+    m.on("zoomend", recompute);
   }
-})
+});
 onBeforeUnmount(() => {
-  if (userSearchTimer) window.clearTimeout(userSearchTimer)
-  window.removeEventListener('keydown', onKey)
-  const m = window.expeditionMap?.getMap?.()
+  if (userSearchTimer) window.clearTimeout(userSearchTimer);
+  window.removeEventListener("keydown", onKey);
+  const m = window.expeditionMap?.getMap?.();
   if (m) {
-    m.off('move', recompute)
-    m.off('moveend', recompute)
-    m.off('zoom', recompute)
-    m.off('zoomend', recompute)
+    m.off("move", recompute);
+    m.off("moveend", recompute);
+    m.off("zoom", recompute);
+    m.off("zoomend", recompute);
   }
-})
+});
 
 watch(feature, async (v) => {
   if (v) {
-    await nextTick()
-    measure()
-    recompute()
-    const firstAssignable = assignmentOptionsForLayer(v.layer)[0]
-    assignField.value = firstAssignable?.fieldname || ''
-    assignUser.value = assignField.value && assignField.value !== '__frappe_assign'
-      ? v.properties?.[assignField.value] || defaultAssignUser()
-      : defaultAssignUser()
-    userOptions.value = []
-    userSearchOpen.value = false
-    assignFieldOpen.value = false
-    actionError.value = ''
-    todoCreated.value = ''
-    commentCount.value = 0
-    activeTab.value = v.properties?._doctype === 'Expedition Location'
-      ? 'location-summary'
-      : 'details'
-    fieldSearch.value = ''
-    showMoreFields.value = false
-    showAssignPanel.value = false
-    showTodoPanel.value = false
-    if (v.properties?._doctype === 'Expedition Location') {
-      history.value = []
-      aggregate.value = null
-      linkedRecords.value = []
+    await nextTick();
+    measure();
+    recompute();
+    const firstAssignable = assignmentOptionsForLayer(v.layer)[0];
+    assignField.value = firstAssignable?.fieldname || "";
+    assignUser.value =
+      assignField.value && assignField.value !== "__frappe_assign"
+        ? v.properties?.[assignField.value] || defaultAssignUser()
+        : defaultAssignUser();
+    userOptions.value = [];
+    userSearchOpen.value = false;
+    assignFieldOpen.value = false;
+    actionError.value = "";
+    todoCreated.value = "";
+    commentCount.value = 0;
+    activeTab.value =
+      v.properties?._doctype === "Expedition Location"
+        ? "location-summary"
+        : "details";
+    fieldSearch.value = "";
+    showMoreFields.value = false;
+    showAssignPanel.value = false;
+    showTodoPanel.value = false;
+    if (v.properties?._doctype === "Expedition Location") {
+      history.value = [];
+      aggregate.value = null;
+      linkedRecords.value = [];
     } else {
-      loadHistory()
-      loadLinkedRecords()
+      loadHistory();
+      loadLinkedRecords();
     }
   } else {
-    screen.value = null
-    history.value = []
-    linkedRecords.value = []
-    linkedRecordsError.value = ''
-    actionError.value = ''
-    todoCreated.value = ''
-    showTodoPanel.value = false
+    screen.value = null;
+    history.value = [];
+    linkedRecords.value = [];
+    linkedRecordsError.value = "";
+    actionError.value = "";
+    todoCreated.value = "";
+    showTodoPanel.value = false;
   }
-})
+});
 
 watch([activeTab, linkedRecordsLoading], async () => {
-  await nextTick()
-  measure()
-})
+  await nextTick();
+  measure();
+});
 
 watch(assignField, () => {
-  const current = feature.value?.properties?.[assignField.value]
-  assignUser.value = assignField.value && assignField.value !== '__frappe_assign'
-    ? current || defaultAssignUser()
-    : defaultAssignUser()
-  userOptions.value = []
-  userSearchOpen.value = false
-  assignFieldOpen.value = false
-})
+  const current = feature.value?.properties?.[assignField.value];
+  assignUser.value =
+    assignField.value && assignField.value !== "__frappe_assign"
+      ? current || defaultAssignUser()
+      : defaultAssignUser();
+  userOptions.value = [];
+  userSearchOpen.value = false;
+  assignFieldOpen.value = false;
+});
 
 const title = computed(() => {
-  const f = feature.value
-  if (!f) return ''
-  if (f.properties._group_label) return f.properties._group_label
+  const f = feature.value;
+  if (!f) return "";
+  if (f.properties._group_label) return f.properties._group_label;
   // Per-group override label takes precedence
-  const gv = f.properties._group_value
-  const cfg = (f.layer && f.layer.group_config) || {}
-  const override = (gv != null && cfg[String(gv)]) || null
-  if (override && override.label) return override.label
-  return f.properties._label || f.properties.name || f.properties._name || '(untitled)'
-})
+  const gv = f.properties._group_value;
+  const cfg = (f.layer && f.layer.group_config) || {};
+  const override = (gv != null && cfg[String(gv)]) || null;
+  if (override && override.label) return override.label;
+  return (
+    f.properties._label ||
+    f.properties.name ||
+    f.properties._name ||
+    "(untitled)"
+  );
+});
 const subtitle = computed(() => {
-  const f = feature.value
-  if (!f) return ''
+  const f = feature.value;
+  if (!f) return "";
   if (isLocationAggregate.value) {
-    const count = Number(f.properties?._location_count) || locationAggregateRecords.value.length
-    return `${count} records at this location`
+    const count =
+      Number(f.properties?._location_count) ||
+      locationAggregateRecords.value.length;
+    return `${count} records at this location`;
   }
-  const layer = f.layer || {}
-  const src = f.properties._doctype
-  const lname = layer.title || layer.name
-  if (src && lname) return `${lname} · ${src}`
-  return lname || src || ''
-})
+  const layer = f.layer || {};
+  const src = f.properties._doctype;
+  const lname = layer.title || layer.name;
+  if (src && lname) return `${lname} · ${src}`;
+  return lname || src || "";
+});
 const propRows = computed(() => {
-  const f = feature.value
-  if (!f) return []
-  const skip = new Set(['idx', 'lft', 'rgt', 'old_parent', 'docstatus'])
-  const rows = []
+  const f = feature.value;
+  if (!f) return [];
+  const skip = new Set(["idx", "lft", "rgt", "old_parent", "docstatus"]);
+  const rows = [];
   for (const [k, v] of Object.entries(f.properties || {})) {
-    if (skip.has(k)) continue
-    if (String(k).startsWith('_')) continue
-    if (v === null || v === undefined || v === '') continue
-    rows.push([k, v])
+    if (skip.has(k)) continue;
+    if (String(k).startsWith("_")) continue;
+    if (v === null || v === undefined || v === "") continue;
+    rows.push([k, v]);
   }
   // If the layer configured explicit popup_fields, use those first.
-  const explicit = f.properties._popup_fields
+  const explicit = f.properties._popup_fields;
   if (Array.isArray(explicit) && explicit.length) {
-    const out = []
+    const out = [];
     for (const fn of explicit) {
-      if (f.properties[fn] != null && f.properties[fn] !== '') {
-        out.push([fn, f.properties[fn]])
+      if (f.properties[fn] != null && f.properties[fn] !== "") {
+        out.push([fn, f.properties[fn]]);
       }
     }
-    return out
+    return out;
   }
-  return rows
-})
-const fieldLabels = computed(() => layer.value.field_labels || {})
-const SYSTEM_ASSIGNMENT_FIELDS = new Set(['owner', 'modified_by', 'creation', 'modified'])
+  return rows;
+});
+const fieldLabels = computed(() => layer.value.field_labels || {});
+const SYSTEM_ASSIGNMENT_FIELDS = new Set([
+  "owner",
+  "modified_by",
+  "creation",
+  "modified",
+]);
 
 function assignmentOptionsForLayer(layerMeta) {
-  const userLinkFields = (layerMeta?.assignment_fields || []).filter((field) =>
-    field?.fieldname && !SYSTEM_ASSIGNMENT_FIELDS.has(field.fieldname)
-  )
+  const userLinkFields = (layerMeta?.assignment_fields || []).filter(
+    (field) =>
+      field?.fieldname && !SYSTEM_ASSIGNMENT_FIELDS.has(field.fieldname),
+  );
   return [
     {
-      fieldname: '__frappe_assign',
-      label: 'Assign To',
-      fieldtype: 'Assignment',
-      options: 'User',
+      fieldname: "__frappe_assign",
+      label: "Assign To",
+      fieldtype: "Assignment",
+      options: "User",
       standard: true,
     },
     ...userLinkFields,
-  ]
+  ];
 }
 
-const assignmentFields = computed(() => assignmentOptionsForLayer(layer.value))
-const selectedAssignment = computed(() =>
-  assignmentFields.value.find((f) => f.fieldname === assignField.value) || assignmentFields.value[0] || null
-)
+const assignmentFields = computed(() => assignmentOptionsForLayer(layer.value));
+const selectedAssignment = computed(
+  () =>
+    assignmentFields.value.find((f) => f.fieldname === assignField.value) ||
+    assignmentFields.value[0] ||
+    null,
+);
 const currentAssignmentValue = computed(() => {
-  const fieldname = selectedAssignment.value?.fieldname
-  if (!fieldname || fieldname === '__frappe_assign') return ''
-  return feature.value?.properties?.[fieldname] || ''
-})
+  const fieldname = selectedAssignment.value?.fieldname;
+  if (!fieldname || fieldname === "__frappe_assign") return "";
+  return feature.value?.properties?.[fieldname] || "";
+});
 
 function labelFor(fieldname) {
-  return fieldLabels.value[fieldname] || fieldname
+  return fieldLabels.value[fieldname] || fieldname;
 }
 
 function defaultAssignUser() {
-  const user = (window.expeditionSession?.user || '').trim()
-  return user && user !== 'Administrator' ? user : ''
+  const user = (window.expeditionSession?.user || "").trim();
+  return user && user !== "Administrator" ? user : "";
 }
 
 function chooseAssignField(fieldname) {
-  assignField.value = fieldname || ''
-  assignFieldOpen.value = false
+  assignField.value = fieldname || "";
+  assignFieldOpen.value = false;
 }
 
 function rowObject([fieldname, value]) {
@@ -573,128 +644,146 @@ function rowObject([fieldname, value]) {
     label: labelFor(fieldname),
     value,
     formatted: formatValue(value),
-  }
+  };
 }
 
 function classifyField(row) {
-  const key = String(row.fieldname || '').toLowerCase()
-  const label = String(row.label || '').toLowerCase()
-  const haystack = `${key} ${label}`
-  if (haystack.match(/phone|mobile|email|contact|whatsapp/)) return 'Contact'
-  if (haystack.match(/address|city|state|country|territory|pincode|postal|zip/)) return 'Location'
-  if (haystack.match(/date|time|created|modified|last|next|due/)) return 'Dates'
-  if (typeof row.value === 'number' || haystack.match(/amount|total|limit|balance|outstanding|qty|quantity|count|rate|price|value/)) return 'Business'
-  return 'Other'
+  const key = String(row.fieldname || "").toLowerCase();
+  const label = String(row.label || "").toLowerCase();
+  const haystack = `${key} ${label}`;
+  if (haystack.match(/phone|mobile|email|contact|whatsapp/)) return "Contact";
+  if (haystack.match(/address|city|state|country|territory|pincode|postal|zip/))
+    return "Location";
+  if (haystack.match(/date|time|created|modified|last|next|due/))
+    return "Dates";
+  if (
+    typeof row.value === "number" ||
+    haystack.match(
+      /amount|total|limit|balance|outstanding|qty|quantity|count|rate|price|value/,
+    )
+  )
+    return "Business";
+  return "Other";
 }
 
-const allRows = computed(() => propRows.value.map(rowObject))
+const allRows = computed(() => propRows.value.map(rowObject));
 const metricRows = computed(() => {
-  const f = feature.value
-  const metrics = f?.properties?._metrics
-  if (!metrics || typeof metrics !== 'object') return []
-  const configured = Array.isArray(layer.value.linked_metrics) ? layer.value.linked_metrics : []
-  const rows = []
-  const seen = new Set()
+  const f = feature.value;
+  const metrics = f?.properties?._metrics;
+  if (!metrics || typeof metrics !== "object") return [];
+  const configured = Array.isArray(layer.value.linked_metrics)
+    ? layer.value.linked_metrics
+    : [];
+  const rows = [];
+  const seen = new Set();
   for (const metric of configured) {
-    const key = metric?.key
-    if (!key || metrics[key] == null || metrics[key] === '') continue
-    seen.add(key)
+    const key = metric?.key;
+    if (!key || metrics[key] == null || metrics[key] === "") continue;
+    seen.add(key);
     rows.push({
       key,
       label: metric.label || key,
       value: metrics[key],
       formatted: formatValue(metrics[key]),
-    })
+    });
   }
   for (const [key, value] of Object.entries(metrics)) {
-    if (seen.has(key) || value == null || value === '') continue
+    if (seen.has(key) || value == null || value === "") continue;
     rows.push({
       key,
-      label: key.replace(/_/g, ' '),
+      label: key.replace(/_/g, " "),
       value,
       formatted: formatValue(value),
-    })
+    });
   }
-  return rows
-})
+  return rows;
+});
 const locationRows = computed(() => {
-  const f = feature.value
-  const location = f?.properties?._location
-  if (!location || typeof location !== 'object') return []
+  const f = feature.value;
+  const location = f?.properties?._location;
+  if (!location || typeof location !== "object") return [];
   return Object.entries(location)
-    .filter(([key, value]) =>
-      key !== 'name' &&
-      value != null &&
-      value !== '' &&
-      typeof value !== 'object'
+    .filter(
+      ([key, value]) =>
+        key !== "name" &&
+        value != null &&
+        value !== "" &&
+        typeof value !== "object",
     )
     .map(([key, value]) => ({
       key,
-      label: key.replace(/_/g, ' '),
+      label: key.replace(/_/g, " "),
       value,
       formatted: formatValue(value),
-    }))
-})
-const primaryRows = computed(() => allRows.value.slice(0, 4))
-const secondaryRows = computed(() => allRows.value.slice(4))
+    }));
+});
+const primaryRows = computed(() => allRows.value.slice(0, 4));
+const secondaryRows = computed(() => allRows.value.slice(4));
 const filteredSecondaryRows = computed(() => {
-  const q = fieldSearch.value.trim().toLowerCase()
-  if (!q) return secondaryRows.value
+  const q = fieldSearch.value.trim().toLowerCase();
+  if (!q) return secondaryRows.value;
   return secondaryRows.value.filter((row) =>
-    `${row.fieldname} ${row.label} ${row.formatted}`.toLowerCase().includes(q)
-  )
-})
+    `${row.fieldname} ${row.label} ${row.formatted}`.toLowerCase().includes(q),
+  );
+});
 const groupedRows = computed(() => {
-  const groups = []
-  const byName = new Map()
+  const groups = [];
+  const byName = new Map();
   for (const row of filteredSecondaryRows.value) {
-    const groupName = classifyField(row)
+    const groupName = classifyField(row);
     if (!byName.has(groupName)) {
-      const group = { name: groupName, rows: [] }
-      byName.set(groupName, group)
-      groups.push(group)
+      const group = { name: groupName, rows: [] };
+      byName.set(groupName, group);
+      groups.push(group);
     }
-    byName.get(groupName).rows.push(row)
+    byName.get(groupName).rows.push(row);
   }
-  return groups
-})
-const visibleGroups = computed(() => showMoreFields.value || fieldSearch.value.trim()
-  ? groupedRows.value
-  : groupedRows.value.slice(0, 2)
-)
+  return groups;
+});
+const visibleGroups = computed(() =>
+  showMoreFields.value || fieldSearch.value.trim()
+    ? groupedRows.value
+    : groupedRows.value.slice(0, 2),
+);
 const hiddenFieldCount = computed(() => {
-  const visible = visibleGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
-  return Math.max(0, filteredSecondaryRows.value.length - visible)
-})
+  const visible = visibleGroups.value.reduce(
+    (sum, group) => sum + group.rows.length,
+    0,
+  );
+  return Math.max(0, filteredSecondaryRows.value.length - visible);
+});
 const locationAggregateRecords = computed(() => {
-  const records = feature.value?.properties?._location_features
-  return Array.isArray(records) ? records : []
-})
+  const records = feature.value?.properties?._location_features;
+  return Array.isArray(records) ? records : [];
+});
 
 function aggregateDoctypeLabel(doctype, singular = false) {
-  const key = String(doctype || '')
-  const lower = key.toLowerCase()
-  if (key === 'Serial No') return singular ? 'Product' : 'Products'
-  if (key === 'Issue') return singular ? 'Issue' : 'Issues'
-  if (lower.includes('invoice') || lower.includes('payment')) return singular ? 'Payment' : 'Payments'
-  return key ? (singular ? key : `${key}s`) : (singular ? 'Record' : 'Records')
+  const key = String(doctype || "");
+  const lower = key.toLowerCase();
+  if (key === "Serial No") return singular ? "Product" : "Products";
+  if (key === "Issue") return singular ? "Issue" : "Issues";
+  if (lower.includes("invoice") || lower.includes("payment"))
+    return singular ? "Payment" : "Payments";
+  return key ? (singular ? key : `${key}s`) : singular ? "Record" : "Records";
 }
 
 function aggregateRecordTitle(record) {
-  const p = record?.properties || {}
-  return p.subject
-    || p.item_name
-    || p.item_code
-    || p.customer_name
-    || p.customer
-    || p._label
-    || p.name
-    || p._name
-    || 'Untitled'
+  const p = record?.properties || {};
+  return (
+    p.subject ||
+    p.item_name ||
+    p.item_code ||
+    p.customer_name ||
+    p.customer ||
+    p._label ||
+    p.name ||
+    p._name ||
+    "Untitled"
+  );
 }
 
 function aggregateRecordMeta(record) {
-  const p = record?.properties || {}
+  const p = record?.properties || {};
   const values = [
     p.serial_no,
     p.status,
@@ -703,88 +792,110 @@ function aggregateRecordMeta(record) {
     p.outstanding_amount != null ? formatValue(p.outstanding_amount) : null,
     p.due_date,
     p.posting_date,
-  ].filter((value) => value != null && value !== '')
-  return values.slice(0, 3).join(' · ')
+  ].filter((value) => value != null && value !== "");
+  return values.slice(0, 3).join(" · ");
 }
 
 function paymentAmount(record) {
-  const p = record?.properties || {}
-  const value = p.outstanding_amount
-    ?? p.unpaid_amount
-    ?? p.pending_amount
-    ?? p.grand_total
-    ?? p.rounded_total
-  const amount = Number(value)
-  return Number.isFinite(amount) ? amount : 0
+  const p = record?.properties || {};
+  const value =
+    p.outstanding_amount ??
+    p.unpaid_amount ??
+    p.pending_amount ??
+    p.grand_total ??
+    p.rounded_total;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
 }
 
 function isPaymentRecord(record) {
-  const doctype = String(record?.properties?._doctype || '').toLowerCase()
-  return doctype.includes('invoice') || doctype.includes('payment')
+  const doctype = String(record?.properties?._doctype || "").toLowerCase();
+  return doctype.includes("invoice") || doctype.includes("payment");
 }
 
 function isOpenIssueRecord(record) {
-  if (record?.properties?._doctype !== 'Issue') return false
-  const status = String(record.properties?.status || '').toLowerCase()
-  return !['closed', 'resolved'].includes(status)
+  if (record?.properties?._doctype !== "Issue") return false;
+  const status = String(record.properties?.status || "").toLowerCase();
+  return !["closed", "resolved"].includes(status);
 }
 
 function isOverduePaymentRecord(record) {
-  if (!isPaymentRecord(record)) return false
-  const status = String(record.properties?.status || '').toLowerCase()
-  return status.includes('overdue') || status.includes('unpaid') || status.includes('pending') || paymentAmount(record) > 0
+  if (!isPaymentRecord(record)) return false;
+  const status = String(record.properties?.status || "").toLowerCase();
+  return (
+    status.includes("overdue") ||
+    status.includes("unpaid") ||
+    status.includes("pending") ||
+    paymentAmount(record) > 0
+  );
 }
 
 const locationSummaryMetrics = computed(() => {
-  const records = locationAggregateRecords.value
-  const products = records.filter((record) => record?.properties?._doctype === 'Serial No')
-  const issues = records.filter(isOpenIssueRecord)
-  const payments = records.filter(isOverduePaymentRecord)
-  const outstanding = payments.reduce((sum, record) => sum + paymentAmount(record), 0)
+  const records = locationAggregateRecords.value;
+  const products = records.filter(
+    (record) => record?.properties?._doctype === "Serial No",
+  );
+  const issues = records.filter(isOpenIssueRecord);
+  const payments = records.filter(isOverduePaymentRecord);
+  const outstanding = payments.reduce(
+    (sum, record) => sum + paymentAmount(record),
+    0,
+  );
   return [
-    { key: 'products', label: 'Products', value: products.length },
-    { key: 'issues', label: 'Open Issues', value: issues.length },
-    { key: 'payments', label: 'Overdue', value: payments.length },
-    { key: 'outstanding', label: 'Outstanding', value: outstanding ? formatValue(outstanding) : '0' },
-  ]
-})
+    { key: "products", label: "Products", value: products.length },
+    { key: "issues", label: "Open Issues", value: issues.length },
+    { key: "payments", label: "Overdue", value: payments.length },
+    {
+      key: "outstanding",
+      label: "Outstanding",
+      value: outstanding ? formatValue(outstanding) : "0",
+    },
+  ];
+});
 
 function summaryGroupField(record) {
-  const p = record?.properties || {}
-  if (p._doctype === 'Serial No') return p.item_name || p.item_code || 'Installed Product'
-  if (p._doctype === 'Issue') return p.status || 'Issue'
-  if (isPaymentRecord(record)) return p.status || 'Payment'
-  return p._doctype || 'Record'
+  const p = record?.properties || {};
+  if (p._doctype === "Serial No")
+    return p.item_name || p.item_code || "Installed Product";
+  if (p._doctype === "Issue") return p.status || "Issue";
+  if (isPaymentRecord(record)) return p.status || "Payment";
+  return p._doctype || "Record";
 }
 
 const locationSummaryGroups = computed(() => {
-  const byType = new Map()
+  const byType = new Map();
   for (const record of locationAggregateRecords.value) {
-    const doctype = record?.properties?._doctype || 'Record'
-    const label = aggregateDoctypeLabel(doctype)
-    if (!byType.has(label)) byType.set(label, new Map())
-    const rows = byType.get(label)
-    const key = summaryGroupField(record)
-    rows.set(key, (rows.get(key) || 0) + 1)
+    const doctype = record?.properties?._doctype || "Record";
+    const label = aggregateDoctypeLabel(doctype);
+    if (!byType.has(label)) byType.set(label, new Map());
+    const rows = byType.get(label);
+    const key = summaryGroupField(record);
+    rows.set(key, (rows.get(key) || 0) + 1);
   }
   return Array.from(byType.entries()).map(([title, rows]) => ({
     title,
-    rows: Array.from(rows.entries()).map(([label, count]) => ({ label, count })),
-  }))
-})
+    rows: Array.from(rows.entries()).map(([label, count]) => ({
+      label,
+      count,
+    })),
+  }));
+});
 
 function recordCoordinates(record) {
-  const coords = record?.geometry?.type === 'Point' ? record.geometry.coordinates : null
-  if (Array.isArray(coords) && coords.length >= 2) return { lng: coords[0], lat: coords[1] }
-  return feature.value?._lngLat || null
+  const coords =
+    record?.geometry?.type === "Point" ? record.geometry.coordinates : null;
+  if (Array.isArray(coords) && coords.length >= 2)
+    return { lng: coords[0], lat: coords[1] };
+  return feature.value?._lngLat || null;
 }
 
 function selectStackRecord(index) {
-  const records = stackContext.value?.records || locationAggregateRecords.value
-  const locationFeature = stackContext.value?.locationFeature || feature.value
-  if (!Array.isArray(records) || !records.length) return
-  const nextIndex = ((index % records.length) + records.length) % records.length
-  const record = records[nextIndex]
+  const records = stackContext.value?.records || locationAggregateRecords.value;
+  const locationFeature = stackContext.value?.locationFeature || feature.value;
+  if (!Array.isArray(records) || !records.length) return;
+  const nextIndex =
+    ((index % records.length) + records.length) % records.length;
+  const record = records[nextIndex];
   ui.selectedFeature = {
     layer: record.layer || { name: record.layerName },
     properties: record.properties || {},
@@ -795,678 +906,773 @@ function selectStackRecord(index) {
       records,
       index: nextIndex,
     },
-  }
+  };
 }
 
 function openAggregateRecord(record) {
-  const index = locationAggregateRecords.value.indexOf(record)
-  if (index >= 0) selectStackRecord(index)
+  const index = locationAggregateRecords.value.indexOf(record);
+  if (index >= 0) selectStackRecord(index);
 }
 
 function backToLocation() {
-  const locationFeature = stackContext.value?.locationFeature
-  if (locationFeature) ui.selectedFeature = locationFeature
+  const locationFeature = stackContext.value?.locationFeature;
+  if (locationFeature) ui.selectedFeature = locationFeature;
 }
 
 function previousStackRecord() {
-  selectStackRecord(Number(stackContext.value?.index || 0) - 1)
+  selectStackRecord(Number(stackContext.value?.index || 0) - 1);
 }
 
 function nextStackRecord() {
-  selectStackRecord(Number(stackContext.value?.index || 0) + 1)
+  selectStackRecord(Number(stackContext.value?.index || 0) + 1);
 }
 
 const linkedRecordGroups = computed(() => {
-  const map = {}
+  const map = {};
   for (const group of linkedRecords.value || []) {
-    if (!Array.isArray(group.rows) || !group.rows.length) continue
-    const dt = group.source_doctype || 'Unknown'
+    if (!Array.isArray(group.rows) || !group.rows.length) continue;
+    const dt = group.source_doctype || "Unknown";
     if (!map[dt]) {
       map[dt] = {
-        key: 'merged-' + dt,
+        key: "merged-" + dt,
         label: dt,
         source_doctype: dt,
         suggested: false,
         summary: { totals: [], statuses: [], row_count: 0 },
         rows: [],
         fields: group.fields || [],
-        field: group.field
-      }
+        field: group.field,
+      };
     }
-    const merged = map[dt]
-    if (group.suggested) merged.suggested = true
-    merged.summary.row_count = Math.max(merged.summary.row_count, group.summary?.row_count || 0)
+    const merged = map[dt];
+    if (group.suggested) merged.suggested = true;
+    merged.summary.row_count = Math.max(
+      merged.summary.row_count,
+      group.summary?.row_count || 0,
+    );
 
-    const serverTotals = Array.isArray(group.summary?.totals) ? group.summary.totals : []
+    const serverTotals = Array.isArray(group.summary?.totals)
+      ? group.summary.totals
+      : [];
     for (const st of serverTotals) {
-      if (!merged.summary.totals.find(t => t.field === st.field && t.label === st.label)) {
-        merged.summary.totals.push({ ...st })
+      if (
+        !merged.summary.totals.find(
+          (t) => t.field === st.field && t.label === st.label,
+        )
+      ) {
+        merged.summary.totals.push({ ...st });
       }
     }
 
-    const serverStatuses = Array.isArray(group.summary?.statuses) ? group.summary.statuses : []
+    const serverStatuses = Array.isArray(group.summary?.statuses)
+      ? group.summary.statuses
+      : [];
     for (const st of serverStatuses) {
-      const existing = merged.summary.statuses.find(s => s.label === st.label)
+      const existing = merged.summary.statuses.find(
+        (s) => s.label === st.label,
+      );
       if (existing) {
-        existing.count = Math.max(existing.count, st.count)
+        existing.count = Math.max(existing.count, st.count);
       } else {
-        merged.summary.statuses.push({ ...st })
+        merged.summary.statuses.push({ ...st });
       }
     }
 
-    const rows = Array.isArray(group.rows) ? group.rows : []
+    const rows = Array.isArray(group.rows) ? group.rows : [];
     for (const r of rows) {
-      if (!merged.rows.find(existing => existing.name === r.name)) {
-        merged.rows.push(r)
+      if (!merged.rows.find((existing) => existing.name === r.name)) {
+        merged.rows.push(r);
       }
     }
   }
-  return Object.values(map)
-})
+  return Object.values(map);
+});
 const linkedRecordCount = computed(() =>
-  linkedRecordGroups.value.reduce((sum, group) => sum + group.rows.length, 0)
-)
+  linkedRecordGroups.value.reduce((sum, group) => sum + group.rows.length, 0),
+);
 const linkedRecordTabVisible = computed(() =>
-  Boolean(sourceDoctype.value && sourceName.value)
-)
+  Boolean(sourceDoctype.value && sourceName.value),
+);
 const statusRow = computed(() =>
-  allRows.value.find((row) => String(row.fieldname).toLowerCase().includes('status'))
-)
+  allRows.value.find((row) =>
+    String(row.fieldname).toLowerCase().includes("status"),
+  ),
+);
 
 function formatValue(value) {
-  if (value == null) return ''
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
-  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : String(value)
-  return String(value)
+  if (value == null) return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value.toLocaleString() : String(value);
+  return String(value);
 }
 
 function openDoc(doctype, name) {
-  openDeskDoc(doctype, name)
+  openDeskDoc(doctype, name);
 }
 
 async function copyDocLink() {
-  const route = deskDocRoute(sourceDoctype.value, sourceName.value)
-  if (!route) return
-  copyBusy.value = true
-  actionError.value = ''
-  const url = new URL(route, window.location.origin).toString()
+  const route = deskDocRoute(sourceDoctype.value, sourceName.value);
+  if (!route) return;
+  copyBusy.value = true;
+  actionError.value = "";
+  const url = new URL(route, window.location.origin).toString();
   try {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url)
+      await navigator.clipboard.writeText(url);
     } else {
-      const input = document.createElement('input')
-      input.value = url
-      input.setAttribute('readonly', 'readonly')
-      input.style.position = 'fixed'
-      input.style.opacity = '0'
-      document.body.appendChild(input)
-      input.select()
-      document.execCommand('copy')
-      document.body.removeChild(input)
+      const input = document.createElement("input");
+      input.value = url;
+      input.setAttribute("readonly", "readonly");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
     }
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    window.setTimeout(() => { copyBusy.value = false }, 700)
+    window.setTimeout(() => {
+      copyBusy.value = false;
+    }, 700);
   }
 }
 
 // Quick action: open the source DocType's form for this row.
 function openForm() {
-  openDoc(sourceDoctype.value, sourceName.value)
+  openDoc(sourceDoctype.value, sourceName.value);
 }
 
 // Quick action: schedule a visit (Expedition Activity row, type=visit).
 async function scheduleVisit() {
-  if (!sourceDoctype.value || !sourceName.value) return
-  const f = feature.value
-  const lat = f && f._lngLat ? f._lngLat.lat : null
-  const lng = f && f._lngLat ? wrapLng(f._lngLat.lng) : null
+  if (!sourceDoctype.value || !sourceName.value) return;
+  const f = feature.value;
+  const lat = f && f._lngLat ? f._lngLat.lat : null;
+  const lng = f && f._lngLat ? wrapLng(f._lngLat.lng) : null;
   try {
-    await call('expedition.api.activity.log_activity', {
-      activity_type: 'visit',
+    await call("expedition.api.activity.log_activity", {
+      activity_type: "visit",
       title: `Visit to ${sourceDoctype.value} ${sourceName.value}`,
       related_doctype: sourceDoctype.value,
       related_name: sourceName.value,
       map_name: mapStore.activeMap?.map?.name || null,
       latitude: lat,
       longitude: lng,
-    })
+    });
     // Reload history so the new row appears at the top
-    await loadHistory()
+    await loadHistory();
   } catch (e) {
-    console.error('[expedition] scheduleVisit failed', e)
+    console.error("[expedition] scheduleVisit failed", e);
     await ui.ask({
-      title: 'Could not log visit',
+      title: "Could not log visit",
       body: String(e.message || e),
-      confirmLabel: 'OK',
-      cancelLabel: '',
+      confirmLabel: "OK",
+      cancelLabel: "",
       destructive: false,
-    })
+    });
   }
 }
 
 function getTodayDateString() {
-  const d = new Date()
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function toggleTodoPanel() {
-  showTodoPanel.value = !showTodoPanel.value
+  showTodoPanel.value = !showTodoPanel.value;
   if (showTodoPanel.value) {
-    todoDescription.value = `Follow up on ${title.value || sourceName.value}`
-    todoAllocatedTo.value = window.expeditionSession?.user || ''
-    todoDate.value = getTodayDateString()
-    todoPriority.value = 'Medium'
-    showAssignPanel.value = false
-    showPinStylePanel.value = false
+    todoDescription.value = `Follow up on ${title.value || sourceName.value}`;
+    todoAllocatedTo.value = window.expeditionSession?.user || "";
+    todoDate.value = getTodayDateString();
+    todoPriority.value = "Medium";
+    showAssignPanel.value = false;
+    showPinStylePanel.value = false;
   }
 }
 
 function scheduleTodoUserSearch() {
-  if (todoUserSearchTimer) clearTimeout(todoUserSearchTimer)
-  todoUserSearchTimer = setTimeout(() => searchTodoUsers(todoAllocatedTo.value), 180)
+  if (todoUserSearchTimer) clearTimeout(todoUserSearchTimer);
+  todoUserSearchTimer = setTimeout(
+    () => searchTodoUsers(todoAllocatedTo.value),
+    180,
+  );
 }
 
-async function searchTodoUsers(txt = '') {
-  todoUserSearchLoading.value = true
+async function searchTodoUsers(txt = "") {
+  todoUserSearchLoading.value = true;
   try {
-    todoUserOptions.value = await call('expedition.api.action.search_users', {
-      txt,
-      limit: 8,
-    }) || []
-    todoUserSearchOpen.value = true
+    todoUserOptions.value =
+      (await call("expedition.api.action.search_users", {
+        txt,
+        limit: 8,
+      })) || [];
+    todoUserSearchOpen.value = true;
   } catch (e) {
-    console.warn('[expedition] todo user search failed', e)
-    todoUserOptions.value = []
+    console.warn("[expedition] todo user search failed", e);
+    todoUserOptions.value = [];
   } finally {
-    todoUserSearchLoading.value = false
+    todoUserSearchLoading.value = false;
   }
 }
 
 function selectTodoUser(user) {
-  todoAllocatedTo.value = user.value
-  todoUserSearchOpen.value = false
+  todoAllocatedTo.value = user.value;
+  todoUserSearchOpen.value = false;
 }
 
 async function createTodo() {
-  if (!sourceDoctype.value || !sourceName.value) return
-  todoBusy.value = true
-  actionError.value = ''
-  todoCreated.value = ''
+  if (!sourceDoctype.value || !sourceName.value) return;
+  todoBusy.value = true;
+  actionError.value = "";
+  todoCreated.value = "";
   try {
-    const promises = []
+    const promises = [];
 
-    if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = feature.value
-      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
-      const targets = []
-      
+    if (sourceDoctype.value === "Expedition Zone") {
+      const zoneDoc = feature.value;
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || [];
+      const targets = [];
+
       // Add the zone itself so it gets the ToDo
-      targets.push({ doctype: sourceDoctype.value, name: sourceName.value, title: title.value })
-      
+      targets.push({
+        doctype: sourceDoctype.value,
+        name: sourceName.value,
+        title: title.value,
+      });
+
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
-          targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
+          targets.push({
+            doctype: f.properties._doctype,
+            name: f.properties._name,
+            title: f.properties.title || f.properties._name,
+          });
         }
       }
-      
+
       if (targets.length) {
-        promises.push(call('expedition.api.action.bulk_action', {
-          action_type: 'create_todo',
-          targets: JSON.stringify(targets),
-          description: todoDescription.value,
-          allocated_to: todoAllocatedTo.value || '',
-          date: todoDate.value || null,
-          priority: todoPriority.value || 'Medium',
-        }))
+        promises.push(
+          call("expedition.api.action.bulk_action", {
+            action_type: "create_todo",
+            targets: JSON.stringify(targets),
+            description: todoDescription.value,
+            allocated_to: todoAllocatedTo.value || "",
+            date: todoDate.value || null,
+            priority: todoPriority.value || "Medium",
+          }),
+        );
       }
     } else {
-      promises.push(call('expedition.api.action.create_todo', {
-        source_doctype: sourceDoctype.value,
-        source_name: sourceName.value,
-        description: todoDescription.value || `Follow up on ${title.value}`,
-        allocated_to: todoAllocatedTo.value || '',
-        date: todoDate.value || null,
-        priority: todoPriority.value || 'Medium',
-      }))
+      promises.push(
+        call("expedition.api.action.create_todo", {
+          source_doctype: sourceDoctype.value,
+          source_name: sourceName.value,
+          description: todoDescription.value || `Follow up on ${title.value}`,
+          allocated_to: todoAllocatedTo.value || "",
+          date: todoDate.value || null,
+          priority: todoPriority.value || "Medium",
+        }),
+      );
     }
 
-    const results = await Promise.all(promises)
-    const resultVal = typeof results[0] === 'string' ? results[0] : (results[0]?.status || 'created')
-    todoCreated.value = resultVal
-    window.frappe?.show_alert?.({ message: 'ToDo created', indicator: 'green' })
-    showTodoPanel.value = false
+    const results = await Promise.all(promises);
+    const resultVal =
+      typeof results[0] === "string"
+        ? results[0]
+        : results[0]?.status || "created";
+    todoCreated.value = resultVal;
+    window.frappe?.show_alert?.({
+      message: "ToDo created",
+      indicator: "green",
+    });
+    showTodoPanel.value = false;
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    todoBusy.value = false
+    todoBusy.value = false;
   }
 }
 
 function toggleAssignPanel() {
-  showAssignPanel.value = !showAssignPanel.value
+  showAssignPanel.value = !showAssignPanel.value;
   if (showAssignPanel.value) {
-    activeTab.value = 'details'
-    searchUsers(assignUser.value)
-    showTodoPanel.value = false
-    showPinStylePanel.value = false
+    activeTab.value = "details";
+    searchUsers(assignUser.value);
+    showTodoPanel.value = false;
+    showPinStylePanel.value = false;
   } else {
-    userSearchOpen.value = false
+    userSearchOpen.value = false;
   }
 }
 
 function scheduleUserSearch() {
-  userSearchOpen.value = true
-  if (userSearchTimer) window.clearTimeout(userSearchTimer)
-  userSearchTimer = window.setTimeout(() => searchUsers(assignUser.value), 180)
+  userSearchOpen.value = true;
+  if (userSearchTimer) window.clearTimeout(userSearchTimer);
+  userSearchTimer = window.setTimeout(() => searchUsers(assignUser.value), 180);
 }
 
-async function searchUsers(txt = '') {
-  userSearchLoading.value = true
+async function searchUsers(txt = "") {
+  userSearchLoading.value = true;
   try {
-    userOptions.value = await call('expedition.api.action.search_users', {
-      txt,
-      limit: 8,
-    }) || []
-    userSearchOpen.value = true
+    userOptions.value =
+      (await call("expedition.api.action.search_users", {
+        txt,
+        limit: 8,
+      })) || [];
+    userSearchOpen.value = true;
   } catch (e) {
-    console.warn('[expedition] user search failed', e)
-    userOptions.value = []
+    console.warn("[expedition] user search failed", e);
+    userOptions.value = [];
   } finally {
-    userSearchLoading.value = false
+    userSearchLoading.value = false;
   }
 }
 
 function selectUser(user) {
-  assignUser.value = user.value
-  userSearchOpen.value = false
+  assignUser.value = user.value;
+  userSearchOpen.value = false;
 }
 
 async function assignRecord() {
-  if (!sourceDoctype.value || !sourceName.value || !assignField.value || !assignUser.value) return
-  assignBusy.value = true
-  actionError.value = ''
+  if (
+    !sourceDoctype.value ||
+    !sourceName.value ||
+    !assignField.value ||
+    !assignUser.value
+  )
+    return;
+  assignBusy.value = true;
+  actionError.value = "";
   try {
-    const promises = []
+    const promises = [];
 
-    if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = feature.value
-      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
-      const targets = []
-      
+    if (sourceDoctype.value === "Expedition Zone") {
+      const zoneDoc = feature.value;
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || [];
+      const targets = [];
+
       // Add the zone itself so it gets assigned
-      targets.push({ doctype: sourceDoctype.value, name: sourceName.value, title: title.value })
+      targets.push({
+        doctype: sourceDoctype.value,
+        name: sourceName.value,
+        title: title.value,
+      });
 
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
-          targets.push({ doctype: f.properties._doctype, name: f.properties._name, title: f.properties.title || f.properties._name })
+          targets.push({
+            doctype: f.properties._doctype,
+            name: f.properties._name,
+            title: f.properties.title || f.properties._name,
+          });
           if (f.properties) {
-            if (assignField.value === '__frappe_assign') {
-              let current = []
-              try { current = JSON.parse(f.properties._assign || '[]') } catch (e) {}
-              if (!current.includes(assignUser.value)) current.push(assignUser.value)
-              f.properties._assign = JSON.stringify(current)
+            if (assignField.value === "__frappe_assign") {
+              let current = [];
+              try {
+                current = JSON.parse(f.properties._assign || "[]");
+              } catch (e) {}
+              if (!current.includes(assignUser.value))
+                current.push(assignUser.value);
+              f.properties._assign = JSON.stringify(current);
             } else {
-              f.properties[assignField.value] = assignUser.value
+              f.properties[assignField.value] = assignUser.value;
             }
           }
         }
       }
-      
+
       if (targets.length) {
-        if (assignField.value === '__frappe_assign') {
-          promises.push(call('expedition.api.action.bulk_action', {
-            action_type: 'assign_to',
-            targets: JSON.stringify(targets),
-            user: assignUser.value,
-          }))
+        if (assignField.value === "__frappe_assign") {
+          promises.push(
+            call("expedition.api.action.bulk_action", {
+              action_type: "assign_to",
+              targets: JSON.stringify(targets),
+              user: assignUser.value,
+            }),
+          );
         } else {
-          promises.push(call('expedition.api.action.bulk_action', {
-            action_type: 'assign',
-            targets: JSON.stringify(targets),
-            fieldname: assignField.value,
-            user: assignUser.value,
-          }))
+          promises.push(
+            call("expedition.api.action.bulk_action", {
+              action_type: "assign",
+              targets: JSON.stringify(targets),
+              fieldname: assignField.value,
+              user: assignUser.value,
+            }),
+          );
         }
       }
     } else {
-      if (assignField.value === '__frappe_assign') {
-        promises.push(call('expedition.api.action.assign_to', {
-          source_doctype: sourceDoctype.value,
-          source_name: sourceName.value,
-          user: assignUser.value,
-          description: `Assignment for ${title.value}`,
-        }))
+      if (assignField.value === "__frappe_assign") {
+        promises.push(
+          call("expedition.api.action.assign_to", {
+            source_doctype: sourceDoctype.value,
+            source_name: sourceName.value,
+            user: assignUser.value,
+            description: `Assignment for ${title.value}`,
+          }),
+        );
       } else {
-        promises.push(call('expedition.api.action.assign', {
-          source_doctype: sourceDoctype.value,
-          source_name: sourceName.value,
-          fieldname: assignField.value,
-          user: assignUser.value,
-        }))
+        promises.push(
+          call("expedition.api.action.assign", {
+            source_doctype: sourceDoctype.value,
+            source_name: sourceName.value,
+            fieldname: assignField.value,
+            user: assignUser.value,
+          }),
+        );
       }
     }
 
-    await Promise.all(promises)
-    if (feature.value?.properties && assignField.value !== '__frappe_assign') {
-      feature.value.properties[assignField.value] = assignUser.value
+    await Promise.all(promises);
+    if (feature.value?.properties && assignField.value !== "__frappe_assign") {
+      feature.value.properties[assignField.value] = assignUser.value;
     }
-    if (assignField.value === '__frappe_assign') {
-      showAssignPanel.value = false
+    if (assignField.value === "__frappe_assign") {
+      showAssignPanel.value = false;
     }
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    assignBusy.value = false
+    assignBusy.value = false;
   }
 }
 
 async function unassignRecord() {
-  if (!sourceDoctype.value || !sourceName.value || !assignField.value) return
-  assignBusy.value = true
-  actionError.value = ''
+  if (!sourceDoctype.value || !sourceName.value || !assignField.value) return;
+  assignBusy.value = true;
+  actionError.value = "";
   try {
-    const promises = []
+    const promises = [];
 
-    if (sourceDoctype.value === 'Expedition Zone') {
-      const zoneDoc = feature.value
-      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || []
-      const targets = []
-      
+    if (sourceDoctype.value === "Expedition Zone") {
+      const zoneDoc = feature.value;
+      const features = window.Expedition?.getFeaturesInZone?.(zoneDoc) || [];
+      const targets = [];
+
       // Add the zone itself so it gets unassigned
-      targets.push({ doctype: sourceDoctype.value, name: sourceName.value })
+      targets.push({ doctype: sourceDoctype.value, name: sourceName.value });
 
       for (const f of features) {
         if (f.properties?._doctype && f.properties?._name) {
-          targets.push({ doctype: f.properties._doctype, name: f.properties._name })
+          targets.push({
+            doctype: f.properties._doctype,
+            name: f.properties._name,
+          });
           if (f.properties) {
-            if (assignField.value === '__frappe_assign') {
-              let current = []
-              try { current = JSON.parse(f.properties._assign || '[]') } catch (e) {}
-              current = current.filter(u => u !== frappe.session.user)
-              f.properties._assign = JSON.stringify(current)
+            if (assignField.value === "__frappe_assign") {
+              let current = [];
+              try {
+                current = JSON.parse(f.properties._assign || "[]");
+              } catch (e) {}
+              current = current.filter((u) => u !== frappe.session.user);
+              f.properties._assign = JSON.stringify(current);
             } else {
-              f.properties[assignField.value] = ''
+              f.properties[assignField.value] = "";
             }
           }
         }
       }
       if (targets.length) {
-        promises.push(call('expedition.api.action.bulk_action', {
-          action_type: 'unassign',
-          targets: JSON.stringify(targets),
-          fieldname: assignField.value,
-        }))
+        promises.push(
+          call("expedition.api.action.bulk_action", {
+            action_type: "unassign",
+            targets: JSON.stringify(targets),
+            fieldname: assignField.value,
+          }),
+        );
       }
     } else {
-      promises.push(call('expedition.api.action.unassign', {
-        source_doctype: sourceDoctype.value,
-        source_name: sourceName.value,
-        fieldname: assignField.value,
-      }))
+      promises.push(
+        call("expedition.api.action.unassign", {
+          source_doctype: sourceDoctype.value,
+          source_name: sourceName.value,
+          fieldname: assignField.value,
+        }),
+      );
     }
 
-    await Promise.all(promises)
-    if (feature.value?.properties) feature.value.properties[assignField.value] = ''
+    await Promise.all(promises);
+    if (feature.value?.properties)
+      feature.value.properties[assignField.value] = "";
   } catch (e) {
-    actionError.value = e.message || String(e)
+    actionError.value = e.message || String(e);
   } finally {
-    assignBusy.value = false
+    assignBusy.value = false;
   }
 }
 
 async function loadHistory() {
   if (!sourceDoctype.value || !sourceName.value) {
-    history.value = []
-    aggregate.value = null
-    return
+    history.value = [];
+    aggregate.value = null;
+    return;
   }
-  historyLoading.value = true
-  aggregateLoading.value = true
-  historyError.value = ''
+  historyLoading.value = true;
+  aggregateLoading.value = true;
+  historyError.value = "";
   try {
     const [rows, agg] = await Promise.all([
-      call('expedition.api.activity.list_for_related', {
+      call("expedition.api.activity.list_for_related", {
         related_doctype: sourceDoctype.value,
         related_name: sourceName.value,
         limit: 10,
       }),
-      call('expedition.api.activity.aggregate_for_related', {
+      call("expedition.api.activity.aggregate_for_related", {
         related_doctype: sourceDoctype.value,
         related_name: sourceName.value,
-        bucket: 'year',
+        bucket: "year",
       }),
-    ])
-    history.value = rows || []
-    aggregate.value = agg
+    ]);
+    history.value = rows || [];
+    aggregate.value = agg;
   } catch (e) {
-    historyError.value = e.message || String(e)
-    history.value = []
-    aggregate.value = null
+    historyError.value = e.message || String(e);
+    history.value = [];
+    aggregate.value = null;
   } finally {
-    historyLoading.value = false
-    aggregateLoading.value = false
+    historyLoading.value = false;
+    aggregateLoading.value = false;
   }
 }
 
 async function loadLinkedRecords() {
   if (!layer.value?.name || !sourceName.value) {
-    linkedRecords.value = []
-    linkedRecordsError.value = ''
-    return
+    linkedRecords.value = [];
+    linkedRecordsError.value = "";
+    return;
   }
-  linkedRecordsLoading.value = true
-  linkedRecordsError.value = ''
+  linkedRecordsLoading.value = true;
+  linkedRecordsError.value = "";
   try {
-    const result = await call('expedition.api.layer.get_linked_records', {
+    const result = await call("expedition.api.layer.get_linked_records", {
       layer: layer.value.name,
       source_name: sourceName.value,
       limit: 8,
-    })
-    linkedRecords.value = Array.isArray(result?.groups) ? result.groups : []
+    });
+    linkedRecords.value = Array.isArray(result?.groups) ? result.groups : [];
   } catch (e) {
-    linkedRecords.value = []
-    linkedRecordsError.value = e.message || String(e)
+    linkedRecords.value = [];
+    linkedRecordsError.value = e.message || String(e);
   } finally {
-    linkedRecordsLoading.value = false
+    linkedRecordsLoading.value = false;
   }
 }
 
 function linkedRecordStatus(row) {
-  if (row.status) return row.status
-  if (row.workflow_state) return row.workflow_state
-  if (row.docstatus === 1) return 'Submitted'
-  if (row.docstatus === 2) return 'Cancelled'
-  if (row.docstatus === 0) return 'Draft'
-  return ''
+  if (row.status) return row.status;
+  if (row.workflow_state) return row.workflow_state;
+  if (row.docstatus === 1) return "Submitted";
+  if (row.docstatus === 2) return "Cancelled";
+  if (row.docstatus === 0) return "Draft";
+  return "";
 }
 
 function linkedRecordAmount(row, group) {
   const candidates = [
     group?.field,
-    'grand_total',
-    'rounded_total',
-    'base_grand_total',
-    'outstanding_amount',
-    'paid_amount',
-    'advance_paid',
-  ].filter(Boolean)
+    "grand_total",
+    "rounded_total",
+    "base_grand_total",
+    "outstanding_amount",
+    "paid_amount",
+    "advance_paid",
+  ].filter(Boolean);
   for (const field of candidates) {
-    if (row[field] != null && row[field] !== '') return formatValue(row[field])
+    if (row[field] != null && row[field] !== "") return formatValue(row[field]);
   }
-  return ''
+  return "";
 }
 
 function linkedRecordGroupSummary(group) {
-  const serverTotals = Array.isArray(group?.summary?.totals) ? group.summary.totals : []
+  const serverTotals = Array.isArray(group?.summary?.totals)
+    ? group.summary.totals
+    : [];
   if (serverTotals.length) {
     return serverTotals.map((item) => ({
       field: item.field,
-      label: item.label || String(item.field || '').replace(/_/g, ' '),
+      label: item.label || String(item.field || "").replace(/_/g, " "),
       value: formatValue(item.value),
-    }))
+    }));
   }
-  const rows = Array.isArray(group?.rows) ? group.rows : []
+  const rows = Array.isArray(group?.rows) ? group.rows : [];
   const labels = {
-    outstanding_amount: 'Outstanding',
-    paid_amount: 'Paid Amount',
-    grand_total: 'Total',
-    rounded_total: 'Total',
-    base_grand_total: 'Base Total',
-    advance_paid: 'Advance',
-  }
-  const fields = [group?.field].filter(Boolean)
-  const seen = new Set()
-  const summary = []
+    outstanding_amount: "Outstanding",
+    paid_amount: "Paid Amount",
+    grand_total: "Total",
+    rounded_total: "Total",
+    base_grand_total: "Base Total",
+    advance_paid: "Advance",
+  };
+  const fields = [group?.field].filter(Boolean);
+  const seen = new Set();
+  const summary = [];
   for (const field of fields) {
-    if (seen.has(field)) continue
-    seen.add(field)
-    let total = 0
-    let count = 0
+    if (seen.has(field)) continue;
+    seen.add(field);
+    let total = 0;
+    let count = 0;
     for (const row of rows) {
-      const value = Number(row?.[field])
-      if (!Number.isFinite(value)) continue
-      total += value
-      count += 1
+      const value = Number(row?.[field]);
+      if (!Number.isFinite(value)) continue;
+      total += value;
+      count += 1;
     }
-    if (!count) continue
+    if (!count) continue;
     summary.push({
       field,
-      label: labels[field] || field.replace(/_/g, ' '),
+      label: labels[field] || field.replace(/_/g, " "),
       value: formatValue(total),
-    })
-    if (summary.length >= 3) break
+    });
+    if (summary.length >= 3) break;
   }
-  return summary
+  return summary;
 }
 
 function linkedRecordStatusSummary(group) {
-  const statuses = Array.isArray(group?.summary?.statuses) ? group.summary.statuses : []
+  const statuses = Array.isArray(group?.summary?.statuses)
+    ? group.summary.statuses
+    : [];
   if (statuses.length) {
     return statuses.slice(0, 3).map((item) => ({
       label: item.label,
       count: Number(item.count) || 0,
-    }))
+    }));
   }
-  const counts = new Map()
+  const counts = new Map();
   for (const row of group?.rows || []) {
-    const label = linkedRecordStatus(row) || 'Unknown'
-    counts.set(label, (counts.get(label) || 0) + 1)
+    const label = linkedRecordStatus(row) || "Unknown";
+    counts.set(label, (counts.get(label) || 0) + 1);
   }
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 3)
-    .map(([label, count]) => ({ label, count }))
+    .map(([label, count]) => ({ label, count }));
 }
 
 function linkedRecordDate(row) {
-  const value = row.posting_date || row.transaction_date || row.due_date || row.modified
-  return value ? formatDate(value) : ''
+  const value =
+    row.posting_date || row.transaction_date || row.due_date || row.modified;
+  return value ? formatDate(value) : "";
 }
 
 function linkedRecordFields(group, row) {
-  const skip = new Set(['name', 'modified', 'docstatus', group?.link_field])
-  const priority = new Set([
-    group?.field,
-    'status',
-    'workflow_state',
-    'outstanding_amount',
-    'paid_amount',
-    'grand_total',
-    'posting_date',
-    'transaction_date',
-    'due_date',
-    'customer',
-    'lead',
-    'party',
-  ].filter(Boolean))
+  const skip = new Set(["name", "modified", "docstatus", group?.link_field]);
+  const priority = new Set(
+    [
+      group?.field,
+      "status",
+      "workflow_state",
+      "outstanding_amount",
+      "paid_amount",
+      "grand_total",
+      "posting_date",
+      "transaction_date",
+      "due_date",
+      "customer",
+      "lead",
+      "party",
+    ].filter(Boolean),
+  );
   return (group.fields || [])
     .filter((field) => {
-      const fieldname = field.fieldname
-      return !skip.has(fieldname) && row[fieldname] != null && row[fieldname] !== ''
+      const fieldname = field.fieldname;
+      return (
+        !skip.has(fieldname) && row[fieldname] != null && row[fieldname] !== ""
+      );
     })
-    .sort((a, b) => Number(priority.has(b.fieldname)) - Number(priority.has(a.fieldname)))
+    .sort(
+      (a, b) =>
+        Number(priority.has(b.fieldname)) - Number(priority.has(a.fieldname)),
+    )
     .slice(0, 4)
     .map((field) => ({
       fieldname: field.fieldname,
       label: field.label || field.fieldname,
       value: formatValue(row[field.fieldname]),
-    }))
+    }));
 }
 
 function linkedRecordColumns(group) {
-  const rows = Array.isArray(group?.rows) ? group.rows : []
-  const available = new Set()
+  const rows = Array.isArray(group?.rows) ? group.rows : [];
+  const available = new Set();
   for (const row of rows) {
     for (const [field, value] of Object.entries(row || {})) {
-      if (value != null && value !== '') available.add(field)
+      if (value != null && value !== "") available.add(field);
     }
   }
-  const fieldMeta = new Map((group?.fields || []).map((field) => [field.fieldname, field]))
+  const fieldMeta = new Map(
+    (group?.fields || []).map((field) => [field.fieldname, field]),
+  );
   const candidates = [
-    'status',
-    'workflow_state',
+    "status",
+    "workflow_state",
     group?.field,
-    'grand_total',
-    'outstanding_amount',
-    'paid_amount',
-    'posting_date',
-    'transaction_date',
-    'due_date',
-    'customer',
-    'lead',
-    'party',
-  ].filter(Boolean)
-  const columns = [
-    { fieldname: 'name', label: 'Document', kind: 'name' },
-  ]
-  const seen = new Set(['name', 'modified', 'docstatus', group?.link_field])
+    "grand_total",
+    "outstanding_amount",
+    "paid_amount",
+    "posting_date",
+    "transaction_date",
+    "due_date",
+    "customer",
+    "lead",
+    "party",
+  ].filter(Boolean);
+  const columns = [{ fieldname: "name", label: "Document", kind: "name" }];
+  const seen = new Set(["name", "modified", "docstatus", group?.link_field]);
   for (const fieldname of candidates) {
-    if (seen.has(fieldname) || !available.has(fieldname)) continue
-    seen.add(fieldname)
-    const meta = fieldMeta.get(fieldname)
+    if (seen.has(fieldname) || !available.has(fieldname)) continue;
+    seen.add(fieldname);
+    const meta = fieldMeta.get(fieldname);
     columns.push({
       fieldname,
-      label: meta?.label || fieldname.replace(/_/g, ' '),
-      kind: fieldname.includes('date') ? 'date' : '',
-    })
-    if (columns.length >= 5) break
+      label: meta?.label || fieldname.replace(/_/g, " "),
+      kind: fieldname.includes("date") ? "date" : "",
+    });
+    if (columns.length >= 5) break;
   }
-  if (!columns.some((column) => column.fieldname === 'modified') && available.has('modified')) {
-    columns.push({ fieldname: 'modified', label: 'Modified', kind: 'date' })
+  if (
+    !columns.some((column) => column.fieldname === "modified") &&
+    available.has("modified")
+  ) {
+    columns.push({ fieldname: "modified", label: "Modified", kind: "date" });
   }
-  return columns.slice(0, 6)
+  return columns.slice(0, 6);
 }
 
 function linkedRecordCell(row, column) {
-  const value = row?.[column.fieldname]
-  if (column.kind === 'date') return formatDate(value)
-  return formatValue(value)
+  const value = row?.[column.fieldname];
+  if (column.kind === "date") return formatDate(value);
+  return formatValue(value);
 }
 
 // "Active vs passive" signal: how long since the last interaction?
 const activityStatus = computed(() => {
-  const a = aggregate.value
-  if (!a || !a.last_activity_at) return null
-  const last = new Date(a.last_activity_at)
-  if (isNaN(last.getTime())) return null
-  const days = Math.floor((Date.now() - last.getTime()) / (1000 * 60 * 60 * 24))
-  if (days < 60) return { label: 'Active', kind: 'active', days }
-  if (days < 365) return { label: 'Cooling', kind: 'cooling', days }
-  return { label: 'Passive', kind: 'passive', days }
-})
+  const a = aggregate.value;
+  if (!a || !a.last_activity_at) return null;
+  const last = new Date(a.last_activity_at);
+  if (isNaN(last.getTime())) return null;
+  const days = Math.floor(
+    (Date.now() - last.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  if (days < 60) return { label: "Active", kind: "active", days };
+  if (days < 365) return { label: "Cooling", kind: "cooling", days };
+  return { label: "Passive", kind: "passive", days };
+});
 
 function formatDate(s) {
-  if (!s) return ''
+  if (!s) return "";
   try {
-    const d = new Date(s)
-    if (isNaN(d.getTime())) return s
-    return d.toLocaleString()
-  } catch { return s }
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleString();
+  } catch {
+    return s;
+  }
 }
 </script>
 
@@ -1484,18 +1690,38 @@ function formatDate(s) {
       <div class="mp__titles">
         <div class="mp__title-row">
           <h3 class="mp__title">{{ title }}</h3>
-          <span v-if="statusRow" class="mp__status">{{ statusRow.formatted }}</span>
+          <span v-if="statusRow" class="mp__status">{{
+            statusRow.formatted
+          }}</span>
         </div>
         <p class="mp__subtitle">{{ subtitle }}</p>
       </div>
-      <button class="mp__close" type="button" @click="close" aria-label="Close">×</button>
+      <button class="mp__close" type="button" @click="close" aria-label="Close">
+        ×
+      </button>
     </header>
 
-    <div v-if="sourceDoctype && sourceName && !isLocationAggregate" class="mp__actions" aria-label="Record actions">
-      <button v-if="clickAction !== 'none'" type="button" class="mp__action" @click="openForm" title="Open the source document">
+    <div
+      v-if="sourceDoctype && sourceName && !isLocationAggregate"
+      class="mp__actions"
+      aria-label="Record actions"
+    >
+      <button
+        v-if="clickAction !== 'none'"
+        type="button"
+        class="mp__action"
+        @click="openForm"
+        title="Open the source document"
+      >
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-          <path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"
-                fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path
+            d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
         </svg>
         <span>Open</span>
       </button>
@@ -1507,7 +1733,9 @@ function formatDate(s) {
         @click="toggleTodoPanel"
         title="Customize and Create a ToDo"
       >
-        <span>{{ todoBusy ? 'Adding...' : (todoCreated ? 'Added' : 'ToDo') }}</span>
+        <span>{{
+          todoBusy ? "Adding..." : todoCreated ? "Added" : "ToDo"
+        }}</span>
       </button>
       <button
         v-if="assignmentFields.length"
@@ -1538,7 +1766,7 @@ function formatDate(s) {
         @click="deleteManualPin"
         title="Delete this custom pin"
       >
-        <span>{{ pinDeleteBusy ? 'Deleting...' : 'Delete' }}</span>
+        <span>{{ pinDeleteBusy ? "Deleting..." : "Delete" }}</span>
       </button>
       <button
         v-for="act in customActions"
@@ -1551,18 +1779,41 @@ function formatDate(s) {
       >
         <span>{{ act.label }}</span>
       </button>
-      <button type="button" class="mp__action mp__action--ghost" :disabled="copyBusy" @click="copyDocLink" title="Copy source document link">
-        <span>{{ copyBusy ? 'Copied' : 'Copy Link' }}</span>
+      <button
+        type="button"
+        class="mp__action mp__action--ghost"
+        :disabled="copyBusy"
+        @click="copyDocLink"
+        title="Copy source document link"
+      >
+        <span>{{ copyBusy ? "Copied" : "Copy Link" }}</span>
       </button>
     </div>
 
-    <div v-if="hasStackContext" class="mp__stack-nav" aria-label="Stack navigation">
-      <button type="button" class="mp__stack-btn" @click="previousStackRecord">‹ Previous</button>
-      <button type="button" class="mp__stack-btn mp__stack-btn--primary" @click="backToLocation">Back to Location</button>
-      <button type="button" class="mp__stack-btn" @click="nextStackRecord">Next ›</button>
+    <div
+      v-if="hasStackContext"
+      class="mp__stack-nav"
+      aria-label="Stack navigation"
+    >
+      <button type="button" class="mp__stack-btn" @click="previousStackRecord">
+        ‹ Previous
+      </button>
+      <button
+        type="button"
+        class="mp__stack-btn mp__stack-btn--primary"
+        @click="backToLocation"
+      >
+        Back to Location
+      </button>
+      <button type="button" class="mp__stack-btn" @click="nextStackRecord">
+        Next ›
+      </button>
     </div>
 
-    <div v-if="isManualPin && showPinStylePanel" class="mp__assign-panel mp__pin-style-panel">
+    <div
+      v-if="isManualPin && showPinStylePanel"
+      class="mp__assign-panel mp__pin-style-panel"
+    >
       <div class="mp__todo-header">
         <span class="mp__todo-title">Pin Style</span>
       </div>
@@ -1579,7 +1830,11 @@ function formatDate(s) {
 
         <div class="mp__todo-field">
           <span class="mp__todo-label">Icon</span>
-          <div v-for="section in iconSections" :key="section.key" class="mp__pin-icon-section">
+          <div
+            v-for="section in iconSections"
+            :key="section.key"
+            class="mp__pin-icon-section"
+          >
             <div class="mp__pin-icon-section-title">{{ section.label }}</div>
             <div class="mp__pin-icon-grid">
               <button
@@ -1587,21 +1842,42 @@ function formatDate(s) {
                 :key="icon.key"
                 type="button"
                 class="mp__pin-icon-cell"
-                :class="{ 'mp__pin-icon-cell--active': pinStyleIcon === icon.key }"
+                :class="{
+                  'mp__pin-icon-cell--active': pinStyleIcon === icon.key,
+                }"
                 :title="iconLabel(icon)"
                 @click="pinStyleIcon = icon.key"
               >
-                <svg v-if="isBuiltinIcon(icon)" class="mp__pin-icon-preview" viewBox="0 0 24 24" aria-hidden="true">
+                <svg
+                  v-if="isBuiltinIcon(icon)"
+                  class="mp__pin-icon-preview"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   <path :d="ICON_PATHS[icon.key] || ''" fill="currentColor" />
                 </svg>
-                <span v-else-if="icon.icon_format !== 'Image'" class="mp__pin-icon-preview mp__pin-icon-preview--custom" v-html="icon.svg_content" />
-                <img v-else class="mp__pin-icon-preview mp__pin-icon-preview--image" :src="icon.image_data_url" alt="">
+                <span
+                  v-else-if="icon.icon_format !== 'Image'"
+                  class="mp__pin-icon-preview mp__pin-icon-preview--custom"
+                  v-html="icon.svg_content"
+                />
+                <img
+                  v-else
+                  class="mp__pin-icon-preview mp__pin-icon-preview--image"
+                  :src="icon.image_data_url"
+                  alt=""
+                />
               </button>
             </div>
           </div>
 
           <div v-if="iconStore.canCreate" class="mp__pin-icon-upload">
-            <input v-model="pinUploadTitle" class="mp__assign-input" type="text" placeholder="Icon name">
+            <input
+              v-model="pinUploadTitle"
+              class="mp__assign-input"
+              type="text"
+              placeholder="Icon name"
+            />
             <UiSelect
               v-if="iconStore.canManageGlobal"
               v-model="pinUploadScope"
@@ -1611,17 +1887,37 @@ function formatDate(s) {
               :searchable="false"
               compact
             />
-            <label class="mp__todo-btn mp__todo-btn--ghost" :class="{ 'mp__todo-btn--disabled': pinIconBusy }">
+            <label
+              class="mp__todo-btn mp__todo-btn--ghost"
+              :class="{ 'mp__todo-btn--disabled': pinIconBusy }"
+            >
               Upload Image
-              <input class="mp__pin-icon-file" type="file" accept="image/*" :disabled="pinIconBusy" @change="uploadPinIconFromEvent">
+              <input
+                class="mp__pin-icon-file"
+                type="file"
+                accept="image/*"
+                :disabled="pinIconBusy"
+                @change="uploadPinIconFromEvent"
+              />
             </label>
           </div>
         </div>
 
         <div class="mp__todo-buttons">
-          <button type="button" class="mp__todo-btn mp__todo-btn--ghost" @click="showPinStylePanel = false">Cancel</button>
-          <button type="button" class="mp__todo-btn mp__todo-btn--primary" :disabled="pinStyleBusy" @click="savePinStyle">
-            {{ pinStyleBusy ? 'Saving...' : 'Save' }}
+          <button
+            type="button"
+            class="mp__todo-btn mp__todo-btn--ghost"
+            @click="showPinStylePanel = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="mp__todo-btn mp__todo-btn--primary"
+            :disabled="pinStyleBusy"
+            @click="savePinStyle"
+          >
+            {{ pinStyleBusy ? "Saving..." : "Save" }}
           </button>
         </div>
       </div>
@@ -1644,10 +1940,18 @@ function formatDate(s) {
           @click="activeTab = 'location-pins'"
         >
           Pins
-          <span class="mp__tab-count">{{ locationAggregateRecords.length }}</span>
+          <span class="mp__tab-count">{{
+            locationAggregateRecords.length
+          }}</span>
         </button>
       </template>
-      <button v-if="!isLocationAggregate" type="button" class="mp__tab" :class="{ 'mp__tab--active': activeTab === 'details' }" @click="activeTab = 'details'">
+      <button
+        v-if="!isLocationAggregate"
+        type="button"
+        class="mp__tab"
+        :class="{ 'mp__tab--active': activeTab === 'details' }"
+        @click="activeTab = 'details'"
+      >
         Details
       </button>
       <button
@@ -1658,27 +1962,42 @@ function formatDate(s) {
         @click="activeTab = 'comments'"
       >
         Comments
-        <span v-if="commentCount" class="mp__tab-count">{{ commentCount }}</span>
+        <span v-if="commentCount" class="mp__tab-count">{{
+          commentCount
+        }}</span>
       </button>
       <button
-        v-if="sourceDoctype && sourceName && sourceDoctype !== 'Expedition Zone' && !isLocationAggregate"
+        v-if="
+          sourceDoctype &&
+          sourceName &&
+          sourceDoctype !== 'Expedition Zone' &&
+          !isLocationAggregate
+        "
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'activity' }"
         @click="activeTab = 'activity'"
       >
         Activity
-        <span v-if="aggregate && aggregate.total" class="mp__tab-count">{{ aggregate.total }}</span>
+        <span v-if="aggregate && aggregate.total" class="mp__tab-count">{{
+          aggregate.total
+        }}</span>
       </button>
       <button
-        v-if="linkedRecordTabVisible && sourceDoctype !== 'Expedition Zone' && !isLocationAggregate"
+        v-if="
+          linkedRecordTabVisible &&
+          sourceDoctype !== 'Expedition Zone' &&
+          !isLocationAggregate
+        "
         type="button"
         class="mp__tab"
         :class="{ 'mp__tab--active': activeTab === 'records' }"
         @click="activeTab = 'records'"
       >
         Records
-        <span v-if="linkedRecordCount" class="mp__tab-count">{{ linkedRecordCount }}</span>
+        <span v-if="linkedRecordCount" class="mp__tab-count">{{
+          linkedRecordCount
+        }}</span>
       </button>
       <button
         v-for="tab in isLocationAggregate ? [] : customTabs"
@@ -1693,7 +2012,15 @@ function formatDate(s) {
       </button>
     </nav>
 
-    <div v-if="sourceDoctype && sourceName && assignmentFields.length && showAssignPanel" class="mp__assign-panel">
+    <div
+      v-if="
+        sourceDoctype &&
+        sourceName &&
+        assignmentFields.length &&
+        showAssignPanel
+      "
+      class="mp__assign-panel"
+    >
       <div class="mp__assign-row">
         <div class="mp__assign-field">
           <button
@@ -1702,7 +2029,11 @@ function formatDate(s) {
             aria-label="Assignment field"
             @click="assignFieldOpen = !assignFieldOpen"
           >
-            <span>{{ selectedAssignment?.label || selectedAssignment?.fieldname || 'Assign To' }}</span>
+            <span>{{
+              selectedAssignment?.label ||
+              selectedAssignment?.fieldname ||
+              "Assign To"
+            }}</span>
             <span class="mp__assign-chevron">⌄</span>
           </button>
           <div v-if="assignFieldOpen" class="mp__assign-menu">
@@ -1715,7 +2046,11 @@ function formatDate(s) {
               @mousedown.prevent="chooseAssignField(field.fieldname)"
             >
               <span>{{ field.label || field.fieldname }}</span>
-              <small>{{ field.fieldname === '__frappe_assign' ? 'Frappe assignment' : field.fieldname }}</small>
+              <small>{{
+                field.fieldname === "__frappe_assign"
+                  ? "Frappe assignment"
+                  : field.fieldname
+              }}</small>
             </button>
           </div>
         </div>
@@ -1742,24 +2077,45 @@ function formatDate(s) {
               <span class="mp__user-label">{{ user.label }}</span>
               <span class="mp__user-value">{{ user.value }}</span>
             </button>
-            <div v-if="userSearchLoading" class="mp__user-empty">Searching...</div>
-            <div v-else-if="!userOptions.length" class="mp__user-empty">No users found</div>
+            <div v-if="userSearchLoading" class="mp__user-empty">
+              Searching...
+            </div>
+            <div v-else-if="!userOptions.length" class="mp__user-empty">
+              No users found
+            </div>
           </div>
         </div>
       </div>
       <div class="mp__assign-row">
-        <span class="mp__assign-current">{{ currentAssignmentValue || 'Unassigned' }}</span>
-        <button type="button" class="mp__assign-btn" :disabled="assignBusy || !assignUser" @click="assignRecord">
-          {{ assignBusy ? 'Saving...' : 'Assign' }}
+        <span class="mp__assign-current">{{
+          currentAssignmentValue || "Unassigned"
+        }}</span>
+        <button
+          type="button"
+          class="mp__assign-btn"
+          :disabled="assignBusy || !assignUser"
+          @click="assignRecord"
+        >
+          {{ assignBusy ? "Saving..." : "Assign" }}
         </button>
-        <button type="button" class="mp__assign-btn" :disabled="assignBusy || !currentAssignmentValue || assignField === 'owner'" @click="unassignRecord">
+        <button
+          type="button"
+          class="mp__assign-btn"
+          :disabled="
+            assignBusy || !currentAssignmentValue || assignField === 'owner'
+          "
+          @click="unassignRecord"
+        >
           Clear
         </button>
       </div>
     </div>
 
     <!-- Custom ToDo Customization Panel -->
-    <div v-if="sourceDoctype && sourceName && showTodoPanel" class="mp__assign-panel mp__todo-panel">
+    <div
+      v-if="sourceDoctype && sourceName && showTodoPanel"
+      class="mp__assign-panel mp__todo-panel"
+    >
       <div class="mp__todo-header">
         <span class="mp__todo-title">Create ToDo</span>
       </div>
@@ -1800,19 +2156,19 @@ function formatDate(s) {
                   <span class="mp__user-label">{{ user.label }}</span>
                   <span class="mp__user-value">{{ user.value }}</span>
                 </button>
-                <div v-if="todoUserSearchLoading" class="mp__user-empty">Searching...</div>
-                <div v-else-if="!todoUserOptions.length" class="mp__user-empty">No users found</div>
+                <div v-if="todoUserSearchLoading" class="mp__user-empty">
+                  Searching...
+                </div>
+                <div v-else-if="!todoUserOptions.length" class="mp__user-empty">
+                  No users found
+                </div>
               </div>
             </div>
           </div>
 
           <div class="mp__todo-field mp__todo-field--half">
             <label class="mp__todo-label">Due Date</label>
-            <input
-              v-model="todoDate"
-              class="mp__assign-input"
-              type="date"
-            />
+            <input v-model="todoDate" class="mp__assign-input" type="date" />
           </div>
         </div>
 
@@ -1828,9 +2184,20 @@ function formatDate(s) {
           </div>
 
           <div class="mp__todo-buttons mp__todo-field--half">
-            <button type="button" class="mp__todo-btn mp__todo-btn--ghost" @click="showTodoPanel = false">Cancel</button>
-            <button type="button" class="mp__todo-btn mp__todo-btn--primary" :disabled="todoBusy" @click="createTodo">
-              {{ todoBusy ? 'Saving...' : 'Save' }}
+            <button
+              type="button"
+              class="mp__todo-btn mp__todo-btn--ghost"
+              @click="showTodoPanel = false"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="mp__todo-btn mp__todo-btn--primary"
+              :disabled="todoBusy"
+              @click="createTodo"
+            >
+              {{ todoBusy ? "Saving..." : "Save" }}
             </button>
           </div>
         </div>
@@ -1841,21 +2208,39 @@ function formatDate(s) {
       <template v-if="isLocationAggregate">
         <section v-show="activeTab === 'location-summary'" class="mp__section">
           <div class="mp__location-aggregate">
-            <div v-if="feature.properties._location_address_html" class="mp__location-address" v-html="feature.properties._location_address_html" />
-            <div v-else class="mp__location-address">{{ feature.properties._location_title }}</div>
+            <div
+              v-if="feature.properties._location_address_html"
+              class="mp__location-address"
+              v-html="feature.properties._location_address_html"
+            />
+            <div v-else class="mp__location-address">
+              {{ feature.properties._location_title }}
+            </div>
 
             <div class="mp__summary-grid">
-              <div v-for="metric in locationSummaryMetrics" :key="metric.key" class="mp__summary-card">
+              <div
+                v-for="metric in locationSummaryMetrics"
+                :key="metric.key"
+                class="mp__summary-card"
+              >
                 <span>{{ metric.label }}</span>
                 <strong>{{ metric.value }}</strong>
               </div>
             </div>
 
             <div class="mp__summary-groups">
-              <section v-for="group in locationSummaryGroups" :key="group.title" class="mp__summary-group">
+              <section
+                v-for="group in locationSummaryGroups"
+                :key="group.title"
+                class="mp__summary-group"
+              >
                 <div class="mp__summary-group-title">{{ group.title }}</div>
                 <div class="mp__summary-lines">
-                  <div v-for="row in group.rows" :key="row.label" class="mp__summary-line">
+                  <div
+                    v-for="row in group.rows"
+                    :key="row.label"
+                    class="mp__summary-line"
+                  >
                     <span>{{ row.label }}</span>
                     <strong>{{ row.count }}</strong>
                   </div>
@@ -1867,8 +2252,14 @@ function formatDate(s) {
 
         <section v-show="activeTab === 'location-pins'" class="mp__section">
           <div class="mp__location-aggregate">
-            <div v-if="feature.properties._location_address_html" class="mp__location-address" v-html="feature.properties._location_address_html" />
-            <div v-else class="mp__location-address">{{ feature.properties._location_title }}</div>
+            <div
+              v-if="feature.properties._location_address_html"
+              class="mp__location-address"
+              v-html="feature.properties._location_address_html"
+            />
+            <div v-else class="mp__location-address">
+              {{ feature.properties._location_title }}
+            </div>
 
             <div class="mp__aggregate-list">
               <button
@@ -1878,12 +2269,18 @@ function formatDate(s) {
                 class="mp__aggregate-row"
                 @click="openAggregateRecord(record)"
               >
-                <span class="mp__aggregate-kind">{{ aggregateDoctypeLabel(record.properties?._doctype, true) }}</span>
+                <span class="mp__aggregate-kind">{{
+                  aggregateDoctypeLabel(record.properties?._doctype, true)
+                }}</span>
                 <span class="mp__aggregate-main">
                   <strong>{{ aggregateRecordTitle(record) }}</strong>
                   <small>{{ record.properties?._name || record.id }}</small>
                 </span>
-                <span v-if="aggregateRecordMeta(record)" class="mp__aggregate-meta">{{ aggregateRecordMeta(record) }}</span>
+                <span
+                  v-if="aggregateRecordMeta(record)"
+                  class="mp__aggregate-meta"
+                  >{{ aggregateRecordMeta(record) }}</span
+                >
               </button>
             </div>
           </div>
@@ -1894,14 +2291,24 @@ function formatDate(s) {
         v-show="activeTab === 'comments'"
         class="mp__section mp__section--comments"
       >
-        <RecordActivity :doctype="sourceDoctype" :name="sourceName" @count="commentCount = $event" />
+        <RecordActivity
+          :doctype="sourceDoctype"
+          :name="sourceName"
+          @count="commentCount = $event"
+        />
       </section>
-      <section v-if="!isLocationAggregate && activeTab === 'details'" class="mp__section">
-        <div v-if="sourceDoctype === 'Expedition Zone'" class="mp__zone-details">
+      <section
+        v-if="!isLocationAggregate && activeTab === 'details'"
+        class="mp__section"
+      >
+        <div
+          v-if="sourceDoctype === 'Expedition Zone'"
+          class="mp__zone-details"
+        >
           <div class="mp__zone-summary-box">
             <div class="mp__zone-row">
               <span>Zone Tag:</span>
-              <strong>{{ feature.properties.tag || 'None' }}</strong>
+              <strong>{{ feature.properties.tag || "None" }}</strong>
             </div>
             <div class="mp__zone-row">
               <span>Type:</span>
@@ -1911,10 +2318,16 @@ function formatDate(s) {
 
           <div class="mp__zone-metrics-block">
             <div class="mp__zone-metrics-head">Zone Metrics</div>
-            <p v-if="zoneLoading" class="mp__zone-loading">Calculating metrics...</p>
+            <p v-if="zoneLoading" class="mp__zone-loading">
+              Calculating metrics...
+            </p>
             <p v-else-if="zoneError" class="mp__zone-error">{{ zoneError }}</p>
             <div v-else-if="zoneMetrics" class="mp__zone-metrics-rows">
-              <div v-for="row in zoneMetrics.layers" :key="row.layer" class="mp__zone-metric-row">
+              <div
+                v-for="row in zoneMetrics.layers"
+                :key="row.layer"
+                class="mp__zone-metric-row"
+              >
                 <span>{{ row.title || row.source_doctype }}</span>
                 <strong>{{ row.count }}</strong>
               </div>
@@ -1922,11 +2335,30 @@ function formatDate(s) {
           </div>
         </div>
 
-        <div v-if="feature.properties._popup_html && sourceDoctype !== 'Expedition Zone'" class="mp__custom" v-html="feature.properties._popup_html" />
-        <div v-if="customHtmls && sourceDoctype !== 'Expedition Zone'" class="mp__custom" v-html="customHtmls" />
+        <div
+          v-if="
+            feature.properties._popup_html &&
+            sourceDoctype !== 'Expedition Zone'
+          "
+          class="mp__custom"
+          v-html="feature.properties._popup_html"
+        />
+        <div
+          v-if="customHtmls && sourceDoctype !== 'Expedition Zone'"
+          class="mp__custom"
+          v-html="customHtmls"
+        />
 
-        <div v-if="metricRows.length" class="mp__metric-grid" aria-label="Linked field metrics">
-          <div v-for="metric in metricRows" :key="metric.key" class="mp__metric-card">
+        <div
+          v-if="metricRows.length"
+          class="mp__metric-grid"
+          aria-label="Linked field metrics"
+        >
+          <div
+            v-for="metric in metricRows"
+            :key="metric.key"
+            class="mp__metric-card"
+          >
             <span class="mp__metric-label">{{ metric.label }}</span>
             <strong class="mp__metric-value">{{ metric.formatted }}</strong>
           </div>
@@ -1935,10 +2367,16 @@ function formatDate(s) {
         <div v-if="locationRows.length" class="mp__location-card">
           <div class="mp__location-head">
             <span>Location</span>
-            <small v-if="feature.properties._location_name">{{ feature.properties._location_name }}</small>
+            <small v-if="feature.properties._location_name">{{
+              feature.properties._location_name
+            }}</small>
           </div>
           <div class="mp__location-rows">
-            <div v-for="row in locationRows" :key="row.key" class="mp__location-row">
+            <div
+              v-for="row in locationRows"
+              :key="row.key"
+              class="mp__location-row"
+            >
               <span>{{ row.label }}</span>
               <strong>{{ row.formatted }}</strong>
             </div>
@@ -1946,19 +2384,33 @@ function formatDate(s) {
         </div>
 
         <div
-          v-if="linkedRecordsLoading || linkedRecordGroups.length || linkedRecordsError"
+          v-if="
+            linkedRecordsLoading ||
+            linkedRecordGroups.length ||
+            linkedRecordsError
+          "
           class="mp__linked-records"
         >
           <div class="mp__linked-head">
             <span>Linked Records</span>
             <small v-if="linkedRecordsLoading">Loading</small>
           </div>
-          <p v-if="linkedRecordsError" class="mp__linked-empty">Could not load linked records.</p>
-          <p v-else-if="linkedRecordsLoading && !linkedRecordGroups.length" class="mp__linked-empty">Loading linked records...</p>
+          <p v-if="linkedRecordsError" class="mp__linked-empty">
+            Could not load linked records.
+          </p>
+          <p
+            v-else-if="linkedRecordsLoading && !linkedRecordGroups.length"
+            class="mp__linked-empty"
+          >
+            Loading linked records...
+          </p>
           <div v-else class="mp__linked-groups">
             <template v-for="group in linkedRecordGroups" :key="group.key">
               <section
-                v-if="linkedRecordGroupSummary(group).length || linkedRecordStatusSummary(group).length"
+                v-if="
+                  linkedRecordGroupSummary(group).length ||
+                  linkedRecordStatusSummary(group).length
+                "
                 class="mp__linked-group"
               >
                 <div class="mp__linked-group-head">
@@ -1969,10 +2421,16 @@ function formatDate(s) {
                   <small>{{ group.source_doctype }}</small>
                 </div>
                 <div class="mp__linked-summary">
-                  <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
+                  <span
+                    v-for="item in linkedRecordGroupSummary(group)"
+                    :key="item.field"
+                  >
                     {{ item.label }} <strong>{{ item.value }}</strong>
                   </span>
-                  <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
+                  <span
+                    v-for="item in linkedRecordStatusSummary(group)"
+                    :key="'status-' + item.label"
+                  >
                     {{ item.label }} <strong>{{ item.count }}</strong>
                   </span>
                 </div>
@@ -1983,12 +2441,25 @@ function formatDate(s) {
 
         <template v-if="!feature.properties._popup_html">
           <div v-if="primaryRows.length" class="mp__primary">
-            <div v-for="row in primaryRows" :key="row.fieldname" class="mp__primary-row">
+            <div
+              v-for="row in primaryRows"
+              :key="row.fieldname"
+              class="mp__primary-row"
+            >
               <span class="mp__primary-label">{{ row.label }}</span>
               <span class="mp__primary-value">{{ row.formatted }}</span>
             </div>
           </div>
-          <p v-else-if="!metricRows.length && !locationRows.length && !linkedRecordGroups.length" class="mp__empty">No additional properties.</p>
+          <p
+            v-else-if="
+              !metricRows.length &&
+              !locationRows.length &&
+              !linkedRecordGroups.length
+            "
+            class="mp__empty"
+          >
+            No additional properties.
+          </p>
 
           <div v-if="secondaryRows.length" class="mp__more">
             <div class="mp__more-head">
@@ -2003,20 +2474,33 @@ function formatDate(s) {
               placeholder="Search fields"
             />
             <div class="mp__groups">
-              <section v-for="group in visibleGroups" :key="group.name" class="mp__group">
+              <section
+                v-for="group in visibleGroups"
+                :key="group.name"
+                class="mp__group"
+              >
                 <div class="mp__group-head">
                   <span>{{ group.name }}</span>
                   <span>{{ group.rows.length }}</span>
                 </div>
                 <div class="mp__group-rows">
-                  <div v-for="row in group.rows" :key="row.fieldname" class="mp__field-row">
+                  <div
+                    v-for="row in group.rows"
+                    :key="row.fieldname"
+                    class="mp__field-row"
+                  >
                     <span class="mp__field-label">{{ row.label }}</span>
                     <span class="mp__field-value">{{ row.formatted }}</span>
                   </div>
                 </div>
               </section>
             </div>
-            <button v-if="hiddenFieldCount" type="button" class="mp__show-more" @click="showMoreFields = true">
+            <button
+              v-if="hiddenFieldCount"
+              type="button"
+              class="mp__show-more"
+              @click="showMoreFields = true"
+            >
               Show {{ hiddenFieldCount }} more fields
             </button>
           </div>
@@ -2024,22 +2508,32 @@ function formatDate(s) {
         <p v-if="actionError" class="mp__action-error">{{ actionError }}</p>
       </section>
 
-      <section v-else-if="activeTab === 'activity' && sourceDoctype && sourceName" class="mp__section">
+      <section
+        v-else-if="activeTab === 'activity' && sourceDoctype && sourceName"
+        class="mp__section"
+      >
         <div class="mp__activity-head">
           <div>
             <div class="mp__activity-title">Activity</div>
-            <div v-if="activityStatus" class="mp__activity-subtitle">{{ activityStatus.label }} for {{ activityStatus.days }}d</div>
+            <div v-if="activityStatus" class="mp__activity-subtitle">
+              {{ activityStatus.label }} for {{ activityStatus.days }}d
+            </div>
           </div>
         </div>
         <div class="mp__history-list">
-          <div v-if="aggregate && !aggregateLoading" class="mp__history-summary">
+          <div
+            v-if="aggregate && !aggregateLoading"
+            class="mp__history-summary"
+          >
             <div class="mp__summary-row">
               <span class="mp__summary-label">Total</span>
               <span class="mp__summary-val">{{ aggregate.total }}</span>
             </div>
             <div v-if="aggregate.last_activity_at" class="mp__summary-row">
               <span class="mp__summary-label">Last</span>
-              <span class="mp__summary-val">{{ formatDate(aggregate.last_activity_at) }}</span>
+              <span class="mp__summary-val">{{
+                formatDate(aggregate.last_activity_at)
+              }}</span>
             </div>
             <div v-if="activityStatus" class="mp__summary-row">
               <span class="mp__summary-label">Status</span>
@@ -2049,14 +2543,25 @@ function formatDate(s) {
             </div>
           </div>
 
-          <div v-if="aggregate && aggregate.buckets.length" class="mp__history-years">
-            <div v-for="b in aggregate.buckets" :key="b.period" class="mp__history-year">
+          <div
+            v-if="aggregate && aggregate.buckets.length"
+            class="mp__history-years"
+          >
+            <div
+              v-for="b in aggregate.buckets"
+              :key="b.period"
+              class="mp__history-year"
+            >
               <div class="mp__history-year-head">
                 <span class="mp__history-year-period">{{ b.period }}</span>
                 <span class="mp__history-year-count">{{ b.total }}</span>
               </div>
               <div v-if="b.by_type" class="mp__history-year-types">
-                <span v-for="(cnt, typ) in b.by_type" :key="typ" class="mp__history-year-type">
+                <span
+                  v-for="(cnt, typ) in b.by_type"
+                  :key="typ"
+                  class="mp__history-year-type"
+                >
                   {{ typ }}: {{ cnt }}
                 </span>
               </div>
@@ -2064,16 +2569,30 @@ function formatDate(s) {
           </div>
 
           <p v-if="historyLoading" class="mp__history-empty">Loading...</p>
-          <p v-else-if="historyError" class="mp__history-empty mp__history-err">Could not load history.</p>
-          <p v-else-if="!history.length" class="mp__history-empty">No visits logged yet.</p>
+          <p v-else-if="historyError" class="mp__history-empty mp__history-err">
+            Could not load history.
+          </p>
+          <p v-else-if="!history.length" class="mp__history-empty">
+            No visits logged yet.
+          </p>
           <ul v-else class="mp__history-items">
             <li v-for="h in history" :key="h.name" class="mp__history-item">
               <div class="mp__history-item-head">
-                <span class="mp__history-type">{{ h.activity_type || h.title }}</span>
-                <span class="mp__history-date">{{ formatDate(h.occurred_at) }}</span>
+                <span class="mp__history-type">{{
+                  h.activity_type || h.title
+                }}</span>
+                <span class="mp__history-date">{{
+                  formatDate(h.occurred_at)
+                }}</span>
               </div>
               <div v-if="h.user" class="mp__history-user">by {{ h.user }}</div>
-              <div v-if="h.outcome" class="mp__history-outcome" :data-outcome="h.outcome">{{ h.outcome }}</div>
+              <div
+                v-if="h.outcome"
+                class="mp__history-outcome"
+                :data-outcome="h.outcome"
+              >
+                {{ h.outcome }}
+              </div>
               <div v-if="h.notes" class="mp__history-notes">{{ h.notes }}</div>
             </li>
           </ul>
@@ -2084,17 +2603,37 @@ function formatDate(s) {
         <div class="mp__records-head">
           <div>
             <div class="mp__records-title">Linked Records</div>
-            <div class="mp__records-subtitle">{{ linkedRecordCount || 0 }} matching business rows</div>
+            <div class="mp__records-subtitle">
+              {{ linkedRecordCount || 0 }} matching business rows
+            </div>
           </div>
-          <button type="button" class="mp__records-refresh" :disabled="linkedRecordsLoading" @click="loadLinkedRecords">
-            {{ linkedRecordsLoading ? 'Loading...' : 'Refresh' }}
+          <button
+            type="button"
+            class="mp__records-refresh"
+            :disabled="linkedRecordsLoading"
+            @click="loadLinkedRecords"
+          >
+            {{ linkedRecordsLoading ? "Loading..." : "Refresh" }}
           </button>
         </div>
-        <p v-if="linkedRecordsError" class="mp__records-empty mp__records-err">Could not load linked records.</p>
-        <p v-else-if="linkedRecordsLoading && !linkedRecordGroups.length" class="mp__records-empty">Loading linked records...</p>
-        <p v-else-if="!linkedRecordGroups.length" class="mp__records-empty">No linked records found.</p>
+        <p v-if="linkedRecordsError" class="mp__records-empty mp__records-err">
+          Could not load linked records.
+        </p>
+        <p
+          v-else-if="linkedRecordsLoading && !linkedRecordGroups.length"
+          class="mp__records-empty"
+        >
+          Loading linked records...
+        </p>
+        <p v-else-if="!linkedRecordGroups.length" class="mp__records-empty">
+          No linked records found.
+        </p>
         <div v-else class="mp__record-groups">
-          <section v-for="group in linkedRecordGroups" :key="group.key" class="mp__record-group">
+          <section
+            v-for="group in linkedRecordGroups"
+            :key="group.key"
+            class="mp__record-group"
+          >
             <div class="mp__record-group-head">
               <div>
                 <span>
@@ -2103,14 +2642,25 @@ function formatDate(s) {
                 </span>
                 <small>{{ group.source_doctype }}</small>
               </div>
-              <small v-if="group.truncated">Showing latest {{ group.rows.length }}</small>
+              <small v-if="group.truncated"
+                >Showing latest {{ group.rows.length }}</small
+              >
               <small v-else>{{ group.rows.length }} rows</small>
             </div>
-            <div v-if="linkedRecordGroupSummary(group).length" class="mp__record-summary">
-              <span v-for="item in linkedRecordGroupSummary(group)" :key="item.field">
+            <div
+              v-if="linkedRecordGroupSummary(group).length"
+              class="mp__record-summary"
+            >
+              <span
+                v-for="item in linkedRecordGroupSummary(group)"
+                :key="item.field"
+              >
                 {{ item.label }} <strong>{{ item.value }}</strong>
               </span>
-              <span v-for="item in linkedRecordStatusSummary(group)" :key="'status-' + item.label">
+              <span
+                v-for="item in linkedRecordStatusSummary(group)"
+                :key="'status-' + item.label"
+              >
                 {{ item.label }} <strong>{{ item.count }}</strong>
               </span>
             </div>
@@ -2118,7 +2668,10 @@ function formatDate(s) {
               <table class="mp__record-table">
                 <thead>
                   <tr>
-                    <th v-for="column in linkedRecordColumns(group)" :key="column.fieldname">
+                    <th
+                      v-for="column in linkedRecordColumns(group)"
+                      :key="column.fieldname"
+                    >
                       {{ column.label }}
                     </th>
                   </tr>
@@ -2129,7 +2682,9 @@ function formatDate(s) {
                     :key="row.name"
                     tabindex="0"
                     @click="openDoc(group.source_doctype, row.name)"
-                    @keydown.enter.prevent="openDoc(group.source_doctype, row.name)"
+                    @keydown.enter.prevent="
+                      openDoc(group.source_doctype, row.name)
+                    "
                   >
                     <td
                       v-for="column in linkedRecordColumns(group)"
@@ -2145,7 +2700,12 @@ function formatDate(s) {
           </section>
         </div>
       </section>
-      <section v-for="tab in customTabs" :key="tab.id" v-show="activeTab === tab.id" class="mp__section mp__custom-tab">
+      <section
+        v-for="tab in customTabs"
+        :key="tab.id"
+        v-show="activeTab === tab.id"
+        class="mp__section mp__custom-tab"
+      >
         <div v-html="customTabContents[tab.id]"></div>
       </section>
     </div>
@@ -2162,7 +2722,7 @@ function formatDate(s) {
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
-  color: #E6E8EC;
+  color: #e6e8ec;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2172,15 +2732,26 @@ function formatDate(s) {
   max-height: min(560px, 72vh);
 }
 @keyframes mp-in {
-  from { transform: translateY(-6px); opacity: 0; }
-  to   { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 .mp__header {
-  display: flex; align-items: flex-start; gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 12px 12px 9px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-.mp__titles { flex: 1; min-width: 0; }
+.mp__titles {
+  flex: 1;
+  min-width: 0;
+}
 .mp__title-row {
   display: flex;
   align-items: center;
@@ -2189,13 +2760,21 @@ function formatDate(s) {
 }
 .mp__title {
   margin: 0;
-  font-size: 14px; font-weight: 500; line-height: 1.3;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
   letter-spacing: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   min-width: 0;
   flex: 1;
 }
-.mp__subtitle { margin: 2px 0 0; font-size: 10px; color: rgba(230, 232, 236, 0.55); }
+.mp__subtitle {
+  margin: 2px 0 0;
+  font-size: 10px;
+  color: rgba(230, 232, 236, 0.55);
+}
 .mp__status {
   flex: none;
   max-width: 118px;
@@ -2204,55 +2783,103 @@ function formatDate(s) {
   white-space: nowrap;
   border: 1px solid rgba(34, 197, 94, 0.26);
   background: rgba(34, 197, 94, 0.12);
-  color: #A7F3D0;
+  color: #a7f3d0;
   border-radius: 999px;
   padding: 2px 7px;
   font-size: 10px;
   font-weight: 600;
 }
 .mp__close {
-  background: transparent; border: 0; color: rgba(230, 232, 236, 0.7);
-  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; border-radius: 5px;
+  background: transparent;
+  border: 0;
+  color: rgba(230, 232, 236, 0.7);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 5px;
 }
-.mp__close:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.mp__close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
 
-.mp__body { padding: 10px 12px 12px; overflow-y: auto; flex: 1; }
-.mp__section { min-height: 0; }
-.mp__section--comments { padding: 11px 12px 13px; }
-.mp__empty { font-size: 12px; color: rgba(230, 232, 236, 0.5); padding: 12px 0; margin: 0; text-align: center; }
-.mp__custom { padding: 4px 8px 4px 0; }
-.mp__custom :deep(a) { color: #93C5FD; }
-.mp__custom :deep(.pin) { font-size: 13px; line-height: 1.4; }
+.mp__body {
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+.mp__section {
+  min-height: 0;
+}
+.mp__section--comments {
+  padding: 11px 12px 13px;
+}
+.mp__empty {
+  font-size: 12px;
+  color: rgba(230, 232, 236, 0.5);
+  padding: 12px 0;
+  margin: 0;
+  text-align: center;
+}
+.mp__custom {
+  padding: 4px 8px 4px 0;
+}
+.mp__custom :deep(a) {
+  color: #93c5fd;
+}
+.mp__custom :deep(.pin) {
+  font-size: 13px;
+  line-height: 1.4;
+}
 
 .mp__actions {
-  display: flex; gap: 6px;
+  display: flex;
+  gap: 6px;
   padding: 7px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 .mp__action {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(230, 232, 236, 0.86);
   padding: 5px 9px;
   border-radius: 6px;
-  font-size: 11px; font-family: inherit; font-weight: 500;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
   cursor: pointer;
 }
 .mp__action:hover,
-.mp__action--active { background: rgba(59, 130, 246, 0.18); border-color: rgba(59, 130, 246, 0.34); color: #BFDBFE; }
-.mp__action--ghost { margin-left: auto; padding-left: 8px; padding-right: 8px; }
+.mp__action--active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.34);
+  color: #bfdbfe;
+}
+.mp__action--ghost {
+  margin-left: auto;
+  padding-left: 8px;
+  padding-right: 8px;
+}
 .mp__action--danger {
   border-color: rgba(239, 68, 68, 0.24);
-  color: #FCA5A5;
+  color: #fca5a5;
 }
 .mp__action--danger:hover {
   background: rgba(239, 68, 68, 0.14);
   border-color: rgba(239, 68, 68, 0.38);
-  color: #FECACA;
+  color: #fecaca;
 }
-.mp__action:disabled { opacity: 0.55; cursor: default; }
-.mp__action svg { flex: none; }
+.mp__action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.mp__action svg {
+  flex: none;
+}
 
 .mp__stack-nav {
   display: grid;
@@ -2270,18 +2897,23 @@ function formatDate(s) {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   cursor: pointer;
-  font: 700 10px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font:
+    700 10px system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .mp__stack-btn:hover {
-  color: #BFDBFE;
+  color: #bfdbfe;
   background: rgba(59, 130, 246, 0.14);
   border-color: rgba(96, 165, 250, 0.24);
 }
 .mp__stack-btn--primary {
-  color: #E6E8EC;
+  color: #e6e8ec;
   background: rgba(59, 130, 246, 0.16);
   border-color: rgba(96, 165, 250, 0.26);
 }
@@ -2305,10 +2937,12 @@ function formatDate(s) {
   font-weight: 600;
   padding: 6px 8px 7px;
 }
-.mp__tab:hover { color: rgba(230, 232, 236, 0.86); }
+.mp__tab:hover {
+  color: rgba(230, 232, 236, 0.86);
+}
 .mp__tab--active {
-  color: #E6E8EC;
-  border-bottom-color: #60A5FA;
+  color: #e6e8ec;
+  border-bottom-color: #60a5fa;
 }
 .mp__tab-count {
   display: inline-flex;
@@ -2318,7 +2952,7 @@ function formatDate(s) {
   height: 17px;
   border-radius: 999px;
   background: rgba(59, 130, 246, 0.22);
-  color: #BFDBFE;
+  color: #bfdbfe;
   padding: 0 5px;
   font-size: 10px;
 }
@@ -2336,13 +2970,15 @@ function formatDate(s) {
   gap: 6px;
   min-width: 0;
 }
-.mp__assign-row + .mp__assign-row { margin-top: 6px; }
+.mp__assign-row + .mp__assign-row {
+  margin-top: 6px;
+}
 .mp__assign-input {
   min-width: 0;
   flex: 1;
-  background: rgba(0, 0, 0, 0.20);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: #E6E8EC;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e6e8ec;
   border-radius: 5px;
   padding: 5px 7px;
   font-size: 11px;
@@ -2383,7 +3019,7 @@ function formatDate(s) {
   overflow-y: auto;
   padding: 4px;
   border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(11, 14, 20, 0.98);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
 }
@@ -2395,7 +3031,7 @@ function formatDate(s) {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #E6E8EC;
+  color: #e6e8ec;
   cursor: pointer;
   font-family: inherit;
   padding: 6px 7px;
@@ -2435,7 +3071,7 @@ function formatDate(s) {
   overflow-y: auto;
   padding: 4px;
   border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(11, 14, 20, 0.98);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
 }
@@ -2446,7 +3082,7 @@ function formatDate(s) {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #E6E8EC;
+  color: #e6e8ec;
   cursor: pointer;
   font-family: inherit;
   padding: 6px 7px;
@@ -2487,8 +3123,8 @@ function formatDate(s) {
 }
 .mp__assign-btn {
   background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.30);
-  color: #A7F3D0;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #a7f3d0;
   border-radius: 5px;
   padding: 5px 8px;
   font-family: inherit;
@@ -2501,7 +3137,7 @@ function formatDate(s) {
 }
 .mp__action-error {
   margin: 6px 0 0;
-  color: #FCA5A5;
+  color: #fca5a5;
   font-size: 11px;
 }
 
@@ -2531,7 +3167,7 @@ function formatDate(s) {
   white-space: nowrap;
 }
 .mp__metric-value {
-  color: #DCFCE7;
+  color: #dcfce7;
   font-size: 15px;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
@@ -2580,7 +3216,7 @@ function formatDate(s) {
 }
 .mp__location-row strong {
   min-width: 0;
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 11px;
   font-weight: 600;
   text-align: right;
@@ -2624,7 +3260,7 @@ function formatDate(s) {
 }
 .mp__summary-card strong {
   min-width: 0;
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 15px;
   font-weight: 800;
   line-height: 1.2;
@@ -2670,7 +3306,7 @@ function formatDate(s) {
   white-space: nowrap;
 }
 .mp__summary-line strong {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 11px;
   font-weight: 800;
 }
@@ -2683,7 +3319,7 @@ function formatDate(s) {
   display: grid;
   gap: 4px;
   padding: 8px 9px;
-  color: #E6E8EC;
+  color: #e6e8ec;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 7px;
@@ -2700,7 +3336,7 @@ function formatDate(s) {
   padding: 2px 6px;
   color: rgba(191, 219, 254, 0.88);
   background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(96, 165, 250, 0.20);
+  border: 1px solid rgba(96, 165, 250, 0.2);
   border-radius: 999px;
   font-size: 9px;
   font-weight: 800;
@@ -2784,7 +3420,7 @@ function formatDate(s) {
 }
 .mp__linked-group-head span {
   min-width: 0;
-  color: #FDE68A;
+  color: #fde68a;
   font-size: 11px;
   font-weight: 700;
   overflow: hidden;
@@ -2796,7 +3432,7 @@ function formatDate(s) {
   margin-left: 5px;
   border-radius: 999px;
   background: rgba(59, 130, 246, 0.16);
-  color: #BFDBFE;
+  color: #bfdbfe;
   padding: 1px 5px;
   font-size: 9px;
   font-style: normal;
@@ -2825,7 +3461,7 @@ function formatDate(s) {
 }
 .mp__linked-summary strong,
 .mp__record-summary strong {
-  color: #FEF3C7;
+  color: #fef3c7;
   font-variant-numeric: tabular-nums;
 }
 .mp__linked-row {
@@ -2836,7 +3472,7 @@ function formatDate(s) {
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 7px;
   background: rgba(0, 0, 0, 0.16);
-  color: #E6E8EC;
+  color: #e6e8ec;
   cursor: pointer;
   font-family: inherit;
   padding: 7px 8px;
@@ -2858,7 +3494,7 @@ function formatDate(s) {
   font-weight: 700;
 }
 .mp__linked-row-meta strong {
-  color: #FEF3C7;
+  color: #fef3c7;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -2892,7 +3528,7 @@ function formatDate(s) {
   margin-bottom: 9px;
 }
 .mp__records-title {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 13px;
   font-weight: 700;
 }
@@ -2905,7 +3541,7 @@ function formatDate(s) {
   flex: none;
   border: 1px solid rgba(245, 158, 11, 0.28);
   background: rgba(245, 158, 11, 0.12);
-  color: #FDE68A;
+  color: #fde68a;
   border-radius: 6px;
   padding: 6px 9px;
   font-family: inherit;
@@ -2925,7 +3561,7 @@ function formatDate(s) {
   font-size: 11px;
 }
 .mp__records-err {
-  color: #FCA5A5;
+  color: #fca5a5;
 }
 .mp__record-groups {
   display: grid;
@@ -2946,7 +3582,7 @@ function formatDate(s) {
 }
 .mp__record-group-head span {
   min-width: 0;
-  color: #FDE68A;
+  color: #fde68a;
   font-size: 11px;
   font-weight: 700;
   overflow: hidden;
@@ -2994,11 +3630,11 @@ function formatDate(s) {
   letter-spacing: 0.05em;
 }
 .mp__record-table td {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 11px;
 }
 .mp__record-table td[data-kind="name"] span {
-  color: #BFDBFE;
+  color: #bfdbfe;
   font-weight: 700;
 }
 .mp__record-table td[data-kind="date"] span {
@@ -3049,13 +3685,15 @@ function formatDate(s) {
 }
 .mp__primary-value,
 .mp__field-value {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 12px;
   line-height: 1.35;
   text-align: left;
   overflow-wrap: anywhere;
 }
-.mp__primary-value { font-weight: 600; }
+.mp__primary-value {
+  font-weight: 600;
+}
 .mp__more {
   margin-top: 10px;
 }
@@ -3079,15 +3717,17 @@ function formatDate(s) {
   box-sizing: border-box;
   margin-bottom: 8px;
   background: rgba(0, 0, 0, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: #E6E8EC;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e6e8ec;
   border-radius: 7px;
   padding: 7px 9px;
   font-size: 11px;
   font-family: inherit;
   outline: none;
 }
-.mp__field-search:focus { border-color: rgba(96, 165, 250, 0.72); }
+.mp__field-search:focus {
+  border-color: rgba(96, 165, 250, 0.72);
+}
 .mp__groups {
   display: grid;
   gap: 7px;
@@ -3141,7 +3781,7 @@ function formatDate(s) {
   margin-bottom: 8px;
 }
 .mp__activity-title {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-size: 13px;
   font-weight: 600;
 }
@@ -3152,37 +3792,55 @@ function formatDate(s) {
 }
 .mp__visit-btn {
   flex: none;
-  border: 1px solid rgba(16, 185, 129, 0.30);
+  border: 1px solid rgba(16, 185, 129, 0.3);
   background: rgba(16, 185, 129, 0.12);
-  color: #A7F3D0;
+  color: #a7f3d0;
   border-radius: 6px;
   padding: 6px 9px;
   font-family: inherit;
   font-size: 11px;
   cursor: pointer;
 }
-.mp__visit-btn:hover { background: rgba(16, 185, 129, 0.2); }
+.mp__visit-btn:hover {
+  background: rgba(16, 185, 129, 0.2);
+}
 
 /* Visit history section. */
-.mp__history { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
-.mp__history-toggle {
-  display: flex; align-items: center; gap: 6px;
-  background: transparent; border: 0; padding: 0;
-  color: rgba(230, 232, 236, 0.7);
-  font-family: inherit; font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.08em;
-  cursor: pointer; font-weight: 500;
+.mp__history {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
-.mp__history-toggle:hover { color: #E6E8EC; }
+.mp__history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: rgba(230, 232, 236, 0.7);
+  font-family: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  font-weight: 500;
+}
+.mp__history-toggle:hover {
+  color: #e6e8ec;
+}
 .mp__chevron {
-  display: inline-block; font-size: 10px;
+  display: inline-block;
+  font-size: 10px;
   transition: transform 150ms ease;
   opacity: 0.7;
 }
-.mp__chevron[data-open="true"] { transform: rotate(180deg); }
+.mp__chevron[data-open="true"] {
+  transform: rotate(180deg);
+}
 .mp__history-count {
   background: rgba(59, 130, 246, 0.18);
-  color: #93C5FD;
+  color: #93c5fd;
   border-radius: 8px;
   padding: 1px 6px;
   font-size: 10px;
@@ -3208,24 +3866,31 @@ function formatDate(s) {
   background: rgba(239, 68, 68, 0.18);
   color: #fca5a5;
 }
-.mp__history-list { margin-top: 6px; }
+.mp__history-list {
+  margin-top: 6px;
+}
 .mp__history-empty {
   font-size: 11px;
   color: rgba(230, 232, 236, 0.5);
   margin: 4px 0 0;
 }
-.mp__history-err { color: #FCA5A5; }
+.mp__history-err {
+  color: #fca5a5;
+}
 
 /* Activity summary row (total / last / status). */
 .mp__history-summary {
-  display: flex; gap: 8px;
+  display: flex;
+  gap: 8px;
   padding: 6px 8px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 6px;
   margin-bottom: 6px;
 }
 .mp__summary-row {
-  display: flex; flex-direction: column; gap: 1px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   font-size: 10px;
   flex: 1;
 }
@@ -3236,7 +3901,7 @@ function formatDate(s) {
   font-weight: 500;
 }
 .mp__summary-val {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-weight: 600;
   font-size: 13px;
 }
@@ -3244,13 +3909,21 @@ function formatDate(s) {
   font-weight: 600;
   font-size: 11px;
 }
-.mp__summary-status[data-kind="active"] { color: #86efac; }
-.mp__summary-status[data-kind="cooling"] { color: #fcd34d; }
-.mp__summary-status[data-kind="passive"] { color: #fca5a5; }
+.mp__summary-status[data-kind="active"] {
+  color: #86efac;
+}
+.mp__summary-status[data-kind="cooling"] {
+  color: #fcd34d;
+}
+.mp__summary-status[data-kind="passive"] {
+  color: #fca5a5;
+}
 
 /* Year breakdown. */
 .mp__history-years {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 6px;
 }
 .mp__history-year {
@@ -3259,35 +3932,49 @@ function formatDate(s) {
   padding: 4px 8px;
 }
 .mp__history-year-head {
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 10px; font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
   color: rgba(230, 232, 236, 0.85);
 }
 .mp__history-year-count {
-  color: #93C5FD;
+  color: #93c5fd;
 }
 .mp__history-year-types {
-  display: flex; gap: 6px;
+  display: flex;
+  gap: 6px;
   margin-top: 3px;
   font-size: 10px;
   color: rgba(230, 232, 236, 0.65);
 }
 .mp__history-items {
-  list-style: none; padding: 0; margin: 6px 0 0;
-  display: flex; flex-direction: column; gap: 6px;
-  max-height: 160px; overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
 }
 .mp__history-item {
-  background: rgba(0, 0, 0, 0.20);
+  background: rgba(0, 0, 0, 0.2);
   border-radius: 6px;
   padding: 6px 8px;
 }
 .mp__history-item-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   font-size: 11px;
 }
-.mp__history-type { font-weight: 500; color: #E6E8EC; }
+.mp__history-type {
+  font-weight: 500;
+  color: #e6e8ec;
+}
 .mp__history-date {
   font-size: 10px;
   color: rgba(230, 232, 236, 0.5);
@@ -3343,7 +4030,7 @@ function formatDate(s) {
 .mp__todo-title {
   font-size: 12px;
   font-weight: 500;
-  color: #E6E8EC;
+  color: #e6e8ec;
 }
 .mp__todo-form {
   display: flex;
@@ -3371,9 +4058,9 @@ function formatDate(s) {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  background: rgba(0, 0, 0, 0.20);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: #E6E8EC;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e6e8ec;
   border-radius: 5px;
   padding: 5px 7px;
   font-size: 11px;
@@ -3402,7 +4089,7 @@ function formatDate(s) {
 }
 .mp__todo-btn--ghost {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(230, 232, 236, 0.85);
 }
 .mp__todo-btn--ghost:hover {
@@ -3410,11 +4097,11 @@ function formatDate(s) {
   color: #fff;
 }
 .mp__todo-btn--primary {
-  background: #3B82F6;
+  background: #3b82f6;
   color: #fff;
 }
 .mp__todo-btn--primary:hover {
-  background: #2563EB;
+  background: #2563eb;
 }
 .mp__todo-btn--primary:disabled {
   opacity: 0.5;
@@ -3461,10 +4148,10 @@ function formatDate(s) {
 .mp__pin-icon-cell {
   height: 28px;
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.055);
-  color: #E6E8EC;
+  color: #e6e8ec;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3523,7 +4210,7 @@ function formatDate(s) {
   color: rgba(230, 232, 236, 0.62);
 }
 .mp__zone-row strong {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-weight: 500;
 }
 .mp__zone-metrics-block {
@@ -3545,7 +4232,7 @@ function formatDate(s) {
   margin: 0;
 }
 .mp__zone-error {
-  color: #FCA5A5;
+  color: #fca5a5;
 }
 .mp__zone-metrics-rows {
   display: flex;
@@ -3565,7 +4252,7 @@ function formatDate(s) {
   color: rgba(230, 232, 236, 0.72);
 }
 .mp__zone-metric-row strong {
-  color: #E6E8EC;
+  color: #e6e8ec;
   font-weight: 600;
 }
 </style>

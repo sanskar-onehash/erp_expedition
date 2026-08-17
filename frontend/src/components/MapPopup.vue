@@ -2919,11 +2919,21 @@ function formatDate(s) {
 }
 
 .mp__tabs {
+  flex: 0 0 auto;
+  min-width: 0;
   display: flex;
   gap: 4px;
   padding: 8px 12px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.mp__tabs::-webkit-scrollbar {
+  display: none;
 }
 .mp__tab {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2936,6 +2946,7 @@ function formatDate(s) {
   font-size: 11px;
   font-weight: 600;
   padding: 6px 8px 7px;
+  white-space: nowrap;
 }
 .mp__tab:hover {
   color: rgba(230, 232, 236, 0.86);

@@ -68,6 +68,7 @@ const copyBusy = ref(false);
 const assignField = ref("");
 const assignUser = ref("");
 const userOptions = ref([]);
+const userDisplayNames = ref({});
 const userSearchLoading = ref(false);
 const userSearchOpen = ref(false);
 const assignFieldOpen = ref(false);
@@ -473,6 +474,7 @@ onBeforeUnmount(() => {
 
 watch(feature, async (v) => {
   if (v) {
+    void loadFeatureUserDisplayNames(v);
     await nextTick();
     measure();
     recompute();
@@ -623,6 +625,9 @@ const currentAssignmentValue = computed(() => {
   if (!fieldname || fieldname === "__frappe_assign") return "";
   return feature.value?.properties?.[fieldname] || "";
 });
+const currentAssignmentDisplay = computed(() =>
+  formatFieldValue(assignField.value, currentAssignmentValue.value),
+);
 
 function labelFor(fieldname) {
   return fieldLabels.value[fieldname] || fieldname;
@@ -643,7 +648,7 @@ function rowObject([fieldname, value]) {
     fieldname,
     label: labelFor(fieldname),
     value,
-    formatted: formatValue(value),
+    formatted: formatFieldValue(fieldname, value),
   };
 }
 
@@ -1007,6 +1012,59 @@ function formatValue(value) {
   return String(value);
 }
 
+function formatFieldValue(fieldname, value) {
+  const raw = formatValue(value);
+  if (!raw) return raw;
+  const fullName =
+    userDisplayName(fieldname) ||
+    userFullName(raw);
+  return fullName ? `${fullName} (${raw})` : raw;
+}
+
+function userDisplayName(fieldname) {
+  const value = feature.value?.properties?._user_display;
+  if (value && typeof value === "object") return value[fieldname] || "";
+  if (typeof value !== "string") return "";
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed[fieldname] || "" : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function userFullName(userId) {
+  return userDisplayNames.value[userId] || "";
+}
+
+async function loadFeatureUserDisplayNames(selectedFeature) {
+  const props = selectedFeature?.properties || {};
+  const userFields = new Set(["owner", "modified_by"]);
+  for (const field of selectedFeature?.layer?.assignment_fields || []) {
+    if (field?.fieldname && field?.options === "User") userFields.add(field.fieldname);
+  }
+  for (const [fieldname, value] of Object.entries(props)) {
+    if (typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      userFields.add(fieldname);
+    }
+  }
+  const users = [...userFields]
+    .map((fieldname) => props[fieldname])
+    .filter((user) => user && !userDisplayNames.value[user]);
+  if (!users.length) return;
+
+  try {
+    const names = await call("expedition.api.action.get_user_display_names", {
+      users: [...new Set(users)],
+    });
+    if (names && typeof names === "object") {
+      userDisplayNames.value = { ...userDisplayNames.value, ...names };
+    }
+  } catch (e) {
+    console.warn("[expedition] user display lookup failed", e);
+  }
+}
+
 function openDoc(doctype, name) {
   openDeskDoc(doctype, name);
 }
@@ -1331,6 +1389,21 @@ async function assignRecord() {
     await Promise.all(promises);
     if (feature.value?.properties && assignField.value !== "__frappe_assign") {
       feature.value.properties[assignField.value] = assignUser.value;
+      try {
+        const names = await call("expedition.api.action.get_user_display_names", {
+          users: [assignUser.value],
+        });
+        const fullName = names?.[assignUser.value];
+        if (fullName) {
+          feature.value.properties._user_display = {
+            ...(feature.value.properties._user_display || {}),
+            [assignField.value]: fullName,
+          };
+        }
+      } catch (e) {
+        // The assignment succeeded; retain its canonical User ID if its label
+        // cannot be refreshed immediately.
+      }
     }
     if (assignField.value === "__frappe_assign") {
       showAssignPanel.value = false;
@@ -1397,8 +1470,12 @@ async function unassignRecord() {
     }
 
     await Promise.all(promises);
-    if (feature.value?.properties)
+    if (feature.value?.properties) {
       feature.value.properties[assignField.value] = "";
+      if (feature.value.properties._user_display) {
+        delete feature.value.properties._user_display[assignField.value];
+      }
+    }
   } catch (e) {
     actionError.value = e.message || String(e);
   } finally {
@@ -2088,7 +2165,7 @@ function formatDate(s) {
       </div>
       <div class="mp__assign-row">
         <span class="mp__assign-current">{{
-          currentAssignmentValue || "Unassigned"
+          currentAssignmentDisplay || "Unassigned"
         }}</span>
         <button
           type="button"

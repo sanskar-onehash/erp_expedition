@@ -48,6 +48,8 @@ LAYOUT_FIELD_TYPES = {
     "Fold",
 }
 
+USER_ID_EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
 GROUP_PALETTE = [
     "#3B82F6",
     "#10B981",
@@ -1987,6 +1989,107 @@ def _source_assignment_fields(source_doctype: str) -> list[dict[str, str]]:
     return fields
 
 
+def _source_user_fields(source_doctype: str) -> set[str]:
+    """Return source fields whose values identify Frappe Users.
+
+    ``owner`` and ``modified_by`` are standard audit fields rather than
+    DocFields, so include them explicitly.  The result is used only to add a
+    display label next to values that are already present in a feature; it
+    never adds extra User fields to a layer response.
+    """
+    if not source_doctype or not frappe.db.exists("DocType", source_doctype):
+        return set()
+
+    fields = {"owner", "modified_by"}
+    for fieldname, meta in _filter_field_map(source_doctype).items():
+        if meta.get("fieldtype") == "Link" and meta.get("options") == "User":
+            fields.add(fieldname)
+    return fields
+
+
+def _attach_user_display_to_features(features: list[dict], source_doctype: str) -> None:
+    """Attach full-name labels for User values already exposed by a layer.
+
+    A layer can contain thousands of pins, so resolve the distinct User IDs in
+    one query and attach only field-local labels to each affected feature.  The
+    raw email/User ID remains untouched for actions, filters, and links.
+    """
+    if not features:
+        return
+
+    doctypes = {str(source_doctype or "").strip()}
+    doctypes.update(
+        str((feature.get("properties") or {}).get("_doctype") or "").strip()
+        for feature in features
+    )
+    user_fields_by_doctype = {
+        doctype: _source_user_fields(doctype) for doctype in doctypes if doctype
+    }
+    if not any(user_fields_by_doctype.values()):
+        # Python-script layers can use their layer name as `_doctype`, rather
+        # than a real DocType. They have no metadata to identify User links,
+        # so email-shaped values are treated as candidate User IDs below.
+        user_fields_by_doctype = {}
+
+    def user_fields_for_props(props: dict) -> set[str]:
+        doctype = str(props.get("_doctype") or source_doctype or "").strip()
+        fields = set(user_fields_by_doctype.get(doctype, set()))
+        fields.update(
+            fieldname
+            for fieldname, value in props.items()
+            if not str(fieldname).startswith("_")
+            and isinstance(value, str)
+            and USER_ID_EMAIL_PATTERN.match(value.strip())
+        )
+        return fields
+
+    user_ids = {
+        str(props.get(fieldname)).strip()
+        for feature in features
+        for props in [feature.get("properties") or {}]
+        for fieldname in user_fields_for_props(props)
+        if props.get(fieldname)
+    }
+    if not user_ids:
+        return
+
+    users = frappe.get_all(
+        "User",
+        filters={"name": ["in", list(user_ids)]},
+        fields=["name", "full_name", "first_name", "last_name"],
+        limit_page_length=len(user_ids),
+    )
+    names = {
+        str(user.get("name")): (
+            str(user.get("full_name") or "").strip()
+            or " ".join(
+                part
+                for part in [
+                    str(user.get("first_name") or "").strip(),
+                    str(user.get("last_name") or "").strip(),
+                ]
+                if part
+            )
+        )
+        for user in users
+        if user.get("name")
+    }
+    names = {user: name for user, name in names.items() if name}
+    if not names:
+        return
+
+    for feature in features:
+        props = feature.get("properties") or {}
+        user_fields = user_fields_for_props(props)
+        display = {
+            fieldname: names[str(props.get(fieldname)).strip()]
+            for fieldname in user_fields
+            if props.get(fieldname) and str(props.get(fieldname)).strip() in names
+        }
+        if display:
+            props["_user_display"] = display
+
+
 def _location_source_mode(layer_doc) -> str:
     mode = str(getattr(layer_doc, "location_source", "") or "Direct Fields").strip()
     if mode == "Linked DocType":
@@ -2419,6 +2522,8 @@ def _get_features_from_python_script(
                 props["_popup_html"] = ""
 
         features.append({"type": "Feature", "geometry": geom, "properties": props})
+
+    _attach_user_display_to_features(features, layer_doc.source_doctype)
 
     response_style = {
         "color": layer_doc.color,
@@ -3013,6 +3118,8 @@ def get_features(
                 )
             )
 
+        _attach_user_display_to_features(features, layer_doc.source_doctype)
+
         return {
             "type": "FeatureCollection",
             "features": features,
@@ -3268,6 +3375,8 @@ def get_features(
                 multi_grouping,
             )
         )
+
+    _attach_user_display_to_features(features, layer_doc.source_doctype)
 
     return {
         "type": "FeatureCollection",

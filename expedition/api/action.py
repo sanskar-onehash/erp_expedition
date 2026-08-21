@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import frappe
 from expedition.api.permission import map_permission
 
@@ -96,6 +98,45 @@ def search_users(txt: str | None = "", limit: int | str = 8) -> list[dict]:
         for row in rows
         if row.get("value") and row.get("value") != "Guest"
     ]
+
+
+@frappe.whitelist()
+def get_user_display_names(users: list[str] | str | None = None) -> dict[str, str]:
+    """Return full names for already-known User IDs, for popup display only."""
+    if isinstance(users, str):
+        try:
+            users = json.loads(users)
+        except ValueError:
+            users = [users]
+    if not isinstance(users, list):
+        return {}
+
+    user_ids = list(
+        dict.fromkeys(str(user or "").strip() for user in users if str(user or "").strip())
+    )[:100]
+    if not user_ids:
+        return {}
+
+    rows = frappe.get_all(
+        "User",
+        filters={"name": ["in", user_ids]},
+        fields=["name", "full_name", "first_name", "last_name"],
+        limit_page_length=len(user_ids),
+    )
+    result = {}
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        display = str(row.get("full_name") or "").strip() or " ".join(
+            part
+            for part in [
+                str(row.get("first_name") or "").strip(),
+                str(row.get("last_name") or "").strip(),
+            ]
+            if part
+        )
+        if name and display:
+            result[name] = display
+    return result
 
 
 @frappe.whitelist()

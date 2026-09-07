@@ -24,8 +24,8 @@
  *   - The current skin comes from ui.currentSkinId (or ui.previewSkinId
  *     during hover-preview). The skin is resolved to a MapLibre style
  *     spec via the SKINS gallery.
- *   - We rebuild the style with map.setStyle() and re-add all our sources
- *     on 'styledata'. setStyle wipes our custom layers.
+ *   - We rebuild the style with map.setStyle() and restore all custom
+ *     sources/layers when the replacement style has finished loading.
  */
 import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import maplibregl from 'maplibre-gl'
@@ -1881,8 +1881,11 @@ function _fetchAllVisibleBounds() {
   }
 }
 
-function _applyIndiaBoundaryFix() {
-  if (!map || !map.isStyleLoaded()) return
+function _applyIndiaBoundaryFix(styleGraphReady = false) {
+  // `style.load` guarantees a parsed style graph even though isStyleLoaded()
+  // may still be waiting for remote tiles. Other callers keep the stricter
+  // pre-existing guard.
+  if (!map || !map.getStyle() || (!styleGraphReady && !map.isStyleLoaded())) return
 
   // 1. Define the exclusion expression to hide boundary lines touching India
   const excludeIndiaExpression = [
@@ -2003,8 +2006,8 @@ function _applyIndiaBoundaryFix() {
   }
 }
 
-function _reAddAllLayers() {
-  if (!map || !map.isStyleLoaded()) return
+function _reAddAllLayers(styleGraphReady = false) {
+  if (!map || !map.getStyle() || (!styleGraphReady && !map.isStyleLoaded())) return
   _pruneStaleRenderedLayers()
   for (const layer of layerStore.layers) {
     if (layerStore.features[layer.name] || layerStore.getDisplayFeatures(layer.name)) {
@@ -2797,22 +2800,31 @@ onMounted(() => {
   // No in-map recenter control — keeps the bottom-right cluster
   // single-source-of-truth and avoids duplicating fit behaviour.
 
-  // Sources/layers re-add hooks. setStyle wipes everything, so we
-  // re-add on every styledata.
-  map.on('styledata', () => {
-    if (ui.basemapLoading) ui.basemapLoading = false
-    _applyIndiaBoundaryFix()
-    _reAddAllLayers()
+  // setStyle wipes every Expedition-owned source/layer. `style.load` means the
+  // replacement style graph is parsed and ready for addSource/addLayer. It is
+  // intentionally different from isStyleLoaded(), which waits for all remote
+  // sources and can keep the loading UI stuck while tiles are still fetching.
+  const restoreStyleOverlays = (styleGraphReady = false) => {
+    if (!map || !map.getStyle()) return
+    _applyIndiaBoundaryFix(styleGraphReady)
+    _reAddAllLayers(styleGraphReady)
     _reAddZones()
     _reAddPins()
+  }
+
+  map.on('styledata', () => {
+    // Keep the previous fully-loaded retry path for late source updates, but
+    // never use it to decide whether the basemap loading overlay can close.
+    if (map?.isStyleLoaded()) restoreStyleOverlays()
+  })
+  map.on('style.load', () => {
+    ui.basemapLoading = false
+    restoreStyleOverlays(true)
   })
 
   // Initial bootstrap: paint any layers that already have features.
   map.on('load', () => {
-    _applyIndiaBoundaryFix()
-    _reAddAllLayers()
-    _reAddZones()
-    _reAddPins()
+    restoreStyleOverlays(true)
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
     _runActiveMapCustomScript()

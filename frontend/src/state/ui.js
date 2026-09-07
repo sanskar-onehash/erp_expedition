@@ -149,7 +149,7 @@ export const useUiStore = defineStore('ui', () => {
   function closeContextMenu() { contextMenu.value = null }
 
   // Loading state for the initial basemap style fetch. Set by Basemap.vue
-  // when it calls setStyle(), cleared on 'load'.
+  // when it calls setStyle(), cleared on 'style.load'.
   const basemapLoading = ref(false)
 
   // Incrementing counter: how many layer fetches are in flight. The

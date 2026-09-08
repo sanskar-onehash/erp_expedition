@@ -103,7 +103,7 @@ export const useLayersStore = defineStore('layers', () => {
   }
 
   const visibleLayers = computed(() =>
-    layers.value.filter(l => l.enabled !== 0 && !locallyHidden.has(l.name))
+    layers.value.filter(l => l.enabled !== false && l.enabled !== 0 && !locallyHidden.has(l.name))
   )
 
   const featureListeners = new Set()
@@ -137,6 +137,17 @@ export const useLayersStore = defineStore('layers', () => {
 
   function _baseFeatures(layerName) {
     return unfilteredFeatures.value[layerName] || features.value[layerName]
+  }
+
+  function _featureKeysForLayer(layerName) {
+    const prefix = `${layerName}__grp__`
+    const keys = new Set([
+      ...Object.keys(features.value),
+      ...Object.keys(unfilteredFeatures.value),
+    ])
+    const grouped = [...keys].filter((key) => key.startsWith(prefix))
+    if (grouped.length) return grouped
+    return keys.has(layerName) ? [layerName] : []
   }
 
   function _filteredFeatureCollection(layerName, fc) {
@@ -498,9 +509,11 @@ export const useLayersStore = defineStore('layers', () => {
     const layerCounts = {}
     let total = 0
     for (const layer of targetLayers || []) {
-      const fc = _baseFeatures(layer.name)
       const fields = sourceFields.value[layer.source_doctype] || []
-      const count = countParsedMapSearchMatches(fc, layer, fields, parsed, _searchContext(layer.name))
+      const count = _featureKeysForLayer(layer.name).reduce((sum, key) =>
+        sum + countParsedMapSearchMatches(
+          _baseFeatures(key), layer, fields, parsed, _searchContext(layer.name),
+        ), 0)
       layerCounts[layer.name] = count
       total += count
     }
@@ -534,8 +547,10 @@ export const useLayersStore = defineStore('layers', () => {
     if (!wantedField) return true
     if (!fc || !Array.isArray(fc.features)) return false
     const fieldname = _resolveFieldname(fields, wantedField) || wantedField
+    const metricFieldname = `_metric_${fieldname}`
     return fc.features.some((feature) =>
       Object.prototype.hasOwnProperty.call(feature?.properties || {}, fieldname)
+      || Object.prototype.hasOwnProperty.call(feature?.properties || {}, metricFieldname)
     )
   }
 
@@ -555,12 +570,14 @@ export const useLayersStore = defineStore('layers', () => {
     for (const layer of targetLayers || []) {
       const searchFields = _structuredSearchFields(parsed, layer)
       const fields = sourceFields.value[layer.source_doctype] || []
-      const fc = _baseFeatures(layer.name)
+      const featureCollections = _featureKeysForLayer(layer.name).map(_baseFeatures)
       const extraFields = searchFields
         .map((field) => _resolveFieldname(fields, field))
         .filter(Boolean)
         .filter((field, idx, arr) => arr.indexOf(field) === idx)
-      const needsRefresh = searchFields.some((field) => !_featureCollectionHasField(fc, fields, field))
+      const needsRefresh = searchFields.some((field) =>
+        !featureCollections.some((fc) => _featureCollectionHasField(fc, fields, field))
+      )
       const needsFullScriptFetch = layer?.data_source_type === 'Python Script'
       if (needsFullScriptFetch || hasTextSearch || needsRefresh) {
         missing.push({ layerName: layer.name, extraFields })
@@ -614,8 +631,10 @@ export const useLayersStore = defineStore('layers', () => {
     const textMatches = await _fetchTextSearchMatches(parsed, targetLayers)
     const nextUnfiltered = { ...unfilteredFeatures.value }
     for (const layer of targetLayers) {
-      if (!nextUnfiltered[layer.name] && features.value[layer.name]) {
-        nextUnfiltered[layer.name] = features.value[layer.name]
+      for (const key of _featureKeysForLayer(layer.name)) {
+        if (!nextUnfiltered[key] && features.value[key]) {
+          nextUnfiltered[key] = features.value[key]
+        }
       }
     }
     unfilteredFeatures.value = nextUnfiltered
@@ -632,10 +651,12 @@ export const useLayersStore = defineStore('layers', () => {
     const counts = _searchCounts(parsed, targetLayers)
     activeSearch.value = { ...activeSearch.value, ...counts }
     for (const layer of targetLayers) {
-      const base = _baseFeatures(layer.name)
-      if (!base) continue
-      features.value[layer.name] = _filteredFeatureCollection(layer.name, base)
-      _emitFeaturesUpdated(layer.name)
+      for (const key of _featureKeysForLayer(layer.name)) {
+        const base = _baseFeatures(key)
+        if (!base) continue
+        features.value[key] = _filteredFeatureCollection(key, base)
+        _emitFeaturesUpdated(key)
+      }
     }
     return activeSearch.value
   }

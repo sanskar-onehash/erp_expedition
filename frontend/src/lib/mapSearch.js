@@ -321,7 +321,10 @@ function resolveFieldMeta(fields, field) {
 
 function inferFieldMeta(props, field) {
   const wanted = normalizeToken(field)
-  const key = Object.keys(props || {}).find((item) => normalizeToken(item) === wanted)
+  const key = Object.keys(props || {}).find((item) =>
+    normalizeToken(item) === wanted
+    || (item.startsWith('_metric_') && normalizeToken(item.slice(8)) === wanted)
+  )
   if (!key) return null
   const value = props[key]
   let fieldtype = 'Data'

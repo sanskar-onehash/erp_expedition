@@ -2786,6 +2786,19 @@ def get_features(
         if f not in fields:
             fields.append(f)
 
+    # A data-driven radius can only be rendered when its source value travels
+    # with each feature. Radius fields are often intentionally omitted from
+    # popup/list fields, so include the configured field explicitly.
+    radius_field = (
+        getattr(layer_doc, "radius_field", "")
+        if getattr(layer_doc, "radius_enabled", 0)
+        else ""
+    )
+    if radius_field:
+        _append_valid_source_fields(
+            fields, layer_doc.source_doctype, [radius_field]
+        )
+
     heatmap_config = _heatmap_config_dict(layer_doc)
     heatmap_weight_field = (
         heatmap_config.get("weight_field")

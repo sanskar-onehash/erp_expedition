@@ -375,7 +375,11 @@ function featureIdentity(feature) {
   const props = feature?.properties || {}
   const doctype = String(props._doctype || '').trim()
   const name = String(props._name || feature?.id || '').trim()
-  if (doctype && name) return `${doctype}:${name}`
+  const rawLayerId = feature?.layer?.id || ''
+  const layerName = rawLayerId === pinLayerId() || rawLayerId === pinIconLayerId()
+    ? 'Expedition Map Pin'
+    : parentLayerName(layerNameFromRenderedLayerId(rawLayerId))
+  if (doctype && name) return `${layerName}:${doctype}:${name}`
   return `${feature?.layer?.id || 'layer'}:${name || JSON.stringify(feature?.geometry?.coordinates || [])}`
 }
 
@@ -396,6 +400,13 @@ function featureLocationKey(feature) {
 
 function layerMetaForRenderedFeature(feature) {
   const rawId = feature?.layer?.id || ''
+  if (rawId === pinLayerId() || rawId === pinIconLayerId()) {
+    return {
+      renderName: 'Expedition Map Pin',
+      layerName: 'Expedition Map Pin',
+      layer: manualPinLayerMeta(),
+    }
+  }
   const renderName = layerNameFromRenderedLayerId(rawId)
   const layerName = parentLayerName(renderName)
   const fc = layerStore.getDisplayFeatures(layerName)
@@ -412,6 +423,8 @@ function locationTitleForFeature(feature) {
     || props.customer_address_name
     || props.address_name
     || props._location_name
+    || props.title
+    || props._label
     || props.customer_name
     || props.customer
     || 'Shared Location'
@@ -521,6 +534,21 @@ function pinSourceId() { return 'src-manual-pins' }
 function pinHaloLayerId() { return 'lyr-manual-pins-halo' }
 function pinLayerId() { return 'lyr-manual-pins' }
 function pinIconLayerId() { return 'lyr-manual-pins-icon' }
+
+function manualPinLayerMeta() {
+  return {
+    name: 'Expedition Map Pin',
+    title: 'Manual Pin',
+    click_action: 'popup',
+    field_labels: {
+      title: 'Title',
+      pin_type: 'Pin Type',
+      note: 'Note',
+      status: 'Status',
+      color: 'Color',
+    },
+  }
+}
 function pinLabelLayerId() { return 'lyr-manual-pins-label' }
 
 function normalizeManualPinIcon(icon) {
@@ -2302,6 +2330,10 @@ function _pinsFeatureCollection() {
         },
         properties: {
           name: pin.name,
+          _name: pin.name,
+          _doctype: 'Expedition Map Pin',
+          _label: pin.title || pin.name,
+          _popup_fields: ['title', 'pin_type', 'note', 'status', 'color'],
           title: pin.title || pin.name,
           pin_type: pin.pin_type || 'note',
           status: pin.status || 'open',
@@ -2309,6 +2341,7 @@ function _pinsFeatureCollection() {
       icon,
       ...(spec ? { _display_icon_image: spec.imageId } : {}),
           description: pin.description || '',
+          note: pin.description || '',
           linked_doctype: pin.linked_doctype || '',
           linked_name: pin.linked_name || '',
         },
@@ -2439,6 +2472,26 @@ function onPinClick(e) {
   if (ui.drawMode !== 'off' || ui.measureMode) return
   const f = e.features?.[0]
   if (!f?.properties?.name) return
+  e.preventDefault?.()
+
+  const pointLayers = [
+    ..._interactivePointLayers,
+    pinLayerId(),
+    pinIconLayerId(),
+  ].filter((id) => map.getLayer(id))
+  if (pointLayers.length) {
+    try {
+      const rendered = map.queryRenderedFeatures(e.point, { layers: pointLayers })
+      const aggregate = createLocationAggregateFeature(f, rendered, e.lngLat)
+      if (aggregate) {
+        ui.selectedFeature = aggregate
+        return
+      }
+    } catch (_) {
+      // A style/source update can briefly race the rendered feature query.
+    }
+  }
+
   const mapName = mapStore.activeMap?.map?.name
   const pin = (mapName && pinsStore.byMap?.[mapName] || []).find((row) => row.name === f.properties.name)
   if (!pin) return
@@ -2462,18 +2515,7 @@ function onPinClick(e) {
       linked_doctype: pin.linked_doctype || '',
       linked_name: pin.linked_name || '',
     },
-    layer: {
-      name: 'Expedition Map Pin',
-      title: 'Manual Pin',
-      click_action: 'popup',
-      field_labels: {
-        title: 'Title',
-        pin_type: 'Pin Type',
-        note: 'Note',
-        status: 'Status',
-        color: 'Color',
-      },
-    },
+    layer: manualPinLayerMeta(),
   }
 }
 

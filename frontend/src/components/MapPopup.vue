@@ -787,6 +787,14 @@ function aggregateRecordTitle(record) {
   );
 }
 
+function aggregateRecordKind(record) {
+  return (
+    record?.layer?.title ||
+    record?.layerName ||
+    aggregateDoctypeLabel(record?.properties?._doctype, true)
+  );
+}
+
 function aggregateRecordMeta(record) {
   const p = record?.properties || {};
   const values = [
@@ -846,6 +854,31 @@ const locationSummaryMetrics = computed(() => {
     (sum, record) => sum + paymentAmount(record),
     0,
   );
+  if (!products.length && !issues.length && !payments.length) {
+    const recordIds = new Set(
+      records.map((record) => {
+        const p = record?.properties || {};
+        return `${p._doctype || "Record"}:${p._name || record?.id || ""}`;
+      }),
+    );
+    const layerNames = new Set(
+      records.map(
+        (record) =>
+          record?.layer?.title || record?.layerName || "Map Layer",
+      ),
+    );
+    const statuses = new Set(
+      records
+        .map((record) => record?.properties?.status)
+        .filter((status) => status != null && status !== ""),
+    );
+    return [
+      { key: "pins", label: "Pins", value: records.length },
+      { key: "records", label: "Records", value: recordIds.size },
+      { key: "layers", label: "Layers", value: layerNames.size },
+      { key: "statuses", label: "Statuses", value: statuses.size },
+    ];
+  }
   return [
     { key: "products", label: "Products", value: products.length },
     { key: "issues", label: "Open Issues", value: issues.length },
@@ -864,14 +897,17 @@ function summaryGroupField(record) {
     return p.item_name || p.item_code || "Installed Product";
   if (p._doctype === "Issue") return p.status || "Issue";
   if (isPaymentRecord(record)) return p.status || "Payment";
-  return p._doctype || "Record";
+  return p.status || p._doctype || "Record";
 }
 
 const locationSummaryGroups = computed(() => {
   const byType = new Map();
   for (const record of locationAggregateRecords.value) {
     const doctype = record?.properties?._doctype || "Record";
-    const label = aggregateDoctypeLabel(doctype);
+    const label =
+      record?.layer?.title ||
+      record?.layerName ||
+      aggregateDoctypeLabel(doctype);
     if (!byType.has(label)) byType.set(label, new Map());
     const rows = byType.get(label);
     const key = summaryGroupField(record);
@@ -2341,13 +2377,13 @@ function formatDate(s) {
             <div class="mp__aggregate-list">
               <button
                 v-for="record in locationAggregateRecords"
-                :key="`${record.properties?._doctype || 'Record'}:${record.properties?._name || record.id}`"
+                :key="`${record.layer?.name || record.layerName || 'Layer'}:${record.properties?._doctype || 'Record'}:${record.properties?._name || record.id}`"
                 type="button"
                 class="mp__aggregate-row"
                 @click="openAggregateRecord(record)"
               >
                 <span class="mp__aggregate-kind">{{
-                  aggregateDoctypeLabel(record.properties?._doctype, true)
+                  aggregateRecordKind(record)
                 }}</span>
                 <span class="mp__aggregate-main">
                   <strong>{{ aggregateRecordTitle(record) }}</strong>

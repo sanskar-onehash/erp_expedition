@@ -498,10 +498,14 @@ watch(feature, async (v) => {
     showMoreFields.value = false;
     showAssignPanel.value = false;
     showTodoPanel.value = false;
-    if (v.properties?._doctype === "Expedition Location") {
+    if (
+      v.properties?._doctype === "Expedition Location" ||
+      v.properties?._doctype === "Expedition Map Pin"
+    ) {
       history.value = [];
       aggregate.value = null;
       linkedRecords.value = [];
+      linkedRecordsError.value = "";
     } else {
       loadHistory();
       loadLinkedRecords();
@@ -1032,7 +1036,7 @@ const linkedRecordCount = computed(() =>
   linkedRecordGroups.value.reduce((sum, group) => sum + group.rows.length, 0),
 );
 const linkedRecordTabVisible = computed(() =>
-  Boolean(sourceDoctype.value && sourceName.value),
+  Boolean(sourceDoctype.value && sourceName.value && !isManualPin.value),
 );
 const statusRow = computed(() =>
   allRows.value.find((row) =>
@@ -1554,7 +1558,7 @@ async function loadHistory() {
 }
 
 async function loadLinkedRecords() {
-  if (!layer.value?.name || !sourceName.value) {
+  if (isManualPin.value || !layer.value?.name || !sourceName.value) {
     linkedRecords.value = [];
     linkedRecordsError.value = "";
     return;

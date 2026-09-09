@@ -23,6 +23,10 @@ import UiColorInput from './ui/UiColorInput.vue'
 import UiNumberInput from './ui/UiNumberInput.vue'
 import UiSelect from './ui/UiSelect.vue'
 import { parseFilterRows, serializeFilterRows } from '../lib/filters.js'
+import {
+  distinctFeaturePropertyValues,
+  inferFeaturePropertyFields,
+} from '../lib/featureGrouping.js'
 import { RAMP_PRESETS, serializeRamp } from '../api/heatmap.js'
 
 const ui = useUiStore()
@@ -854,10 +858,17 @@ const linkedMetricFields = computed(() => {
       options: '',
     }))
 })
-const groupFieldOptions = computed(() => [
-  ...sourceFields.value,
-  ...linkedMetricFields.value,
-])
+const scriptPropertyFields = computed(() => inferFeaturePropertyFields(
+  layerStore.features[form.value.name],
+  form.value.group_by_field,
+))
+const groupFieldOptions = computed(() => {
+  const candidates = [
+    ...(isPythonScriptLayer.value ? scriptPropertyFields.value : sourceFields.value),
+    ...linkedMetricFields.value,
+  ]
+  return [...new Map(candidates.map((field) => [field.fieldname, field])).values()]
+})
 const numericFields = computed(() =>
   [
     ...sourceFields.value.filter((f) =>
@@ -1195,7 +1206,12 @@ function chooseHeatmapRamp(key) {
 async function onGroupByChange() {
   form.value.group_config = {}
   groupValues.value = []
-  if (!form.value.source_doctype || !form.value.group_by_field) return
+  if (!form.value.group_by_field) return
+  if (isPythonScriptLayer.value) {
+    await loadExactGroupValues()
+    return
+  }
+  if (!form.value.source_doctype) return
   if (groupBySupportsBands.value) {
     setGroupMode('bands')
     return
@@ -1225,13 +1241,24 @@ async function chooseGroupField(fieldname) {
 
 async function loadExactGroupValues() {
   if (isAdvancedGrouping.value) return
-  if (!form.value.source_doctype || !form.value.group_by_field) return
+  if (!form.value.group_by_field) return
   try {
-    const resp = await call('expedition.api.layer.list_group_values', {
-      source_doctype: form.value.source_doctype,
-      field: form.value.group_by_field,
-    })
-    groupValues.value = resp.values || []
+    if (isPythonScriptLayer.value) {
+      const inferredValues = distinctFeaturePropertyValues(
+        layerStore.features[form.value.name],
+        form.value.group_by_field,
+      )
+      const configuredValues = Object.keys(form.value.group_config || {})
+        .filter((key) => !key.startsWith('__'))
+      groupValues.value = [...new Set([...inferredValues, ...configuredValues])]
+    } else {
+      if (!form.value.source_doctype) return
+      const resp = await call('expedition.api.layer.list_group_values', {
+        source_doctype: form.value.source_doctype,
+        field: form.value.group_by_field,
+      })
+      groupValues.value = resp.values || []
+    }
     // Seed group_config with auto-assigned colors so the user sees
     // immediate differentiation on the map (instead of an unwieldy
     // "configure every value" form). Existing user overrides on the
@@ -1259,6 +1286,19 @@ async function loadExactGroupValues() {
     error.value = 'Could not load group values: ' + e.message
   }
 }
+
+// A script layer may finish its viewport fetch after the editor opens. Refresh
+// its exact values at that point so newly observed property values become
+// configurable without closing and reopening the editor.
+watch(
+  () => isPythonScriptLayer.value && form.value.name
+    ? layerStore.lastFetched[form.value.name]
+    : null,
+  () => {
+    if (!isPythonScriptLayer.value || !form.value.group_by_field || isAdvancedGrouping.value) return
+    loadExactGroupValues()
+  },
+)
 
 function _bandKey() {
   return `band_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -2308,13 +2348,14 @@ function close() {
         </div>
 
         <!-- Group By / Segmentation -->
-        <div v-if="!isPythonScriptLayer" class="le__filter">
+        <div class="le__filter">
           <div class="le__filter-header">
             <span class="le__label">Group By <span class="le__hint">(color/icon by value)</span></span>
-            <button type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">
+            <button v-if="!isPythonScriptLayer" type="button" class="le__btn le__btn--ghost le__btn--sm" @click="openAdvancedGrouping">
               Advanced
             </button>
           </div>
+          <p v-if="isPythonScriptLayer" class="le__group-note">Fields and values are inferred from the script's loaded feature properties.</p>
           <div v-if="isAdvancedGrouping" class="le__advanced-group-summary">
             <div>
               <strong>{{ advancedGroupingSummary }}</strong>

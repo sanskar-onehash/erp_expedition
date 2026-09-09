@@ -39,6 +39,7 @@ import { getSkin, resolveStyleUrl } from '../api/skins.js'
 import { coloredIconImageId, registerColoredIcons } from '../api/icons.js'
 import { activeMapCursor, applyMapCursor } from '../lib/mapCursor.js'
 import { openDeskDoc } from '../lib/desk.js'
+import { featureGroupKey } from '../lib/featureGrouping.js'
 import {
   normalizeGeometryLngs,
   normalizeLngLat,
@@ -679,14 +680,6 @@ function featureDisplayIcon(feature, layerIcon) {
   return feature?.properties?._icon || layerIcon || ''
 }
 
-function featureGroupKey(feature) {
-  const props = feature?.properties || {}
-  if (props._group_value != null && props._group_value !== '') return String(props._group_value)
-  if (Object.prototype.hasOwnProperty.call(props, '_group_value')) return '(blank)'
-  if (Array.isArray(props._group_path) && props._group_path.length) return props._group_path.join('\x1f')
-  return null
-}
-
 function featureGroupLabel(feature, fallback) {
   const props = feature?.properties || {}
   return props._group_label || props._group_value || fallback
@@ -721,9 +714,10 @@ function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
     })
   }
 
+  const clientSideOnly = ['Python Script', 'Client Script (JS)'].includes(layerDoc?.data_source_type)
   const groups = new Map()
   for (const feature of fc?.features || []) {
-    const key = featureGroupKey(feature)
+    const key = featureGroupKey(feature, layerDoc?.group_by_field)
     if (!key) continue
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(feature)
@@ -731,15 +725,18 @@ function buildVirtualGroupLayers(layerName, fc, layerDoc, style, color) {
   if (!groups.size) return []
   return [...groups.entries()].map(([key, features]) => {
     const first = features[0]
-    const groupColor = featureDisplayColor(first, color)
     const groupCfg = groupConfigForKey(layerDoc, key)
+    const groupColor = groupCfg?.color || featureDisplayColor(first, color)
     const inheritedIcon = style.icon || layerDoc.icon || ''
-    const groupIcon = featureDisplayIcon(first, inheritedIcon)
+    const groupIcon = groupCfg?.icon === '__none'
+      ? ''
+      : groupCfg?.icon || featureDisplayIcon(first, inheritedIcon)
     const renderName = virtualGroupName(layerName, key)
     return {
       renderName,
       parentName: layerName,
       groupKey: key,
+      clientSideOnly,
       fc: {
         ...fc,
         features,
@@ -1404,8 +1401,9 @@ function _addLayerOnMap(layerName, renderContext = null) {
     const virtualGroups = buildVirtualGroupLayers(layerName, fc, layerDoc, style, color)
     if (virtualGroups.length) {
       _removeBasePointArtifacts(layerName)
-      if (enabled && territoryEnabled(layerDoc, style)) {
-        layerStore.fetchVirtualGroupTerritoryFeatures(layerName, virtualGroups.map((group) => ({
+      const serverBackedGroups = virtualGroups.filter((group) => !group.clientSideOnly)
+      if (enabled && territoryEnabled(layerDoc, style) && serverBackedGroups.length) {
+        layerStore.fetchVirtualGroupTerritoryFeatures(layerName, serverBackedGroups.map((group) => ({
           cacheKey: group.renderName,
           groupKey: group.groupKey,
         }))).then(() => {
@@ -1426,7 +1424,7 @@ function _addLayerOnMap(layerName, renderContext = null) {
           bounds: layerStore.lastBounds?.[layerName] || null,
           groupKey: group.groupKey,
         })
-        if (_virtualGroupFetchKeys[group.renderName] !== fetchKey && !layerStore.loading?.[group.renderName]) {
+        if (!group.clientSideOnly && _virtualGroupFetchKeys[group.renderName] !== fetchKey && !layerStore.loading?.[group.renderName]) {
           _virtualGroupFetchKeys[group.renderName] = fetchKey
           groupsToFetch.push({
             cacheKey: group.renderName,

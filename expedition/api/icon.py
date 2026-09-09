@@ -18,6 +18,12 @@ MAX_SVG_CHARS = 100_000
 MAX_IMAGE_BYTES = 1_000_000
 ET.register_namespace("", SVG_NS)
 
+SVG_XMLNS_ATTR_RE = re.compile(
+    r"""\s+xmlns\s*=\s*([\"'])http://www\.w3\.org/2000/svg\1""",
+    re.I,
+)
+SVG_ROOT_RE = re.compile(r"(?P<start>\s*<svg\b)(?P<attrs>[^>]*)(?P<end>>)", re.I | re.S)
+
 FORBIDDEN_TAGS = {
     "script",
     "foreignObject",
@@ -161,8 +167,30 @@ def sanitize_svg(svg_text: str) -> str:
     _sanitize_node(root)
     if not root.get("viewBox"):
         root.set("viewBox", "0 0 24 24")
-    root.set("xmlns", SVG_NS)
+    # Unpainted SVG shapes default to black, which ignores the layer color.
+    # Let them inherit the color assigned by the map renderer instead.
+    if "fill" not in root.attrib:
+        root.set("fill", "currentColor")
+    # ET.register_namespace above emits the default namespace. Setting xmlns
+    # explicitly here would serialize it twice and produce invalid XML.
     return ET.tostring(root, encoding="unicode", method="xml")
+
+
+def normalize_stored_svg(svg_text: str | None) -> str | None:
+    """Return legacy sanitized SVGs with one canonical root namespace.
+
+    Older uploads contain two identical ``xmlns`` attributes because the SVG
+    sanitizer both registered and explicitly set the default namespace. Repair
+    the response without mutating stored icon records.
+    """
+    if not svg_text:
+        return svg_text
+    match = SVG_ROOT_RE.match(svg_text)
+    if not match:
+        return svg_text
+    attrs = SVG_XMLNS_ATTR_RE.sub("", match.group("attrs"))
+    root = f'{match.group("start")} xmlns="{SVG_NS}"{attrs}{match.group("end")}'
+    return root + svg_text[match.end() :]
 
 
 def sanitize_image_data_url(data_url: str) -> tuple[str, str]:
@@ -201,7 +229,7 @@ def _icon_to_dto(row: dict) -> dict:
         "icon_format": icon_format,
         "scope": row["scope"],
         "owner_user": row.get("owner_user"),
-        "svg_content": row["svg_content"],
+        "svg_content": normalize_stored_svg(row["svg_content"]),
         "image_mime": row.get("image_mime"),
         "image_data_url": row.get("image_data_url"),
         "modified": str(row.get("modified") or ""),

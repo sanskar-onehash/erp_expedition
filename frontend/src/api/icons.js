@@ -75,7 +75,7 @@ function _renderSvgText(svgText, size, color = 'currentColor') {
   return new Promise((resolve, reject) => {
     const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
     const svg = doc.documentElement
-    if (!svg || svg.nodeName.toLowerCase() !== 'svg') {
+    if (doc.querySelector('parsererror') || !svg || svg.nodeName.toLowerCase() !== 'svg') {
       reject(new Error('Invalid custom SVG'))
       return
     }
@@ -156,28 +156,41 @@ export function coloredIconImageId(id, color) {
 
 export async function registerColoredIcons(map, specs, pixelSize = 28) {
   if (!map || !specs || specs.length === 0) return
-  const needsBuiltins = specs.some((spec) => !spec?.svg && !spec?.imageDataUrl)
-  const available = needsBuiltins
-    ? new Map((await _loadSvgText()).symbols.map((s) => [s.id, s]))
-    : new Map()
+  // Keep the built-in marker available as a per-icon fallback. A malformed
+  // custom asset must not reject the whole batch or make its pin disappear.
+  let available = null
+  const getBuiltins = async () => {
+    if (!available) {
+      available = new Map((await _loadSvgText()).symbols.map((s) => [s.id, s]))
+    }
+    return available
+  }
   for (const spec of specs) {
     const id = spec?.id
     const color = spec?.color || '#3B82F6'
     const imageId = spec?.imageId || coloredIconImageId(id, color)
     if (!id || !imageId) continue
     if (map.hasImage(imageId)) continue
-    const img = spec.svg
-      ? await _renderSvgText(spec.svg, pixelSize, color)
-      : spec.imageDataUrl
-        ? await _renderImageDataUrl(spec.imageDataUrl, pixelSize)
-      : await _renderSymbol(available.get(id), pixelSize, color)
-    if (!img) continue
-    if (map.hasImage(imageId)) continue
     try {
+      const img = spec.svg
+        ? await _renderSvgText(spec.svg, pixelSize, color)
+        : spec.imageDataUrl
+          ? await _renderImageDataUrl(spec.imageDataUrl, pixelSize)
+          : await _renderSymbol((await getBuiltins()).get(id), pixelSize, color)
+      if (!img || map.hasImage(imageId)) continue
       map.addImage(imageId, img, { sdf: false })
     } catch (e) {
-      if (!String(e?.message || e).includes(`An image named "${imageId}" already exists`)) {
-        throw e
+      if (String(e?.message || e).includes(`An image named "${imageId}" already exists`)) {
+        continue
+      }
+      console.warn('[expedition] custom icon render failed; using fallback', id, e)
+      try {
+        const fallback = await _renderSymbol((await getBuiltins()).get('pin-marker'), pixelSize, color)
+        if (fallback && !map.hasImage(imageId)) {
+          map.addImage(imageId, fallback, { sdf: false })
+        }
+      } catch (fallbackError) {
+        console.warn('[expedition] fallback icon render failed', id, fallbackError)
       }
     }
   }

@@ -18,6 +18,7 @@ import json
 
 import frappe
 import frappe.share
+from expedition.api.layer import _coerce_group_config_for_client
 from expedition.api.permission import (
     assert_map_read,
     assert_map_share,
@@ -125,6 +126,13 @@ def _has_zone_stroke_style() -> bool:
     return frappe.db.has_column("Expedition Zone", "stroke_style")
 
 
+def _hydrate_layer_group_config(layer: dict) -> dict:
+    layer["group_config"] = _coerce_group_config_for_client(
+        layer.get("group_config_json")
+    )
+    return layer
+
+
 @frappe.whitelist(allow_guest=True)
 def load_full(name: str) -> dict:
     """
@@ -219,7 +227,11 @@ def load_full(name: str) -> dict:
         seq_map = {ln: seq for ln, seq, en in map_layers}
         for layer in layers:
             layer["sequence"] = seq_map.get(layer["name"], 0)
-        layers = sorted(layers, key=lambda l: (l["sequence"], l.get("modified") or ""))
+            _hydrate_layer_group_config(layer)
+        layers = sorted(
+            layers,
+            key=lambda layer: (layer["sequence"], layer.get("modified") or ""),
+        )
     zone_fields = [
         "name",
         "title",

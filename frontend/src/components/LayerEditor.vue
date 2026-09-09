@@ -878,14 +878,14 @@ const numericFields = computed(() =>
   ]
 )
 const coordinateFields = computed(() =>
-  sourceFields.value.filter((f) => f.fieldtype === 'Float')
+  sourceFields.value.filter((f) => ['Float', 'Data'].includes(f.fieldtype))
 )
 const linkFields = computed(() =>
   sourceFields.value.filter((f) => f.fieldtype === 'Link' && f.options)
 )
 const activeCoordinateFields = computed(() =>
   form.value.location_source !== 'Direct Fields'
-    ? locationFields.value.filter((f) => f.fieldtype === 'Float')
+    ? locationFields.value.filter((f) => ['Float', 'Data'].includes(f.fieldtype))
     : coordinateFields.value
 )
 const activeCoordinateLoading = computed(() =>
@@ -1129,10 +1129,10 @@ async function chooseSourceDoctype(name) {
 }
 
 function chooseDefaultCoordinateFields(fields) {
-  const floatFields = fields || []
-  const byName = new Map(floatFields.map((f) => [f.fieldname, f]))
-  form.value.latitude_field = byName.has('latitude') ? 'latitude' : (floatFields[0]?.fieldname || '')
-  form.value.longitude_field = byName.has('longitude') ? 'longitude' : (floatFields.find((f) => f.fieldname !== form.value.latitude_field)?.fieldname || '')
+  const coordinateFields = fields || []
+  const byName = new Map(coordinateFields.map((f) => [f.fieldname, f]))
+  form.value.latitude_field = byName.has('latitude') ? 'latitude' : (coordinateFields[0]?.fieldname || '')
+  form.value.longitude_field = byName.has('longitude') ? 'longitude' : (coordinateFields.find((f) => f.fieldname !== form.value.latitude_field)?.fieldname || '')
 }
 
 async function onLocationSourceChange() {
@@ -2123,7 +2123,7 @@ function close() {
               :disabled="!form.source_doctype || activeCoordinateLoading"
               :placeholder="activeCoordinateLoading ? 'Loading fields...' : 'Choose lat field'"
               :selected-label="activeCoordinateLoading ? 'Loading fields...' : fieldChoiceLabel(form.latitude_field, activeCoordinateFields)"
-              empty-text="No Float fields found."
+              empty-text="No Float or Data fields found."
               @select="field => chooseLayerField('latitude_field', field.fieldname)"
             />
           </div>
@@ -2139,7 +2139,7 @@ function close() {
               :disabled="!form.source_doctype || activeCoordinateLoading"
               :placeholder="activeCoordinateLoading ? 'Loading fields...' : 'Choose lng field'"
               :selected-label="activeCoordinateLoading ? 'Loading fields...' : fieldChoiceLabel(form.longitude_field, activeCoordinateFields)"
-              empty-text="No Float fields found."
+              empty-text="No Float or Data fields found."
               @select="field => chooseLayerField('longitude_field', field.fieldname)"
             />
           </div>

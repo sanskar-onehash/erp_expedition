@@ -152,6 +152,7 @@ STANDARD_FILTER_FIELDS = [
 ]
 
 NUMERIC_FIELD_TYPES = {"Int", "Float", "Currency", "Percent", "Duration", "Rating"}
+COORDINATE_FIELD_TYPES = {"Float", "Data"}
 HEATMAP_RAMP_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 DOCSTATUS_FILTER_OPTIONS = [
@@ -2218,11 +2219,45 @@ def _validate_location_coordinate_fields(layer_doc) -> None:
         (layer_doc.longitude_field, "Longitude Field"),
     ):
         field = meta.get_field(fieldname)
-        if not field or field.fieldtype != "Float":
+        if not field or field.fieldtype not in COORDINATE_FIELD_TYPES:
             frappe.throw(
-                f"{label} must be a Float field on {target_doctype}",
+                f"{label} must be a Float or Data field on {target_doctype}",
                 frappe.ValidationError,
             )
+
+
+def _coordinates_support_db_bounds(layer_doc) -> bool:
+    target_doctype = layer_doc.source_doctype
+    cfg = _location_config(layer_doc)
+    if cfg:
+        target_doctype = cfg["location_doctype"]
+    meta = frappe.get_meta(target_doctype)
+    return all(
+        (field := meta.get_field(fieldname)) and field.fieldtype == "Float"
+        for fieldname in (layer_doc.latitude_field, layer_doc.longitude_field)
+    )
+
+
+def _coerce_point(latitude: Any, longitude: Any) -> tuple[float, float] | None:
+    try:
+        lat, lng = float(latitude), float(longitude)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return None
+    return lat, lng
+
+
+def _point_is_within_bounds(lat: float, lng: float, bounds: dict | None) -> bool:
+    if not bounds:
+        return True
+    try:
+        return (
+            float(bounds["south"]) <= lat <= float(bounds["north"])
+            and float(bounds["west"]) <= lng <= float(bounds["east"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _coerce_location_fields(raw: str | list | None) -> list[str]:
@@ -2389,7 +2424,11 @@ def get_text_search_matches(
     assert_source_read(layer_doc.source_doctype)
     _assert_location_read(layer_doc)
     filters = _coerce_filter(layer_doc.filter_json) or []
-    if bounds and _location_source_mode(layer_doc) == "direct":
+    if (
+        bounds
+        and _location_source_mode(layer_doc) == "direct"
+        and _coordinates_support_db_bounds(layer_doc)
+    ):
         south = float(bounds.get("south"))
         west = float(bounds.get("west"))
         north = float(bounds.get("north"))
@@ -2723,7 +2762,11 @@ def get_features(
     # Apply viewport bounds as additional lat/lng WHERE clauses. This is
     # safe because the source lat/lng field types are validated at layer
     # save time (Float), so we cannot SQL-inject via these field names.
-    if bounds and _location_source_mode(layer_doc) == "direct":
+    if (
+        bounds
+        and _location_source_mode(layer_doc) == "direct"
+        and _coordinates_support_db_bounds(layer_doc)
+    ):
         south = float(bounds.get("south"))
         west = float(bounds.get("west"))
         north = float(bounds.get("north"))
@@ -2855,7 +2898,7 @@ def get_features(
                     linked_names.append(linked_name)
             if linked_names:
                 location_filters = [["name", "in", linked_names]]
-                if bounds:
+                if bounds and _coordinates_support_db_bounds(layer_doc):
                     south = float(bounds.get("south"))
                     west = float(bounds.get("west"))
                     north = float(bounds.get("north"))
@@ -2879,7 +2922,7 @@ def get_features(
             source_names = [row.get("name") for row in rows if row.get("name")]
             if source_names:
                 location_filters = [[reverse_link_field, "in", source_names]]
-                if bounds:
+                if bounds and _coordinates_support_db_bounds(layer_doc):
                     south = float(bounds.get("south"))
                     west = float(bounds.get("west"))
                     north = float(bounds.get("north"))
@@ -2929,7 +2972,7 @@ def get_features(
                         parents.append(parent)
                 if parents:
                     location_filters = [["name", "in", parents]]
-                    if bounds:
+                    if bounds and _coordinates_support_db_bounds(layer_doc):
                         south = float(bounds.get("south"))
                         west = float(bounds.get("west"))
                         north = float(bounds.get("north"))
@@ -2975,7 +3018,11 @@ def get_features(
                 continue
             lat = location_row.get(lat_field)
             lng = location_row.get(lng_field)
-            if lat is None or lng is None:
+            point = _coerce_point(lat, lng)
+            if not point:
+                continue
+            lat, lng = point
+            if not _point_is_within_bounds(lat, lng, bounds):
                 continue
             props = {k: v for k, v in r.items() if not link_field or k != link_field}
             props["_doctype"] = layer_doc.source_doctype
@@ -3221,7 +3268,11 @@ def get_features(
     for r in rows:
         lat = r.get(layer_doc.latitude_field)
         lng = r.get(layer_doc.longitude_field)
-        if lat is None or lng is None:
+        point = _coerce_point(lat, lng)
+        if not point:
+            continue
+        lat, lng = point
+        if not _point_is_within_bounds(lat, lng, bounds):
             continue
         # Strip the lat/lng from properties; they're in geometry.
         props = {

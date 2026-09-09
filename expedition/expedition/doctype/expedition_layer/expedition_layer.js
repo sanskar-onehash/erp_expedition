@@ -3,8 +3,8 @@
 	const FILTER_JSON_FIELD = "filter_json";
 	const ICON_FIELD = "icon";
 	const SOURCE_FIELD_PICKERS = {
-		latitude_field: ["Float"],
-		longitude_field: ["Float"],
+		latitude_field: ["Float", "Data"],
+		longitude_field: ["Float", "Data"],
 		label_field: [],
 		radius_field: ["Int", "Float", "Currency", "Percent"],
 		group_by_field: [],

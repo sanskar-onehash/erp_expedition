@@ -23,6 +23,8 @@ OPERATOR_ALIASES = {
     "is not set": "is",
 }
 
+COORDINATE_FIELD_TYPES = {"Float", "Data"}
+
 
 def _canonical_operator(operator):
     op = str(operator or "=").strip()
@@ -41,7 +43,7 @@ class ExpeditionLayer(Document):
       - an optional popup template (Jinja over the source row)
 
     Hard rules enforced server-side:
-      - The source DocType must have latitude and longitude Float fields
+      - The source DocType must have latitude and longitude Float or Data fields
         (validated on save to fail fast, not at render time).
       - Every read goes through frappe.has_permission on the source DocType.
     """
@@ -178,13 +180,13 @@ class ExpeditionLayer(Document):
         meta = frappe.get_meta(location_doctype)
         lat = meta.get_field(self.latitude_field)
         lng = meta.get_field(self.longitude_field)
-        if not lat or lat.fieldtype != "Float":
+        if not lat or lat.fieldtype not in COORDINATE_FIELD_TYPES:
             frappe.throw(
-                f"Location DocType {location_doctype} has no Float field '{self.latitude_field}'"
+                f"Location DocType {location_doctype} has no Float or Data field '{self.latitude_field}'"
             )
-        if not lng or lng.fieldtype != "Float":
+        if not lng or lng.fieldtype not in COORDINATE_FIELD_TYPES:
             frappe.throw(
-                f"Location DocType {location_doctype} has no Float field '{self.longitude_field}'"
+                f"Location DocType {location_doctype} has no Float or Data field '{self.longitude_field}'"
             )
 
     def _validate_filter_json(self):

@@ -566,7 +566,6 @@ export const useLayersStore = defineStore('layers', () => {
 
   async function _refreshLayersMissingSearchFields(parsed, targetLayers) {
     const missing = []
-    const hasTextSearch = _textSearchValues(parsed).length > 0
     for (const layer of targetLayers || []) {
       const searchFields = _structuredSearchFields(parsed, layer)
       const fields = sourceFields.value[layer.source_doctype] || []
@@ -578,13 +577,12 @@ export const useLayersStore = defineStore('layers', () => {
       const needsRefresh = searchFields.some((field) =>
         !featureCollections.some((fc) => _featureCollectionHasField(fc, fields, field))
       )
-      const needsFullScriptFetch = layer?.data_source_type === 'Python Script'
-      if (needsFullScriptFetch || hasTextSearch || needsRefresh) {
+      if (needsRefresh) {
         missing.push({ layerName: layer.name, extraFields })
       }
     }
     await Promise.all(missing.map((item) =>
-      fetchFeatures(item.layerName, null, {
+      refetchLayer(item.layerName, {
         allowDuringSearch: true,
         extraFields: item.extraFields,
       })

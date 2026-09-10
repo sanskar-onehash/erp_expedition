@@ -2391,7 +2391,8 @@ def _full_row_context(
         if frappe.has_permission(source_doctype, "read", doc=doc_name):
             doc = frappe.get_doc(source_doctype, doc_name)
             full = doc.as_dict()
-            ctx.update(full)
+            ctx = dict(full)
+            ctx.update(fallback)
             ctx["doc"] = doc
         else:
             ctx["doc"] = frappe._dict(fallback)
@@ -2463,8 +2464,104 @@ def get_text_search_matches(
     return {"names": [name for name in names if name], "truncated": len(rows) > limit}
 
 
+def _python_script_source_rows(layer_doc, script_output, extra_fields=None):
+    """Return filtered script output and readable source rows keyed by name.
+
+    Python layers may calculate coordinates or presentation in script code, but a
+    feature that identifies a real row of ``source_doctype`` must still honour the
+    layer's standard filters and the current user's row permissions.  Features
+    that do not identify a real source row (for example aggregate pins) remain
+    script-managed.
+    """
+    source_doctype = (getattr(layer_doc, "source_doctype", "") or "").strip()
+    if not source_doctype:
+        return script_output, {}
+
+    identities = []
+    candidate_names = []
+    seen_names = set()
+    for item in script_output:
+        if not isinstance(item, dict):
+            identities.append((None, None))
+            continue
+        props = item.get("properties") or {}
+        if not isinstance(props, dict):
+            props = {}
+        source_name = (
+            props.get("_name")
+            or item.get("source_name")
+            or item.get("name")
+            or item.get("id")
+        )
+        item_doctype = (
+            props.get("_doctype")
+            or item.get("source_doctype")
+            or item.get("doctype")
+            or source_doctype
+        )
+        identities.append((item_doctype, source_name))
+        if (
+            item_doctype == source_doctype
+            and source_name
+            and source_name not in seen_names
+        ):
+            seen_names.add(source_name)
+            candidate_names.append(source_name)
+
+    if not candidate_names:
+        return script_output, {}
+
+    existing = frappe.get_all(
+        source_doctype,
+        fields=["name"],
+        filters=[["name", "in", candidate_names]],
+        limit_page_length=0,
+    )
+    existing_names = {row.get("name") for row in existing if row.get("name")}
+    if not existing_names:
+        return script_output, {}
+
+    requested_fields = _parse_extra_feature_fields(extra_fields, source_doctype)
+    filters = list(_coerce_filter(layer_doc.filter_json) or [])
+    filters.append(["name", "in", list(existing_names)])
+    readable_rows = frappe.get_list(
+        source_doctype,
+        fields=["name", *requested_fields],
+        filters=filters,
+        limit_page_length=0,
+        order_by="name asc",
+    )
+    rows_by_name = {
+        row.get("name"): row for row in readable_rows if row.get("name")
+    }
+
+    filtered_output = []
+    for item, (item_doctype, source_name) in zip(script_output, identities):
+        is_real_source_row = (
+            item_doctype == source_doctype and source_name in existing_names
+        )
+        if is_real_source_row and source_name not in rows_by_name:
+            continue
+        if is_real_source_row and requested_fields:
+            item = dict(item)
+            raw_props = item.get("properties") or {}
+            props = (
+                dict(raw_props)
+                if isinstance(raw_props, dict)
+                else {"value": raw_props}
+            )
+            source_row = rows_by_name[source_name]
+            for field in requested_fields:
+                if field not in props:
+                    props[field] = source_row.get(field)
+            item["properties"] = props
+        filtered_output.append(item)
+
+    return filtered_output, rows_by_name
+
+
 def _get_features_from_python_script(
-    layer_doc, bounds, limit, offset, render_popup, kwargs=None
+    layer_doc, bounds, limit, offset, render_popup, extra_fields=None, kwargs=None
 ):
     """Execute a python script to return layer data, and format it as GeoJSON."""
     from frappe.utils.safe_exec import safe_exec as frappe_safe_exec
@@ -2494,6 +2591,10 @@ def _get_features_from_python_script(
     script_output = _locals.get("result") or []
     if not isinstance(script_output, list):
         script_output = []
+
+    script_output, _source_rows = _python_script_source_rows(
+        layer_doc, script_output, extra_fields
+    )
 
     features = []
     total = len(script_output)
@@ -2627,7 +2728,13 @@ def get_features(
         if layer_doc.source_doctype:
             assert_source_read(layer_doc.source_doctype)
         return _get_features_from_python_script(
-            layer_doc, bounds, limit, offset, render_popup, kwargs
+            layer_doc,
+            bounds,
+            limit,
+            offset,
+            render_popup,
+            extra_fields=extra_fields,
+            kwargs=kwargs,
         )
     elif data_source_type == "Client Script (JS)":
         return {

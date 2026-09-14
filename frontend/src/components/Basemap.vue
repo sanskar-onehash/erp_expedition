@@ -386,16 +386,19 @@ function featureIdentity(feature) {
 
 function featureLocationKey(feature) {
   const props = feature?.properties || {}
+  // Geometry is the visual location users interact with. Prefer it over the
+  // backing Address name so separate Address records geocoded to the same
+  // point correctly open as a stack.
+  const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null
+  if (Array.isArray(coords) && coords.length >= 2) {
+    return `coord:${Number(coords[0]).toFixed(6)},${Number(coords[1]).toFixed(6)}`
+  }
   const explicit = props.delivery_address_name
     || props.customer_address_name
     || props.address_name
     || props._location_name
     || props._location?.name
   if (explicit) return `address:${String(explicit)}`
-  const coords = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null
-  if (Array.isArray(coords) && coords.length >= 2) {
-    return `coord:${Number(coords[0]).toFixed(6)},${Number(coords[1]).toFixed(6)}`
-  }
   return ''
 }
 
@@ -444,9 +447,23 @@ function createLocationAggregateFeature(activeFeature, features, lngLat) {
   if (!map || !activeFeature || !Array.isArray(features)) return null
   const activeKey = featureLocationKey(activeFeature)
   if (!activeKey) return null
+  // MapLibre may return only the topmost rendered feature when many records
+  // share identical coordinates. Supplement the hit-test results from the
+  // clicked layer's current client-side collection so coincident records still
+  // open the location stack instead of an arbitrary single popup.
+  const candidates = [...features]
+  const activeMeta = layerMetaForRenderedFeature(activeFeature)
+  const collection = layerStore.getDisplayFeatures(activeMeta.layerName)
+  for (const item of collection?.features || []) {
+    if (featureLocationKey(item) !== activeKey) continue
+    candidates.push({
+      ...item,
+      layer: { ...(item.layer || {}), id: layerId(activeMeta.renderName) },
+    })
+  }
   const unique = []
   const seen = new Set()
-  for (const item of features) {
+  for (const item of candidates) {
     if (featureLocationKey(item) !== activeKey) continue
     const identity = featureIdentity(item)
     if (seen.has(identity)) continue
@@ -1795,6 +1812,8 @@ function _addLayerOnMap(layerName, renderContext = null) {
 }
 
 function onPointClick(e) {
+  if (e.originalEvent?.__expeditionPointHandled) return
+  if (e.originalEvent) e.originalEvent.__expeditionPointHandled = true
   const f = e.features && e.features[0]
   if (!f) return
   e.preventDefault?.()

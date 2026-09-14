@@ -109,6 +109,34 @@ export function initExpeditionSDK({ app }) {
     return allFeatures
   }
 
+  /**
+   * Return the current client-side feature set for a layer after search and
+   * timeline filtering. Map scripts can use this for summaries without
+   * reaching into Pinia or MapLibre internals.
+   */
+  window.Expedition.getLayerFeatures = function(layerName) {
+    if (!layerName) return []
+    const layersStore = useLayersStore()
+    const collection = layersStore.getDisplayFeatures(layerName) || layersStore.features?.[layerName]
+    return Array.isArray(collection?.features) ? collection.features : []
+  }
+
+  /** Subscribe to feature/search/timeline updates. Returns an unsubscribe. */
+  window.Expedition.onLayerFeaturesUpdated = function(listener) {
+    if (typeof listener !== 'function') return () => {}
+    return useLayersStore().onFeaturesUpdated(listener)
+  }
+
+  /** Describe whether the current layer result is narrowed by user input. */
+  window.Expedition.getLayerViewState = function(layerName) {
+    const layersStore = useLayersStore()
+    const layer = layersStore.layers?.find?.((item) => item.name === layerName)
+    return {
+      hasSearch: !!layersStore.activeSearch,
+      hasLayerFilter: !!String(layer?.filter_json || '').trim(),
+    }
+  }
+
   window.Expedition.Actions = window.Expedition.Actions || {
     registry: {},
     register(id, config) {

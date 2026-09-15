@@ -2823,6 +2823,22 @@ function _runActiveMapCustomScript() {
   }
 }
 
+let _mapScriptRequestId = 0
+function _scheduleActiveMapCustomScript() {
+  if (!map) return
+  const requestId = ++_mapScriptRequestId
+  const mapName = mapStore.activeMap?.map?.name
+  const run = () => {
+    if (
+      requestId !== _mapScriptRequestId ||
+      mapStore.activeMap?.map?.name !== mapName
+    ) return
+    _runActiveMapCustomScript()
+  }
+  if (map.isStyleLoaded()) run()
+  else map.once('style.load', run)
+}
+
 onMounted(() => {
   const startCenter = [78.9629, 20.5937]
   const initialSkin = getSkin(activeSkinId.value)
@@ -2886,7 +2902,7 @@ onMounted(() => {
     restoreStyleOverlays(true)
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
-    _runActiveMapCustomScript()
+    _scheduleActiveMapCustomScript()
   })
 
   // Right-click context menu. We use MapLibre's `contextmenu` event
@@ -3572,9 +3588,7 @@ watch(
     _resetFirstFetch()
     _fetchAllVisibleBounds()
     _flyToInitialViewport()
-    if (map.isStyleLoaded()) {
-      _runActiveMapCustomScript()
-    }
+    _scheduleActiveMapCustomScript()
   },
 )
 

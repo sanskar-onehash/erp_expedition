@@ -32,6 +32,7 @@ export const useMapStore = defineStore('map', () => {
   const templates = ref([])
   const recent = ref([])
   const sharedUsers = ref([])
+  let switchRequestId = 0
 
   async function refreshMaps(search = '') {
     recent.value = await call('expedition.api.map.list_for_user', {
@@ -107,26 +108,31 @@ export const useMapStore = defineStore('map', () => {
     const insights = useInsightsStore()
     const zones = useZonesStore()
     const pins = usePinsStore()
+    const requestId = ++switchRequestId
     const payload = await call('expedition.api.map.load_full', { name })
-    activeMap.value = payload
-    if (payload && Array.isArray(payload.layers)) {
-      layerStore.replaceMapLayers(payload.layers)
-    }
+
+    // Map switches can overlap when a user clicks through the switcher
+    // quickly. Ignore any response that belongs to an older selection so it
+    // cannot replace the current map with stale layers, zones or pins.
+    if (requestId !== switchRequestId) return null
+
+    const mapName = payload?.map?.name || name
+    layerStore.replaceMapLayers(Array.isArray(payload?.layers) ? payload.layers : [])
     // Zones: load_full ships geometry as a JSON string; parse once
     // so the canvas can pass it to MapLibre without re-decoding.
-    if (payload && Array.isArray(payload.zones)) {
-      zones.setForMap(
-        payload.map?.name || name,
-        payload.zones.map((z) => ({
+    zones.setForMap(
+      mapName,
+      (Array.isArray(payload?.zones) ? payload.zones : []).map((z) => ({
           ...z,
           geometry:
             typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry,
         }))
-      )
-    }
-    if (payload && Array.isArray(payload.pins)) {
-      pins.setForMap(payload.map?.name || name, payload.pins)
-    }
+    )
+    pins.setForMap(mapName, Array.isArray(payload?.pins) ? payload.pins : [])
+
+    // Publish the active map only after all of its dependent stores contain
+    // the matching state. Vue watchers then observe one coherent map switch.
+    activeMap.value = payload
     // Clear per-map transient state so the right rail / hover rings
     // don't carry over from the previous map.
     ui.selectedFeature = null
@@ -138,10 +144,11 @@ export const useMapStore = defineStore('map', () => {
     if (payload?.map) ui.rememberRecent(payload.map)
     // Refresh server-computed insights for this map. Fire-and-forget —
     // never block the canvas on insight fetch.
-    insights.loadActiveFor(payload?.map?.name || name)
-    loadSharedUsers(payload?.map?.name || name).catch(() => {
-      sharedUsers.value = []
+    insights.loadActiveFor(mapName)
+    loadSharedUsers(mapName).catch(() => {
+      if (activeMap.value?.map?.name === mapName) sharedUsers.value = []
     })
+    return payload
   }
 
   /** Clone a template map into the user's account. Switches to the clone. */
@@ -203,8 +210,9 @@ export const useMapStore = defineStore('map', () => {
       sharedUsers.value = []
       return sharedUsers.value
     }
-    sharedUsers.value = await call('expedition.api.map.get_shared_users', { name })
-    return sharedUsers.value
+    const rows = await call('expedition.api.map.get_shared_users', { name })
+    if (activeMap.value?.map?.name === name) sharedUsers.value = rows
+    return rows
   }
 
   async function shareActiveMap(users) {

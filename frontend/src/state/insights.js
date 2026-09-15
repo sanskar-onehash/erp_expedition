@@ -19,8 +19,10 @@ export const useInsightsStore = defineStore('insights', () => {
   const lastFetched = ref(0)
   const lastMapName = ref(null)
   const error = ref(null)
+  let loadRequestId = 0
 
   async function loadActiveFor(mapName) {
+    const requestId = ++loadRequestId
     if (!mapName) {
       active.value = []
       lastMapName.value = null
@@ -38,14 +40,16 @@ export const useInsightsStore = defineStore('insights', () => {
         'expedition.api.insight.get_active_for_map',
         { map_name: mapName }
       )
+      if (requestId !== loadRequestId || lastMapName.value !== mapName) return
       active.value = Array.isArray(rows) ? rows : []
       lastFetched.value = Date.now()
     } catch (e) {
+      if (requestId !== loadRequestId || lastMapName.value !== mapName) return
       error.value = e
       // Insights are an enhancement — never block the canvas.
       active.value = []
     } finally {
-      loading.value = false
+      if (requestId === loadRequestId) loading.value = false
     }
   }
 
@@ -71,6 +75,7 @@ export const useInsightsStore = defineStore('insights', () => {
   }
 
   function clear() {
+    loadRequestId += 1
     active.value = []
     lastFetched.value = 0
     lastMapName.value = null

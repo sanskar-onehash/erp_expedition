@@ -102,6 +102,13 @@ export const useLayersStore = defineStore('layers', () => {
     else locallyHidden.add(layerName)
   }
 
+  function setLocalVisibility(layerNames, visible) {
+    for (const layerName of layerNames || []) {
+      if (visible) locallyHidden.delete(layerName)
+      else locallyHidden.add(layerName)
+    }
+  }
+
   const visibleLayers = computed(() =>
     layers.value.filter(l => l.enabled !== false && l.enabled !== 0 && !locallyHidden.has(l.name))
   )
@@ -918,6 +925,7 @@ export const useLayersStore = defineStore('layers', () => {
     lastFetched,
     locallyHidden,
     toggleLocalVisibility,
+    setLocalVisibility,
     visibleLayers,
     activeSearch,
     timelineActive,

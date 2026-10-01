@@ -19,6 +19,13 @@ const ui = useUiStore()
 const allLayers = computed(() =>
   (layerStore.layers || []).slice().sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
 )
+const enabledLayers = computed(() =>
+  allLayers.value.filter((l) => l.enabled !== false && l.enabled !== 0)
+)
+const allLocallyVisible = computed(() =>
+  enabledLayers.value.length > 0 &&
+  enabledLayers.value.every((l) => !layerStore.locallyHidden.has(l.name))
+)
 const heatmapLayers = computed(() =>
   allLayers.value.filter((l) =>
     l.enabled !== false && l.enabled !== 0 &&
@@ -38,6 +45,14 @@ function toggle(name, serverEnabled) {
   // re-enabled from the panel; clicking their chip here does nothing.
   if (!serverEnabled) return
   layerStore.toggleLocalVisibility(name)
+}
+
+function toggleAll() {
+  const names = enabledLayers.value.map((l) => l.name)
+  if (!names.length) return
+  // Mixed and fully-hidden states both resolve to "show all". Only a fully
+  // visible legend resolves to "hide all".
+  layerStore.setLocalVisibility(names, !allLocallyVisible.value)
 }
 
 function edit(l) {
@@ -120,6 +135,18 @@ function groupSwatches(l) {
       <span class="legend__swatch" :style="{ background: colorOf(l) }" />
       <span class="legend__label">{{ l.title || l.name }}</span>
     </button>
+    <button
+      type="button"
+      class="legend__chip legend__chip--all"
+      :disabled="!enabledLayers.length"
+      :aria-pressed="allLocallyVisible ? 'true' : 'false'"
+      :aria-label="allLocallyVisible ? 'Hide all layers' : 'Show all layers'"
+      :title="allLocallyVisible ? 'Hide all layers' : 'Show all layers'"
+      @click="toggleAll"
+    >
+      <span class="legend__swatch legend__swatch--rainbow" />
+      <span class="legend__label">{{ allLocallyVisible ? 'All off' : 'All on' }}</span>
+    </button>
   </div>
 </template>
 
@@ -149,8 +176,14 @@ function groupSwatches(l) {
   transition: background 100ms ease;
 }
 .legend__chip:hover { background: rgba(30, 35, 46, 0.88); }
+.legend__chip:disabled {
+  cursor: not-allowed;
+}
 .legend__chip--disabled {
   opacity: 0.5;
+}
+.legend__chip--all:not(:disabled) {
+  cursor: pointer;
 }
 .legend__chip--server-disabled {
   cursor: not-allowed;
@@ -167,6 +200,18 @@ function groupSwatches(l) {
   border: 1.5px solid #fff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
   flex: none;
+}
+.legend__swatch--rainbow {
+  background: conic-gradient(
+    #ef4444,
+    #f59e0b,
+    #84cc16,
+    #10b981,
+    #3b82f6,
+    #8b5cf6,
+    #ec4899,
+    #ef4444
+  );
 }
 .legend__label {
   white-space: nowrap;

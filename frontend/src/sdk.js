@@ -141,6 +141,7 @@ export function initExpeditionSDK({ app }) {
     registry: {},
     register(id, config) {
       this.registry[id] = config
+      window.dispatchEvent(new CustomEvent('expedition:actions-updated'))
     },
     get(id) {
       return this.registry[id]

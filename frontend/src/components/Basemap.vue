@@ -289,6 +289,7 @@ const zoneStore = useZonesStore()
 const pinsStore = usePinsStore()
 const iconStore = useIconsStore()
 let map = null
+let _styleGraphReady = false
 let unsubscribeFeatures = null
 let lastLoadedFeatures = {}  // layer.name -> last FeatureCollection, for re-add on styledata
 let unsubscribeZones = null
@@ -2803,6 +2804,7 @@ function applySkin(skinId) {
   const spec = resolveStyle(skin)
   if (!spec) return
   ui.basemapLoading = true
+  _styleGraphReady = false
   if (typeof spec === 'string') {
     map.setStyle(spec, { diff: false })
   } else {
@@ -2811,7 +2813,7 @@ function applySkin(skinId) {
 }
 
 function _runActiveMapCustomScript() {
-  if (!map || !map.isStyleLoaded()) return
+  if (!map) return
   const mapDoc = mapStore.activeMap?.map
   if (mapDoc && mapDoc.custom_script) {
     try {
@@ -2835,7 +2837,7 @@ function _scheduleActiveMapCustomScript() {
     ) return
     _runActiveMapCustomScript()
   }
-  if (map.isStyleLoaded()) run()
+  if (_styleGraphReady) run()
   else map.once('style.load', run)
 }
 
@@ -2893,6 +2895,7 @@ onMounted(() => {
     if (map?.isStyleLoaded()) restoreStyleOverlays()
   })
   map.on('style.load', () => {
+    _styleGraphReady = true
     ui.basemapLoading = false
     restoreStyleOverlays(true)
   })

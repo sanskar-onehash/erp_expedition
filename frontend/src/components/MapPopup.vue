@@ -78,6 +78,10 @@ const fieldSearch = ref("");
 const showMoreFields = ref(false);
 const showAssignPanel = ref(false);
 const showPinStylePanel = ref(false);
+const showCustomActionsMenu = ref(false);
+const customActionsRevision = ref(0);
+const customActionsButtonEl = ref(null);
+const customActionsMenuEl = ref(null);
 const pinStyleColor = ref("#F59E0B");
 const pinStyleIcon = ref("pin-marker");
 const pinStyleBusy = ref(false);
@@ -236,10 +240,27 @@ function close() {
   ui.selectedFeature = null;
 }
 function onKey(e) {
-  if (e.key === "Escape" && feature.value) close();
+  if (e.key !== "Escape" || !feature.value) return;
+  if (showCustomActionsMenu.value) {
+    showCustomActionsMenu.value = false;
+    return;
+  }
+  close();
+}
+
+function onCustomActionsUpdated() {
+  customActionsRevision.value += 1;
+}
+
+function onDocumentPointerDown(e) {
+  if (!showCustomActionsMenu.value) return;
+  if (customActionsButtonEl.value?.contains(e.target)) return;
+  if (customActionsMenuEl.value?.contains(e.target)) return;
+  showCustomActionsMenu.value = false;
 }
 
 const customActions = computed(() => {
+  void customActionsRevision.value;
   const list = window.Expedition?.Actions?.list?.() || [];
   return list.filter((act) => {
     const type = act.type || "popup";
@@ -264,6 +285,7 @@ const customActionsBusy = ref(false);
 
 async function runCustomAction(act) {
   if (customActionsBusy.value) return;
+  showCustomActionsMenu.value = false;
   customActionsBusy.value = true;
   actionError.value = "";
   try {
@@ -449,6 +471,9 @@ function measure() {
 
 onMounted(async () => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("expedition:actions-updated", onCustomActionsUpdated);
+  document.addEventListener("pointerdown", onDocumentPointerDown);
+  onCustomActionsUpdated();
   await nextTick();
   measure();
   recompute();
@@ -463,6 +488,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (userSearchTimer) window.clearTimeout(userSearchTimer);
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener(
+    "expedition:actions-updated",
+    onCustomActionsUpdated,
+  );
+  document.removeEventListener("pointerdown", onDocumentPointerDown);
   const m = window.expeditionMap?.getMap?.();
   if (m) {
     m.off("move", recompute);
@@ -473,6 +503,7 @@ onBeforeUnmount(() => {
 });
 
 watch(feature, async (v) => {
+  showCustomActionsMenu.value = false;
   if (v) {
     void loadFeatureUserDisplayNames(v);
     await nextTick();
@@ -634,7 +665,11 @@ const currentAssignmentDisplay = computed(() =>
 );
 
 function labelFor(fieldname) {
-  return fieldLabels.value[fieldname] || fieldname;
+  const configured = fieldLabels.value[fieldname];
+  if (configured) return configured;
+  return String(fieldname || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function defaultAssignUser() {
@@ -1053,8 +1088,17 @@ function formatValue(value) {
 }
 
 function formatFieldValue(fieldname, value) {
-  const raw = formatValue(value);
+  let raw = formatValue(value);
   if (!raw) return raw;
+  if (/(?:^|_)html$/i.test(String(fieldname || ""))) {
+    const container = document.createElement("div");
+    container.innerHTML = raw
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(?:div|p|li)>/gi, "\n");
+    raw = String(container.textContent || "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
   const fullName =
     userDisplayName(fieldname) ||
     userFullName(raw);
@@ -1886,15 +1930,28 @@ function formatDate(s) {
         <span>{{ pinDeleteBusy ? "Deleting..." : "Delete" }}</span>
       </button>
       <button
-        v-for="act in customActions"
-        :key="act.id"
+        v-if="customActions.length"
+        ref="customActionsButtonEl"
         type="button"
         class="mp__action"
         :disabled="customActionsBusy"
-        @click="runCustomAction(act)"
-        :title="act.label"
+        :class="{ 'mp__action--active': showCustomActionsMenu }"
+        :aria-expanded="showCustomActionsMenu"
+        aria-haspopup="menu"
+        @click="showCustomActionsMenu = !showCustomActionsMenu"
+        title="Show additional actions"
       >
-        <span>{{ act.label }}</span>
+        <span>{{ customActionsBusy ? "Running..." : "Actions" }}</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path
+            d="m4 6 4 4 4-4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
       </button>
       <button
         type="button"
@@ -1905,6 +1962,25 @@ function formatDate(s) {
       >
         <span>{{ copyBusy ? "Copied" : "Copy Link" }}</span>
       </button>
+      <div
+        v-if="customActions.length && showCustomActionsMenu"
+        ref="customActionsMenuEl"
+        class="mp__custom-actions-menu"
+        role="menu"
+        aria-label="Additional actions"
+      >
+        <button
+          v-for="act in customActions"
+          :key="act.id"
+          type="button"
+          class="mp__custom-action"
+          role="menuitem"
+          :disabled="customActionsBusy"
+          @click="runCustomAction(act)"
+        >
+          {{ act.label }}
+        </button>
+      </div>
     </div>
 
     <div
@@ -2951,19 +3027,23 @@ function formatDate(s) {
 }
 
 .mp__actions {
+  position: relative;
   display: flex;
-  gap: 6px;
-  padding: 7px 12px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 .mp__action {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  flex: 0 0 auto;
+  gap: 4px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: rgba(230, 232, 236, 0.86);
-  padding: 5px 9px;
+  padding: 5px 7px;
   border-radius: 6px;
   font-size: 11px;
   font-family: inherit;
@@ -2996,6 +3076,47 @@ function formatDate(s) {
 }
 .mp__action svg {
   flex: none;
+}
+
+.mp__custom-actions-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  right: 10px;
+  width: max-content;
+  min-width: 180px;
+  max-width: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+  padding: 4px;
+  background: rgba(11, 14, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+}
+.mp__custom-action {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: transparent;
+  color: rgba(230, 232, 236, 0.86);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.mp__custom-action:hover,
+.mp__custom-action:focus-visible {
+  outline: none;
+  background: rgba(59, 130, 246, 0.18);
+  color: #bfdbfe;
+}
+.mp__custom-action:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .mp__stack-nav {
@@ -3818,6 +3939,7 @@ function formatDate(s) {
   line-height: 1.35;
   text-align: left;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 .mp__primary-value {
   font-weight: 600;

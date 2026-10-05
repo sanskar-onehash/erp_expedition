@@ -20,7 +20,7 @@
  */
 
 export async function call(method, args = {}) {
-  const csrf = window.expedition?.csrfToken
+  const csrf = window.expedition?.csrfToken || window.frappe?.csrf_token
   const res = await fetch('/api/method/' + method, {
     method: 'POST',
     credentials: 'include',

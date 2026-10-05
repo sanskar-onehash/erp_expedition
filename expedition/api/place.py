@@ -178,7 +178,6 @@ def _fetch_with_upstream_throttle(
 @rate_limit(limit=30, seconds=60)
 def search(query: str | None = None, language: str | None = None, limit: int = 5):
 	"""Return a small, cached list of Nominatim-compatible place results."""
-	frappe.only_for("Expedition User")
 	query = _clean_query(query)
 	language = _clean_language(language)
 	limit = max(1, min(cint(limit) or 5, 5))

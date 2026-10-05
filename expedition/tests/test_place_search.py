@@ -79,9 +79,9 @@ class TestPlaceSearch(unittest.TestCase):
 		cache = Mock()
 		cache.get_value.return_value = cached
 
-		with patch.object(place.frappe, "cache", cache), patch.object(
-			place.frappe, "only_for"
-		), patch("expedition.api.place._fetch_with_upstream_throttle") as fetch:
+		with patch.object(place.frappe, "cache", cache), patch(
+			"expedition.api.place._fetch_with_upstream_throttle"
+		) as fetch:
 			result = place.search.__wrapped__("Example Hotel", "en-US", 5)
 
 		self.assertEqual(result["results"], cached)

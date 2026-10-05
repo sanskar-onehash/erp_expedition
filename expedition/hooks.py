@@ -20,5 +20,6 @@ after_uninstall = "expedition.install.after_uninstall"
 before_tests = "expedition.install.before_tests"
 
 app_include_icons = "expedition/icons.svg"
+app_include_js = ["/assets/expedition/js/geolocation_loader.js"]
 
 extend_bootinfo = "expedition.boot.add_navbar_item"

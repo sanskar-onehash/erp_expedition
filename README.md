@@ -54,6 +54,37 @@ Public Nominatim usage remains subject to the OpenStreetMap Foundation usage
 policy. Deployments with sustained or high-volume search should configure a
 hosted provider or their own Nominatim-compatible service.
 
+### Embedded Geolocation Field
+
+Expedition provides an opt-in MapLibre geolocation field for Frappe forms. It
+uses the Liberty basemap, OpenStreetMap place search, a draggable point marker,
+right-click coordinate copying, and standard Frappe GeoJSON storage. The small
+Desk loader is included globally, while the map bundle is loaded only when a
+developer mounts a field.
+
+Field names are always supplied explicitly by the integrating client script.
+For an Address customization, use the actual Custom Field names from the site:
+
+```javascript
+frappe.ui.form.on("Address", {
+  refresh(frm) {
+    Expedition.mountGeolocationField({
+      frm,
+      fieldname: "custom_location",
+      latitudeField: "custom_latitude",
+      longitudeField: "custom_longitude",
+      height: 420,
+    });
+  },
+});
+```
+
+Calling `mountGeolocationField` again updates the existing widget, so the same
+configuration may also be called from the Geolocation field's change handler
+when another script updates its value. Nothing is replaced globally: only the
+configured field is mounted. Use `Expedition.unmountGeolocationField` with the
+same `frm` and `fieldname` to restore the standard Frappe control.
+
 ### Extension Contract
 
 Expedition is the infrastructure layer. Business-specific workflows should be added on top of it instead of being hard-coded into the app.

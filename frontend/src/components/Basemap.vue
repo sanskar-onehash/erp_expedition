@@ -307,6 +307,7 @@ let _mapWasDragged = false
 let _homeFitDone = false
 let _homeFitSeq = 0
 let _homeFitTimer = null
+let _placeSearchMarker = null
 
 // Tracks whether each visible layer has ever been fetched with the
 // current viewport. On first paint we deliberately pass `null` bounds
@@ -331,6 +332,44 @@ function _setMapCursor(kind = activeMapCursor(ui)) {
     kind = 'cross'
   }
   if (map) applyMapCursor(map.getCanvas(), kind)
+}
+
+function _clearPlaceSearchMarker() {
+  if (_placeSearchMarker) {
+    _placeSearchMarker.remove()
+    _placeSearchMarker = null
+  }
+}
+
+function _focusPlaceSearchResult(event) {
+  const place = event?.detail?.place
+  const lat = Number(place?.latitude)
+  const lng = Number(place?.longitude)
+  if (!map || !Number.isFinite(lat) || !Number.isFinite(lng)) return
+
+  _clearPlaceSearchMarker()
+  const popup = new maplibregl.Popup({ offset: 22, closeButton: false })
+    .setText(place.name || place.display_name || 'Place')
+  _placeSearchMarker = new maplibregl.Marker({ color: '#FF3B30', scale: 0.85 })
+    .setLngLat([lng, lat])
+    .setPopup(popup)
+    .addTo(map)
+  _placeSearchMarker.togglePopup()
+
+  const bounds = place?.bounds
+  const south = Number(bounds?.south)
+  const north = Number(bounds?.north)
+  const west = Number(bounds?.west)
+  const east = Number(bounds?.east)
+  if ([south, north, west, east].every(Number.isFinite) && south <= north && west <= east) {
+    map.fitBounds([[west, south], [east, north]], {
+      padding: 90,
+      maxZoom: 17,
+      duration: 800,
+    })
+  } else {
+    map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 16), duration: 800 })
+  }
 }
 
 function _resetFirstFetch() {
@@ -2861,6 +2900,8 @@ onMounted(() => {
     renderWorldCopies: true,
     attributionControl: { compact: true },
   })
+  window.addEventListener('expedition:focus-place', _focusPlaceSearchResult)
+  window.addEventListener('expedition:clear-place-search', _clearPlaceSearchMarker)
   map.on('resize', () => {
     const r = mapEl.value.getBoundingClientRect()
     map.setMinZoom(computeGlobeFitZoom(r.width))
@@ -3464,6 +3505,9 @@ onBeforeUnmount(() => {
   if (unsubscribePins) unsubscribePins()
   if (unsubscribeIconPins) unsubscribeIconPins()
   if (unsubscribeZoneTags) unsubscribeZoneTags()
+  window.removeEventListener('expedition:focus-place', _focusPlaceSearchResult)
+  window.removeEventListener('expedition:clear-place-search', _clearPlaceSearchMarker)
+  _clearPlaceSearchMarker()
   if (typeof window !== 'undefined' && window.expeditionMap) {
     window.expeditionMap = null
   }

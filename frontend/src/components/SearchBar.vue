@@ -3,7 +3,8 @@
  * SearchBar — global cross-layer search input.
  *
  * Sits at the top-center of the canvas. Search is session-only and
- * filters the currently loaded map pins without mutating layer filters.
+ * filters the currently loaded map pins without mutating layer filters and
+ * also searches OpenStreetMap places when the query is submitted.
  *
  * Supported forms:
  *   acme                    -> global value search across loaded fields
@@ -15,6 +16,8 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useLayersStore } from '../state/layers.js'
 import { useUiStore } from '../state/ui.js'
+import { call } from '../api/client.js'
+import { parseMapSearch } from '../lib/mapSearch.js'
 
 const layers = useLayersStore()
 const ui = useUiStore()
@@ -26,6 +29,10 @@ const loading = ref(false)
 const focused = ref(false)
 const inputEl = ref(null)
 const metaDismissed = ref(false)
+const places = ref([])
+const placeError = ref('')
+const selectedPlace = ref(null)
+const lastSubmittedValue = ref('')
 
 // Sync with global ui.searchOpen so toolbar button opens us.
 watch(() => ui.searchOpen, (val) => {
@@ -73,33 +80,91 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 async function run() {
   error.value = ''
+  placeError.value = ''
   const raw = value.value.trim()
   if (!raw) {
-    layers.clearSearch()
+    clear()
     return
   }
   loading.value = true
+  lastSubmittedValue.value = raw
   try {
     metaDismissed.value = false
-    await layers.applySearch(raw)
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent('expedition:fit-data', {
-        detail: { mode: 'all' },
-      }))
-    })
-  } catch (e) {
-    console.error('[expedition] map search failed', e)
-    error.value = e?.message || 'Search failed.'
+    selectedPlace.value = null
+    window.dispatchEvent(new CustomEvent('expedition:clear-place-search'))
+
+    const parsed = parseMapSearch(raw)
+    const isPlainTextSearch = raw.length >= 2
+      && raw.length <= 200
+      && parsed?.expressions?.every((item) => item.mode === 'text')
+    const placeRequest = isPlainTextSearch
+      ? call('expedition.api.place.search', {
+          query: raw,
+          language: navigator.language || '',
+          limit: 5,
+        })
+      : Promise.resolve({ results: [] })
+
+    const [pinSearch, placeSearch] = await Promise.allSettled([
+      layers.applySearch(raw),
+      placeRequest,
+    ])
+
+    if (pinSearch.status === 'fulfilled') {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent('expedition:fit-data', {
+          detail: { mode: 'all' },
+        }))
+      })
+    } else {
+      console.error('[expedition] pin search failed', pinSearch.reason)
+      error.value = pinSearch.reason?.message || 'Pin search failed.'
+    }
+
+    if (placeSearch.status === 'fulfilled') {
+      places.value = Array.isArray(placeSearch.value?.results)
+        ? placeSearch.value.results
+        : []
+    } else {
+      places.value = []
+      placeError.value = placeSearch.reason?.message || 'Place search is unavailable.'
+      console.warn('[expedition] place search failed', placeSearch.reason)
+    }
   } finally {
     loading.value = false
   }
 }
 
+function selectPlace(place) {
+  if (!place) return
+  selectedPlace.value = place
+  metaDismissed.value = false
+  // A place lookup is navigation, not a lasting record filter. Restore the
+  // map's pins before moving so the surrounding business context stays visible.
+  layers.clearSearch()
+  window.dispatchEvent(new CustomEvent('expedition:focus-place', {
+    detail: { place },
+  }))
+}
+
+function onInput() {
+  if (value.value.trim() === lastSubmittedValue.value) return
+  places.value = []
+  placeError.value = ''
+  selectedPlace.value = null
+  window.dispatchEvent(new CustomEvent('expedition:clear-place-search'))
+}
+
 function clear() {
   value.value = ''
   error.value = ''
+  placeError.value = ''
   metaDismissed.value = false
+  places.value = []
+  selectedPlace.value = null
+  lastSubmittedValue.value = ''
   layers.clearSearch()
+  window.dispatchEvent(new CustomEvent('expedition:clear-place-search'))
 }
 
 function closeMeta() {
@@ -120,25 +185,54 @@ function closeMeta() {
         v-model="value"
         class="sb__input"
         :placeholder="visibleLayers.length === 1
-          ? 'Search ' + (visibleLayers[0].title || visibleLayers[0].source_doctype) + ' (e.g. count:<1000, owner:me)'
-          : 'Search pins (e.g. slkdj, count:<1000, lead:creation:2026-07)'"
+          ? 'Search places or ' + (visibleLayers[0].title || visibleLayers[0].source_doctype)
+          : 'Search places and pins (e.g. hotel name, status:Open)'"
         autocomplete="off"
         spellcheck="false"
         @focus="focused = true"
         @blur="focused = false"
+        @input="onInput"
         @keydown.enter.prevent="run()"
       />
       <button v-if="value" type="button" class="sb__clear" @click="clear()" aria-label="Clear">×</button>
       <button type="button" class="sb__run" :disabled="loading" @click="run()">{{ loading ? '…' : 'go' }}</button>
       <button type="button" class="sb__close" @click="close()" aria-label="Close search">esc</button>
     </div>
+    <div v-if="places.length" class="sb__places" aria-label="Place search results">
+      <div class="sb__places-head">
+        <span>Places</span>
+        <span>© OpenStreetMap contributors</span>
+      </div>
+      <button
+        v-for="place in places"
+        :key="place.id"
+        type="button"
+        class="sb__place"
+        :class="{ 'sb__place--selected': selectedPlace?.id === place.id }"
+        @click="selectPlace(place)"
+      >
+        <span class="sb__place-pin" aria-hidden="true"></span>
+        <span class="sb__place-copy">
+          <strong>{{ place.name }}</strong>
+          <small>{{ place.display_name }}</small>
+        </span>
+        <span class="sb__place-kind">{{ place.type || place.category }}</span>
+      </button>
+    </div>
   </div>
-  <div v-if="open && (error || activeSearch) && !metaDismissed" class="sb__meta">
+  <div v-if="open && (error || placeError || activeSearch || selectedPlace) && !metaDismissed" class="sb__meta">
     <button type="button" class="sb__meta-close" aria-label="Hide search details" @click="closeMeta">×</button>
     <p v-if="error" class="sb__error">{{ error }}</p>
+    <p v-if="placeError" class="sb__error">{{ placeError }}</p>
+    <p v-if="selectedPlace" class="sb__hint">
+      Showing <strong>{{ selectedPlace.name }}</strong>. Right-click the map to copy coordinates.
+    </p>
     <p v-else-if="activeSearch" class="sb__hint">
-      <span v-if="activeSearch.total === 0" class="sb__empty">No pins matched this search.</span>
-      <span v-else>{{ activeSearch.total }} pin{{ activeSearch.total === 1 ? '' : 's' }} visible</span>
+      <span v-if="activeSearch.total === 0 && places.length === 0" class="sb__empty">No pins or places matched this search.</span>
+      <span v-else>
+        {{ activeSearch.total }} pin{{ activeSearch.total === 1 ? '' : 's' }} ·
+        {{ places.length }} place{{ places.length === 1 ? '' : 's' }}
+      </span>
     </p>
     <p v-if="activeSearch?.summary" class="sb__summary">{{ activeSearch.summary }}</p>
   </div>
@@ -168,6 +262,84 @@ function closeMeta() {
 .sb__inner--focused {
   border-color: rgba(59, 130, 246, 0.6);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+.sb__places {
+  margin-top: 8px;
+  overflow: hidden;
+  background: rgba(11, 14, 20, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+.sb__places-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 11px 6px;
+  color: rgba(230, 232, 236, 0.48);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.sb__place {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: #E6E8EC;
+  text-align: left;
+  cursor: pointer;
+}
+.sb__place:hover,
+.sb__place:focus-visible,
+.sb__place--selected {
+  background: rgba(59, 130, 246, 0.14);
+  outline: none;
+}
+.sb__place-pin {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #FF3B30;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+}
+.sb__place-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.sb__place-copy strong {
+  overflow: hidden;
+  color: rgba(246, 247, 249, 0.96);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb__place-copy small {
+  overflow: hidden;
+  color: rgba(230, 232, 236, 0.58);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb__place-kind {
+  max-width: 92px;
+  overflow: hidden;
+  color: rgba(230, 232, 236, 0.42);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sb__icon { color: rgba(230, 232, 236, 0.7); flex: none; }
 .sb__input {

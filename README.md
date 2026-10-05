@@ -33,6 +33,27 @@ Build, visualize, and explore business data on interactive maps with customizabl
 - `app.startTerritoryDrawing(type)` lets a user draw `Polygon`, `Rectangle`, or `Circle` territories directly on the map.
 - `app.saveTerritory(payload)` persists a drawn territory as an `Expedition Territory` document.
 
+### Place Search
+
+The canvas search input searches both loaded Expedition pins and OpenStreetMap
+places. Place lookup runs only when the user submits the query (Enter or Go),
+uses the Nominatim search API through a server-side proxy, caches responses for
+24 hours, and limits upstream requests to one per second across the site.
+
+The Nominatim-compatible endpoint and identifying user agent can be changed in
+`site_config.json` without rebuilding the frontend:
+
+```json
+{
+  "expedition_nominatim_url": "https://nominatim.openstreetmap.org/search",
+  "expedition_geocoder_user_agent": "Your Company Expedition (maps@example.com)"
+}
+```
+
+Public Nominatim usage remains subject to the OpenStreetMap Foundation usage
+policy. Deployments with sustained or high-volume search should configure a
+hosted provider or their own Nominatim-compatible service.
+
 ### Extension Contract
 
 Expedition is the infrastructure layer. Business-specific workflows should be added on top of it instead of being hard-coded into the app.

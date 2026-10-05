@@ -16,6 +16,7 @@ const props = defineProps({
   zoom: { type: Number, default: 2 },
   searchEnabled: { type: Boolean, default: true },
   language: { type: String, default: '' },
+  documentKey: { type: String, default: '' },
   onChange: { type: Function, default: null },
 })
 
@@ -206,6 +207,20 @@ function setPinFromContextMenu() {
   setMarker(location.latitude, location.longitude, { emit: true, source: 'context-menu' })
 }
 
+function centerOnDocumentValue() {
+  if (!map) return
+  const point = pointFromGeoJSON(props.value)
+  if (point) {
+    map.easeTo({
+      center: [point.longitude, point.latitude],
+      zoom: 16,
+      duration: 350,
+    })
+    return
+  }
+  map.jumpTo({ center: initialCenter(), zoom: props.zoom })
+}
+
 watch(() => props.value, (value) => {
   const point = pointFromGeoJSON(value)
   if (!map) return
@@ -218,6 +233,11 @@ watch(() => props.value, (value) => {
   if (!previous || Math.abs(previous.lat - point.latitude) > 1e-9 || Math.abs(previous.lng - point.longitude) > 1e-9) {
     setMarker(point.latitude, point.longitude)
   }
+})
+
+watch(() => props.documentKey, (next, previous) => {
+  if (!map || next === previous) return
+  centerOnDocumentValue()
 })
 
 watch(() => props.readonly, (readonly) => marker?.setDraggable(!readonly))

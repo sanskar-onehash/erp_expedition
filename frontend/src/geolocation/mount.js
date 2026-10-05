@@ -51,6 +51,7 @@ function normalizeOptions(options) {
     zoom: clamp(Number(options.zoom) || 2, 0, 22),
     searchEnabled: options.searchEnabled !== false,
     language: options.language || '',
+    documentKey: options.documentKey || '',
     onChange: typeof options.onChange === 'function' ? options.onChange : null,
   }
 }

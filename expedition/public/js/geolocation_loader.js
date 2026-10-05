@@ -198,6 +198,7 @@
 			zoom: options.zoom,
 			searchEnabled: options.searchEnabled,
 			language: options.language || navigator.language || "",
+			documentKey: options.documentKey || frm?.doc?.name || "",
 			onChange: async (change) => {
 				if (frm && fieldname) {
 					const values = { [fieldname]: change.value };

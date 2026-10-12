@@ -6,9 +6,18 @@
  "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
+  "place_search_provider",
   "global_script"
  ],
  "fields": [
+  {
+   "default": "photon",
+   "description": "Provider used for place search in Expedition and embedded geolocation fields. Photon is the default and Nominatim remains available where it is reachable.",
+   "fieldname": "place_search_provider",
+   "fieldtype": "Select",
+   "label": "Place Search Provider",
+   "options": "photon\nnominatim"
+  },
   {
    "fieldname": "global_script",
    "fieldtype": "Code",

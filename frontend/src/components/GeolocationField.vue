@@ -6,6 +6,7 @@ import {
 	pointFromGeoJSON,
 	setPointInGeoJSON,
 } from '../geolocation/geojson.js'
+import { applyIndiaBoundaryFix } from '../geolocation/india-boundary.js'
 
 const props = defineProps({
   value: { type: [String, Object], default: '' },
@@ -260,6 +261,8 @@ onMounted(async () => {
     trackUserLocation: false,
     showUserLocation: true,
   }), 'bottom-right')
+
+  map.on('style.load', () => applyIndiaBoundaryFix(map, { styleGraphReady: true }))
 
   map.on('load', () => {
     const point = pointFromGeoJSON(props.value)

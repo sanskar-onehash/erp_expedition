@@ -42,7 +42,7 @@ export const useMapStore = defineStore('map', () => {
     return recent.value
   }
 
-  async function bootstrap() {
+  async function bootstrap({ preferredMapName, preferredMapTitle } = {}) {
     const ui = useUiStore()
 
     // Fetch and execute global site script
@@ -68,6 +68,21 @@ export const useMapStore = defineStore('map', () => {
     } catch (e) {
       console.warn('[expedition] list_for_user unavailable; using templates', e)
       recent.value = []
+    }
+
+    // Embedded consumers may pin the full Expedition app to a map, while
+    // the standalone Expedition route keeps its recent-map behavior.
+    const preferredMap = recent.value.find((row) => {
+      if (preferredMapName && row?.name === preferredMapName) return true
+      return preferredMapTitle && String(row?.title || '').trim().toLowerCase() ===
+        String(preferredMapTitle).trim().toLowerCase()
+    })
+    if (preferredMap) {
+      await switchMap(preferredMap.name)
+      return
+    }
+    if (preferredMapName || preferredMapTitle) {
+      console.warn('[expedition] Requested embed map is not available to this user; using the normal map fallback.')
     }
 
     const localRecentName = ui.prefs.openRecentOnLaunch

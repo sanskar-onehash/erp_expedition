@@ -37,6 +37,10 @@ import ConfirmModal from './components/ConfirmModal.vue'
 import { isEditableTarget, shortcutLabel } from './lib/keymaps.js'
 import { viewportBoundsForServer, wrapLng } from './lib/geo.js'
 
+const props = defineProps({
+  embed: { type: Object, default: () => ({}) },
+})
+
 const mapStore = useMapStore()
 const ui = useUiStore()
 const layers = useLayersStore()
@@ -61,6 +65,7 @@ const layoutItemSizes = ref({})
 const layoutDrag = ref(null)
 let _layoutResizeObserver = null
 let _layoutMeasureFrame = 0
+let _layoutMap = null
 
 const LAYOUT_COLS = 24
 const LAYOUT_ROWS = 12
@@ -245,12 +250,23 @@ async function onSelectFeatureEvent(e) {
 onMounted(async () => {
   updateLayoutViewport()
   window.addEventListener('resize', updateLayoutViewport)
-  _layoutResizeObserver = new ResizeObserver(scheduleMeasuredLayout)
+  // Embedded maps can change size without a window resize (for example when a
+  // schedule-board panel opens or is dragged). Recalculate the viewport as
+  // well as the toolbar sizes so right/bottom controls stay inside the map.
+  _layoutResizeObserver = new ResizeObserver(updateLayoutViewport)
   if (chromeRoot.value) _layoutResizeObserver.observe(chromeRoot.value)
   await iconStore.loadIcons().catch((e) => {
     console.warn('[expedition] custom icons unavailable', e)
   })
-  await mapStore.bootstrap()
+  await mapStore.bootstrap({
+    preferredMapName: props.embed?.mapName,
+    preferredMapTitle: props.embed?.mapTitle,
+  })
+  // Keep the chrome anchored to the visible map viewport throughout a pan.
+  // This also catches embedded-panel changes that occur between resize frames.
+  _layoutMap = window.expeditionMap?.getMap?.() || null
+  _layoutMap?.on?.('drag', updateLayoutViewport)
+  _layoutMap?.on?.('resize', updateLayoutViewport)
   window.addEventListener('expedition:fit-data', onFitDataEvent)
   window.addEventListener('expedition:refresh-layer', onRefreshLayerEvent)
   window.addEventListener('expedition:select-feature', onSelectFeatureEvent)
@@ -265,6 +281,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', onLayoutPointerUp)
   if (_layoutMeasureFrame) window.cancelAnimationFrame(_layoutMeasureFrame)
   _layoutResizeObserver?.disconnect?.()
+  _layoutMap?.off?.('drag', updateLayoutViewport)
+  _layoutMap?.off?.('resize', updateLayoutViewport)
+  _layoutMap = null
   window.removeEventListener('expedition:fit-data', onFitDataEvent)
   window.removeEventListener('expedition:refresh-layer', onRefreshLayerEvent)
   window.removeEventListener('expedition:select-feature', onSelectFeatureEvent)
@@ -352,8 +371,8 @@ const chromeStyle = computed(() => {
 function updateLayoutViewport() {
   const rect = chromeRoot.value?.getBoundingClientRect?.()
   const next = {
-    width: rect?.width || window.innerWidth || 0,
-    height: rect?.height || window.innerHeight || 0,
+    width: rect?.width || layoutViewport.value.width || window.innerWidth || 0,
+    height: rect?.height || layoutViewport.value.height || window.innerHeight || 0,
   }
   if (next.width !== layoutViewport.value.width || next.height !== layoutViewport.value.height) {
     layoutViewport.value = next
@@ -433,10 +452,19 @@ function layoutItemStyle(id) {
   const anchorX = active?.anchorX || item?.anchorX || 'start'
   const anchorY = active?.anchorY || item?.anchorY || 'start'
   const point = active || layoutPointFor(item?.col ?? 0, item?.row ?? 0, anchorX, anchorY)
+  const size = layoutItemSizes.value[id]
+  if (!size?.width || !size?.height) {
+    return {
+      left: `${point.x}px`,
+      top: `${point.y}px`,
+      transform: `translate(${-anchorWeight(anchorX) * 100}%, ${-anchorWeight(anchorY) * 100}%)`,
+    }
+  }
+  const position = clampLayoutPx(id, point.x, point.y, anchorX, anchorY)
   return {
-    left: `${point.x}px`,
-    top: `${point.y}px`,
-    transform: `translate(${-anchorWeight(anchorX) * 100}%, ${-anchorWeight(anchorY) * 100}%)`,
+    left: `${position.left}px`,
+    top: `${position.top}px`,
+    transform: 'none',
   }
 }
 
@@ -978,17 +1006,12 @@ async function _fitAllBounds(m) {
 </template>
 
 <style scoped>
-:global(html),
-:global(body),
 :global(#expedition-root) {
   width: 100%;
   height: 100%;
   margin: 0;
   overflow: hidden;
   background: #0B0E14;
-}
-:global(body) {
-  overscroll-behavior: none;
 }
 
 .expedition {

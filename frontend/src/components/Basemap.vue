@@ -1810,9 +1810,9 @@ function _addLayerOnMap(layerName, renderContext = null) {
       }
     }
     // Hide the pin-stack layers — heatmap replaces them at low zoom.
-    map.setPaintProperty(lid, 'circle-opacity', 0)
-    map.setPaintProperty(rid, 'circle-opacity', 0)
-    map.setPaintProperty(shid, 'circle-opacity', 0)
+    if (map.getLayer(lid)) map.setPaintProperty(lid, 'circle-opacity', 0)
+    if (map.getLayer(rid)) map.setPaintProperty(rid, 'circle-opacity', 0)
+    if (map.getLayer(shid)) map.setPaintProperty(shid, 'circle-opacity', 0)
     if (map.getLayer(iid)) map.setPaintProperty(iid, 'icon-opacity', 0)
     // Clusters show on top of the heatmap at very low zooms (clickable),
     // but only when the layer itself is enabled.
@@ -1823,9 +1823,9 @@ function _addLayerOnMap(layerName, renderContext = null) {
     // Toggle all pin-stack layers via visibility so they're fully removed
     // from hit-testing when the layer is hidden (opacity:0 still fires events).
     const vis = enabled ? 'visible' : 'none'
-    map.setLayoutProperty(lid, 'visibility', vis)
-    map.setLayoutProperty(rid, 'visibility', vis)
-    map.setLayoutProperty(shid, 'visibility', vis)
+    if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis)
+    if (map.getLayer(rid)) map.setLayoutProperty(rid, 'visibility', vis)
+    if (map.getLayer(shid)) map.setLayoutProperty(shid, 'visibility', vis)
     if (map.getLayer(iid)) map.setLayoutProperty(iid, 'visibility', vis)
     if (map.getLayer(cid)) map.setLayoutProperty(cid, 'visibility', vis)
     if (map.getLayer(ccid)) map.setLayoutProperty(ccid, 'visibility', vis)
@@ -2961,7 +2961,16 @@ onMounted(() => {
       if (zones.length) return
     }
     e.preventDefault?.()
-    ui.openContextMenu(e.point.x, e.point.y, e.lngLat.lat, wrapLng(e.lngLat.lng))
+    // ContextMenu is position: fixed, while MapLibre's point is relative to
+    // the canvas. Convert to viewport coordinates so the menu remains under
+    // the cursor for both the full-page and embedded map experiences.
+    const canvasRect = map.getCanvas().getBoundingClientRect()
+    ui.openContextMenu(
+      canvasRect.left + e.point.x,
+      canvasRect.top + e.point.y,
+      e.lngLat.lat,
+      wrapLng(e.lngLat.lng),
+    )
   })
 
   // PR-13 — modifier-drag rotate/tilt.

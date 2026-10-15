@@ -18,9 +18,15 @@ export function mountExpedition(el, opts = {}) {
     console.warn('Expedition is already mounted; ignoring second mount() call.')
     return mounted
   }
-  const app = createApp(App, { embed: opts })
+  const host = typeof el === 'string' ? document.querySelector(el) : el
+  if (!(host instanceof Element)) {
+    throw new TypeError('Expedition mount() requires a DOM element or selector')
+  }
+  host.classList.add('expedition-embed-host')
+
+  const app = createApp(App, { embed: { ...opts, embedded: true } })
   app.use(createPinia())
-  app.mount(el)
+  app.mount(host)
   mounted = app
   return app
 }

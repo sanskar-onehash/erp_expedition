@@ -41,6 +41,7 @@ const props = defineProps({
   embed: { type: Object, default: () => ({}) },
 })
 
+const isEmbedded = computed(() => props.embed?.embedded === true)
 const mapStore = useMapStore()
 const ui = useUiStore()
 const layers = useLayersStore()
@@ -48,6 +49,7 @@ const zoneStore = useZonesStore()
 const iconStore = useIconsStore()
 const chromeRoot = ref(null)
 const embeddedListOpen = ref(false)
+const embeddedKeyboardActive = ref(false)
 
 watch(() => ui.leftPanel, (val) => {
   if (val === 'layers' && ui.prefs.autoCloseOthers) {
@@ -113,7 +115,22 @@ function runShortcut(id) {
   else dispatchShortcut(id)
 }
 
+function ownsKeyboardEvent(event) {
+  if (!isEmbedded.value) return true
+  if (chromeRoot.value?.contains(event.target)) return true
+  return embeddedKeyboardActive.value
+}
+
+function onDocumentPointerDown(event) {
+  if (!isEmbedded.value) return
+  // MapLibre's canvas does not always retain DOM focus after a click. Track
+  // the most recent pointer target so shortcuts work while the embedded map
+  // is active, but never leak into the surrounding Schedule Board.
+  embeddedKeyboardActive.value = Boolean(chromeRoot.value?.contains(event.target))
+}
+
 function onGlobalKeydown(e) {
+  if (!ownsKeyboardEvent(e)) return
   ui.setShortcutModifiers(e)
 
   const key = e.key.toLowerCase()
@@ -164,6 +181,7 @@ function onGlobalKeydown(e) {
 }
 
 function onGlobalKeyup(e) {
+  if (!ownsKeyboardEvent(e)) return
   ui.setShortcutModifiers(e)
   if (!isEditableTarget(e.target) && (e.key === 'Alt' || e.altKey)) {
     e.preventDefault()
@@ -272,6 +290,7 @@ onMounted(async () => {
   window.addEventListener('expedition:select-feature', onSelectFeatureEvent)
   document.addEventListener('keydown', onGlobalKeydown, true)
   document.addEventListener('keyup', onGlobalKeyup, true)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   window.addEventListener('blur', onWindowBlur)
 })
 
@@ -289,6 +308,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('expedition:select-feature', onSelectFeatureEvent)
   document.removeEventListener('keydown', onGlobalKeydown, true)
   document.removeEventListener('keyup', onGlobalKeyup, true)
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
   window.removeEventListener('blur', onWindowBlur)
 })
 
@@ -770,6 +790,7 @@ async function _fitAllBounds(m) {
     ref="chromeRoot"
     class="expedition"
     :class="{
+      'expedition--embedded': isEmbedded,
       'expedition--chrome-hidden': ui.chromeHidden,
       'expedition--layout-editing': ui.layoutCustomizing,
       'expedition--shortcut-hover': ui.shortcutAltDown,
@@ -1022,6 +1043,20 @@ async function _fitAllBounds(m) {
   color: #E6E8EC;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-feature-settings: 'cv11', 'ss01', 'ss03';
+}
+
+/* The standalone page owns the viewport. An embedded Expedition instance is
+   constrained to the element passed to expedition.mount(). */
+.expedition--embedded {
+  position: absolute;
+}
+
+:global(.expedition-embed-host) {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Scrollbars are global within the Expedition map only. The parent

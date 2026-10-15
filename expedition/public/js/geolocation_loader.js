@@ -1,6 +1,15 @@
 (() => {
-	const SCRIPT_URL = "/assets/expedition/dist/geolocation.iife.js";
-	const STYLE_URL = "/assets/expedition/dist/geolocation.css";
+	// This loader is included directly by Frappe, while the map bundle is built
+	// separately by Vite. Give those Vite assets Frappe's build version as a
+	// query parameter so a deployment cannot leave a browser with an old CSS
+	// file and a new JS file (or vice versa).
+	const assetUrl = (path) => {
+		const version = window._version_number;
+		if (!version) return path;
+		return `${path}${path.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
+	};
+	const SCRIPT_URL = assetUrl("/assets/expedition/dist/geolocation.iife.js");
+	const STYLE_URL = assetUrl("/assets/expedition/dist/geolocation.css");
 	const records = new Map();
 	let assetsPromise = null;
 	let observer = null;

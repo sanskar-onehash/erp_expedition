@@ -47,7 +47,9 @@ export default defineConfig({
   },
   build: {
     outDir: '../expedition/public/dist',
-    emptyOutDir: true,
+    // Frappe builds fingerprinted `*.bundle.js` files into this same public
+    // directory before it runs this app's Vite build. Do not erase them.
+    emptyOutDir: false,
     assetsDir: '.',
     cssCodeSplit: false,
     lib: {

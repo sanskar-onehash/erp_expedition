@@ -1,4 +1,4 @@
-"""App install/uninstall hooks. Seeds the Expedition User role."""
+"""App install/uninstall hooks for Expedition access."""
 
 import frappe
 
@@ -13,8 +13,24 @@ def _ensure_role() -> None:
         )
 
 
+def _grant_role_to_administrators() -> None:
+    """Give Expedition access to Administrator and existing System Managers."""
+    users = {"Administrator"}
+    users.update(
+        frappe.get_all(
+            "Has Role",
+            filters={"parenttype": "User", "role": "System Manager"},
+            pluck="parent",
+        )
+    )
+
+    for user in users:
+        frappe.get_doc("User", user).add_roles(ROLE_NAME)
+
+
 def after_install() -> None:
     _ensure_role()
+    _grant_role_to_administrators()
     frappe.db.commit()
 
 
